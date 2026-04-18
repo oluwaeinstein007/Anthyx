@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthyx/config": "workspace:*",
     "@anthyx/types": "workspace:*",
     "@google/generative-ai": "^0.24.1",
     "@qdrant/js-client-rest": "^1.9.0",

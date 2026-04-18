@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   uuid,
@@ -57,7 +58,7 @@ export const organizations = pgTable("organizations", {
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
   // Guardrails
-  globalProhibitions: text("global_prohibitions").array().default([]),
+  globalProhibitions: text("global_prohibitions").array().default(sql`'{}'`),
   sensitiveEventBlackouts: jsonb("sensitive_event_blackouts"), // [{ id, name, startDate, endDate }]
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

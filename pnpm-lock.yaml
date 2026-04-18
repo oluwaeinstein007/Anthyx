@@ -368,6 +368,9 @@ importers:
 
   services/mcp:
     dependencies:
+      '@anthyx/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@anthyx/types':
         specifier: workspace:*
         version: link:../../packages/types
