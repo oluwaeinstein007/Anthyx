@@ -4,6 +4,7 @@ import IORedis from "ioredis";
 export const redisConnection = new IORedis(process.env["REDIS_URL"] ?? "redis://localhost:6379", {
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
+  checkCompatibility: false,
 });
 
 // Queue definitions
