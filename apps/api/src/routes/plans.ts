@@ -40,15 +40,9 @@ router.post("/generate", auth, validate(GeneratePlanSchema), async (req, res) =>
   for (const platform of platforms as string[]) {
     const acct = accounts.find((a) => a.platform === platform);
     if (acct) {
-      validPlatforms.push(platform);
       socialAccountIds.push(acct.id);
     }
-  }
-
-  if (validPlatforms.length === 0) {
-    return res.status(400).json({
-      error: "No active social accounts found for the selected platforms. Connect at least one account first.",
-    });
+    validPlatforms.push(platform);
   }
 
   const start = new Date(startDate);

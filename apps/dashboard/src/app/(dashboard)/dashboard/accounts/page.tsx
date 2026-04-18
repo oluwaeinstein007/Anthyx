@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Link2, CheckCircle2, AlertTriangle, ExternalLink, Shield } from "lucide-react";
+import { TelegramConnectModal } from "@/components/accounts/TelegramConnectModal";
 
 interface SocialAccount {
   id: string;
@@ -19,14 +20,16 @@ const PLATFORM_META: Record<string, { label: string; textColor: string; bgColor:
   instagram: { label: "Instagram",   textColor: "text-pink-700",  bgColor: "bg-pink-50",   dotColor: "bg-pink-500" },
   linkedin:  { label: "LinkedIn",    textColor: "text-blue-700",  bgColor: "bg-blue-50",   dotColor: "bg-blue-600" },
   facebook:  { label: "Facebook",    textColor: "text-blue-600",  bgColor: "bg-blue-50",   dotColor: "bg-blue-500" },
+  telegram:  { label: "Telegram",    textColor: "text-sky-700",   bgColor: "bg-sky-50",    dotColor: "bg-sky-500" },
   tiktok:    { label: "TikTok",      textColor: "text-gray-900",  bgColor: "bg-gray-100",  dotColor: "bg-gray-800" },
 };
 
-const PLATFORMS = ["x", "instagram", "linkedin", "facebook", "tiktok"];
+const PLATFORMS = ["x", "instagram", "linkedin", "facebook", "telegram", "tiktok"];
 
 export default function AccountsPage() {
   const qc = useQueryClient();
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [showTelegramModal, setShowTelegramModal] = useState(false);
 
   const { data: accounts = [], isLoading } = useQuery<SocialAccount[]>({
     queryKey: ["accounts"],
@@ -121,7 +124,11 @@ export default function AccountsPage() {
             return (
               <button
                 key={platform}
-                onClick={() => { setConnecting(platform); connect.mutate(platform); }}
+                onClick={() => {
+                  if (platform === "telegram") { setShowTelegramModal(true); return; }
+                  setConnecting(platform);
+                  connect.mutate(platform);
+                }}
                 disabled={isConnected || connecting === platform || connect.isPending}
                 className={`flex items-center gap-3 p-4 rounded-2xl border text-sm font-medium transition-all ${
                   isConnected
@@ -148,6 +155,10 @@ export default function AccountsPage() {
           OAuth tokens are encrypted at rest using AES-256-GCM and automatically refreshed before expiry. Your credentials are never logged or stored in plaintext.
         </p>
       </div>
+
+      {showTelegramModal && (
+        <TelegramConnectModal onClose={() => setShowTelegramModal(false)} />
+      )}
     </div>
   );
 }

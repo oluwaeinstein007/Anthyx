@@ -8,6 +8,13 @@
       "when": 1776478066071,
       "tag": "0000_early_electro",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1745020800000,
+      "tag": "0002_nullable_social_account",
+      "breakpoints": true
     }
   ]
 }

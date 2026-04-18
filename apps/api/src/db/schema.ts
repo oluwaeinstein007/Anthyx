@@ -172,8 +172,7 @@ export const scheduledPosts = pgTable("scheduled_posts", {
     .references(() => marketingPlans.id)
     .notNull(),
   socialAccountId: uuid("social_account_id")
-    .references(() => socialAccounts.id)
-    .notNull(),
+    .references(() => socialAccounts.id),
   agentId: uuid("agent_id")
     .references(() => agents.id)
     .notNull(),

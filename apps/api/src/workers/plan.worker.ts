@@ -45,10 +45,8 @@ const worker = new Worker<PlanJobData>(
 
     // Create ScheduledPost rows (status: 'draft') for each plan item
     for (const item of planItems) {
-      // Find the social account for this platform
       const accountIndex = platforms.indexOf(item.platform);
-      const socialAccountId = socialAccountIds[accountIndex] ?? socialAccountIds[0];
-      if (!socialAccountId) continue;
+      const socialAccountId = socialAccountIds[accountIndex] ?? socialAccountIds[0] ?? null;
 
       await db.insert(scheduledPosts).values({
         planId,
