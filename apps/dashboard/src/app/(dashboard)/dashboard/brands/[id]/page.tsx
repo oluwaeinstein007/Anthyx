@@ -30,6 +30,16 @@ export default function BrandDetailPage() {
   const { data: brand, isLoading } = useQuery<BrandProfile>({
     queryKey: ["brand", id],
     queryFn: () => api.get<BrandProfile>(`/brands/${id}`),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return 5000;
+      const allColors = [...(data.primaryColors ?? []), ...(data.secondaryColors ?? [])];
+      const hasData =
+        allColors.length > 0 ||
+        (data.toneDescriptors?.length ?? 0) > 0 ||
+        (data.voiceTraits && Object.values(data.voiceTraits).some(Boolean));
+      return hasData ? false : 5000;
+    },
   });
 
   if (isLoading)

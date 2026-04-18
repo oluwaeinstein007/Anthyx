@@ -20,6 +20,7 @@ const worker = new Worker<PlanJobData>(
       platforms,
       agentId,
       socialAccountIds,
+      durationDays,
       feedbackLoopEnabled,
     } = job.data;
 
@@ -40,8 +41,13 @@ const worker = new Worker<PlanJobData>(
       goals,
       platforms,
       startDate: plan.startDate.toISOString(),
+      durationDays: durationDays ?? 30,
       feedbackLoopEnabled,
     });
+
+    if (planItems.length === 0) {
+      throw new Error("Strategist agent returned no plan items — brand may need ingestion first");
+    }
 
     // Create ScheduledPost rows (status: 'draft') for each plan item
     for (const item of planItems) {

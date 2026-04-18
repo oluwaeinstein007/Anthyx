@@ -89,6 +89,7 @@ export interface StrategistRunInput {
   goals: string[];
   platforms: string[];
   startDate: string;
+  durationDays: number;
   feedbackLoopEnabled?: boolean;
 }
 
@@ -102,7 +103,7 @@ export async function runStrategistAgent(input: StrategistRunInput): Promise<Gen
   const chat = model.startChat({ history: [] });
 
   const userMessage = `
-Generate a 30-day marketing calendar for:
+Generate a ${input.durationDays}-day marketing calendar for:
 Brand: ${input.brandName}
 Industry: ${input.industry}
 Goals: ${input.goals.join(", ")}
@@ -113,7 +114,7 @@ First, retrieve brand context for "${input.brandName}" with brandProfileId "${in
 Then search for current trends in ${input.industry}.
 ${input.feedbackLoopEnabled ? `Also read engagement analytics for brandProfileId "${input.brandProfileId}" to adjust content weighting.` : ""}
 
-Return a JSON array of 30 plan items covering the full 30 days.
+Return a JSON array of exactly ${input.durationDays} plan items covering the full ${input.durationDays} days.
 `.trim();
 
   let response = await chat.sendMessage(userMessage);

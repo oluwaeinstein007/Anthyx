@@ -63,10 +63,10 @@ export default function IngestPage() {
           <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto">
             <span className="text-green-600 text-xl">✓</span>
           </div>
-          <h2 className="text-lg font-semibold text-gray-900">Ingestion complete</h2>
+          <h2 className="text-lg font-semibold text-gray-900">Ingestion queued</h2>
           <p className="text-sm text-gray-500">
-            Brand identity has been extracted and embedded. Your agents will use this
-            context to generate on-brand content.
+            Your document is being processed. Brand identity will appear on your brand
+            profile within a minute — the page will update automatically.
           </p>
           <div className="flex justify-center gap-3 pt-2">
             <Link

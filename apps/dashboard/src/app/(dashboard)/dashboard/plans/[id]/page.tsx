@@ -100,6 +100,11 @@ export default function PlanDetailPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", id] }),
   });
 
+  const retry = useMutation({
+    mutationFn: () => api.post(`/plans/${id}/retry`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", id] }),
+  });
+
   const updatePlan = useMutation({
     mutationFn: (body: { name?: string; goals?: string[]; feedbackLoopEnabled?: boolean }) =>
       api.put(`/plans/${id}`, body),
@@ -270,9 +275,13 @@ export default function PlanDetailPage() {
               </button>
             )}
             {plan.status === "failed" && (
-              <span className="text-xs text-red-600 bg-red-50 border border-red-200 px-2.5 py-1 rounded-lg">
-                Generation failed — check agent logs
-              </span>
+              <button
+                onClick={() => retry.mutate()}
+                disabled={retry.isPending}
+                className="px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
+              >
+                {retry.isPending ? "Retrying..." : "Retry generation"}
+              </button>
             )}
             {plan.status === "generating" && (
               <span className="text-xs text-blue-600 animate-pulse">Generating…</span>

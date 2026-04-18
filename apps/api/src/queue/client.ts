@@ -20,6 +20,12 @@ export const postExecutionQueue = new Queue("anthyx-post-execution", {
 
 export const planGenerationQueue = new Queue("anthyx-plan-generation", {
   connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: "exponential", delay: 15000 },
+    removeOnComplete: { age: 86400 },
+    removeOnFail: { age: 604800 },
+  },
 });
 
 export const contentGenerationQueue = new Queue("anthyx-content-generation", {

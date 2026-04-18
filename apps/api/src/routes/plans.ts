@@ -39,10 +39,8 @@ router.post("/generate", auth, validate(GeneratePlanSchema), async (req, res) =>
   const socialAccountIds: string[] = [];
   for (const platform of platforms as string[]) {
     const acct = accounts.find((a) => a.platform === platform);
-    if (acct) {
-      socialAccountIds.push(acct.id);
-    }
     validPlatforms.push(platform);
+    socialAccountIds.push(acct?.id ?? "");
   }
 
   const start = new Date(startDate);
@@ -73,6 +71,7 @@ router.post("/generate", auth, validate(GeneratePlanSchema), async (req, res) =>
     platforms: validPlatforms,
     agentId,
     socialAccountIds,
+    durationDays,
     feedbackLoopEnabled: feedbackLoopEnabled ?? false,
   });
 
@@ -153,6 +152,58 @@ router.post("/:id/approve", auth, async (req, res) => {
     .where(eq(marketingPlans.id, plan.id));
 
   return res.json({ approved: true });
+});
+
+// POST /plans/:id/retry
+router.post("/:id/retry", auth, async (req, res) => {
+  const plan = await db.query.marketingPlans.findFirst({
+    where: and(
+      eq(marketingPlans.id, req.params.id!),
+      eq(marketingPlans.organizationId, req.user.orgId),
+    ),
+  });
+  if (!plan) return res.status(404).json({ error: "Not found" });
+  if (plan.status !== "failed") {
+    return res.status(400).json({ error: "Only failed plans can be retried" });
+  }
+
+  const [brand, accounts] = await Promise.all([
+    db.query.brandProfiles.findFirst({ where: eq(brandProfiles.id, plan.brandProfileId) }),
+    db.query.socialAccounts.findMany({
+      where: and(eq(socialAccounts.agentId, plan.agentId), eq(socialAccounts.isActive, true)),
+    }),
+  ]);
+
+  const platformAccountMap: Record<string, string> = {};
+  for (const acct of accounts) {
+    platformAccountMap[acct.platform] = acct.id;
+  }
+  const allPlatforms = [...new Set(accounts.map((a) => a.platform))];
+
+  const durationDays = Math.round(
+    (plan.endDate.getTime() - plan.startDate.getTime()) / (24 * 60 * 60 * 1000),
+  );
+
+  await db
+    .update(marketingPlans)
+    .set({ status: "generating", updatedAt: new Date() })
+    .where(eq(marketingPlans.id, plan.id));
+
+  await queuePlanGeneration({
+    planId: plan.id,
+    organizationId: req.user.orgId,
+    brandProfileId: plan.brandProfileId,
+    brandName: brand?.name ?? "",
+    industry: brand?.industry ?? "",
+    goals: plan.goals as string[],
+    platforms: allPlatforms,
+    agentId: plan.agentId,
+    socialAccountIds: allPlatforms.map((p) => platformAccountMap[p] ?? ""),
+    durationDays,
+    feedbackLoopEnabled: plan.feedbackLoopEnabled,
+  });
+
+  return res.json({ retrying: true });
 });
 
 // POST /plans/:id/pause
