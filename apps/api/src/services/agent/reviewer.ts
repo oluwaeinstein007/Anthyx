@@ -1,10 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { ReviewerOutputSchema } from "@anthyx/config";
-import type { ReviewerOutput } from "@anthyx/types";
-import type { Platform } from "@anthyx/types";
+import type { ReviewerOutput, Platform } from "@anthyx/types";
 import { getPlatformConstraints } from "./prompt-builder";
-
-const claude = new Anthropic({ apiKey: process.env["ANTHROPIC_API_KEY"] });
+import { generateWithFallback, extractJsonObject, GEMINI_FLASH, CLAUDE_HAIKU } from "./llm-client";
 
 const REVIEWER_SYSTEM_PROMPT = `
 You are a strict brand compliance reviewer.
@@ -26,14 +23,7 @@ export interface ReviewerRunInput {
 export async function runReviewerAgent(input: ReviewerRunInput): Promise<ReviewerOutput> {
   const platformConstraints = getPlatformConstraints(input.platform);
 
-  const response = await claude.messages.create({
-    model: "claude-haiku-4-5-20251001", // fast + cheap for compliance checks
-    max_tokens: 1024,
-    system: REVIEWER_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: `
+  const userMessage = `
 Review this post:
 
 POST CONTENT:
@@ -57,23 +47,15 @@ Return ONLY valid JSON:
   "revisedContent": "corrected post text if verdict is rewrite, else null",
   "revisedHashtags": ["tag1"] or null
 }
-        `.trim(),
-      },
-    ],
+`.trim();
+
+  const text = await generateWithFallback({
+    systemPrompt: REVIEWER_SYSTEM_PROMPT,
+    userMessage,
+    geminiModel: GEMINI_FLASH,
+    claudeModel: CLAUDE_HAIKU,
+    maxTokens: 1024,
   });
 
-  const raw = extractJson(response.content);
-  return ReviewerOutputSchema.parse(raw);
-}
-
-function extractJson(content: Anthropic.ContentBlock[]): unknown {
-  const text = content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-
-  const cleaned = text.replace(/```(?:json)?\n?/g, "").trim();
-  const match = cleaned.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("No JSON found in Reviewer response");
-  return JSON.parse(match[0]);
+  return ReviewerOutputSchema.parse(extractJsonObject(text));
 }

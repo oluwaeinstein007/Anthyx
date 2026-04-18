@@ -1,11 +1,8 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { CopywriterOutputSchema } from "@anthyx/config";
-import type { CopywriterOutput } from "@anthyx/types";
-import type { Platform } from "@anthyx/types";
+import type { CopywriterOutput, Platform } from "@anthyx/types";
 import { getPlatformConstraints } from "./prompt-builder";
 import { buildSystemPromptWithGuardrails } from "./guardrails";
-
-const claude = new Anthropic({ apiKey: process.env["ANTHROPIC_API_KEY"] });
+import { generateWithFallback, extractJsonObject, GEMINI_PRO, CLAUDE_SONNET } from "./llm-client";
 
 export interface CopywriterRunInput {
   organizationId: string;
@@ -46,43 +43,23 @@ Write a single post for the following plan item:
 {
   "content": "final post text",
   "hashtags": ["tag1", "tag2"],
-  "suggestedMediaPrompt": "DALL-E prompt if visual needed, otherwise null",
+  "suggestedMediaPrompt": "image prompt if visual needed, otherwise null",
   "reasoning": "1-2 sentence explanation of creative choices"
 }
 `.trim();
 }
 
-export async function runCopywriterAgent(
-  input: CopywriterRunInput,
-): Promise<CopywriterOutput> {
+export async function runCopywriterAgent(input: CopywriterRunInput): Promise<CopywriterOutput> {
   const basePrompt = buildCopywriterBasePrompt(input);
   const systemPrompt = await buildSystemPromptWithGuardrails(basePrompt, input.organizationId);
 
-  const response = await claude.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 1024,
-    system: systemPrompt,
-    messages: [
-      {
-        role: "user",
-        content: `Write the post. Return only valid JSON.`,
-      },
-    ],
+  const text = await generateWithFallback({
+    systemPrompt,
+    userMessage: "Write the post. Return only valid JSON.",
+    geminiModel: GEMINI_PRO,
+    claudeModel: CLAUDE_SONNET,
+    maxTokens: 1024,
   });
 
-  const raw = extractJson(response.content);
-  return CopywriterOutputSchema.parse(raw);
-}
-
-function extractJson(content: Anthropic.ContentBlock[]): unknown {
-  const text = content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-
-  const cleaned = text.replace(/```(?:json)?\n?/g, "").trim();
-  // Find JSON object
-  const match = cleaned.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("No JSON found in Copywriter response");
-  return JSON.parse(match[0]);
+  return CopywriterOutputSchema.parse(extractJsonObject(text));
 }

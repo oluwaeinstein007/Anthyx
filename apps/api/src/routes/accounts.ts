@@ -213,80 +213,65 @@ router.get("/oauth/callback", async (req, res) => {
 
 // POST /accounts/telegram — connect via bot token (no OAuth)
 router.post("/telegram", auth, async (req, res) => {
-  const { botToken, chatId } = req.body as { botToken?: string; chatId?: string };
+  try {
+    const { botToken, chatId } = req.body as { botToken?: string; chatId?: string };
 
-  if (!botToken?.trim() || !chatId?.trim()) {
-    return res.status(400).json({ error: "Bot token and chat ID are required" });
-  }
+    if (!botToken?.trim() || !chatId?.trim()) {
+      return res.status(400).json({ error: "Bot token and chat ID are required" });
+    }
 
-  const token = botToken.trim();
-  const chat = chatId.trim();
+    const token = botToken.trim();
+    const chat = chatId.trim();
 
-  // Validate bot token
-  const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
-  const meData = (await meRes.json()) as { ok: boolean; result?: { id: number; username: string; first_name: string } };
-  if (!meData.ok) {
-    return res.status(400).json({ error: "Invalid bot token. Double-check what @BotFather gave you." });
-  }
-  const bot = meData.result!;
+    // Validate bot token
+    const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+    const meData = (await meRes.json()) as { ok: boolean; result?: { id: number; username: string; first_name: string } };
+    if (!meData.ok) {
+      return res.status(400).json({ error: "Invalid bot token. Double-check what @BotFather gave you." });
+    }
+    const bot = meData.result!;
 
-  // Validate bot has access to the specified chat
-  const chatRes = await fetch(
-    `https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(chat)}`,
-  );
-  const chatData = (await chatRes.json()) as {
-    ok: boolean;
-    result?: { id: number; title?: string; username?: string; type: string };
-  };
-  if (!chatData.ok) {
-    return res
-      .status(400)
-      .json({ error: "Bot can't access that chat. Make sure it's been added as an admin." });
-  }
-  const chatInfo = chatData.result!;
-
-  // Verify bot is actually an admin (for channels/groups)
-  if (chatInfo.type !== "private") {
-    const memberRes = await fetch(
-      `https://api.telegram.org/bot${token}/getChatMember?chat_id=${encodeURIComponent(chat)}&user_id=${bot.id}`,
+    // Validate bot has access to the specified chat
+    const chatRes = await fetch(
+      `https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(chat)}`,
     );
-    const memberData = (await memberRes.json()) as { ok: boolean; result?: { status: string } };
-    const status = memberData.result?.status;
-    if (!memberData.ok || !["administrator", "creator"].includes(status ?? "")) {
+    const chatData = (await chatRes.json()) as {
+      ok: boolean;
+      result?: { id: number; title?: string; username?: string; type: string };
+    };
+    if (!chatData.ok) {
       return res
         .status(400)
-        .json({ error: "Bot must be an admin of the channel or group to post." });
+        .json({ error: "Bot can't access that chat. Make sure it's been added as an admin." });
     }
-  }
+    const chatInfo = chatData.result!;
 
-  await PlanLimitsEnforcer.check(req.user.orgId, "account");
+    // Verify bot is actually an admin (for channels/groups)
+    if (chatInfo.type !== "private") {
+      const memberRes = await fetch(
+        `https://api.telegram.org/bot${token}/getChatMember?chat_id=${encodeURIComponent(chat)}&user_id=${bot.id}`,
+      );
+      const memberData = (await memberRes.json()) as { ok: boolean; result?: { status: string } };
+      const status = memberData.result?.status;
+      if (!memberData.ok || !["administrator", "creator"].includes(status ?? "")) {
+        return res
+          .status(400)
+          .json({ error: "Bot must be an admin of the channel or group to post." });
+      }
+    }
 
-  const handle = chatInfo.title ?? chatInfo.username ?? `chat_${chatInfo.id}`;
-  const resolvedChatId = String(chatInfo.id);
+    await PlanLimitsEnforcer.check(req.user.orgId, "account");
 
-  const [account] = await db
-    .insert(socialAccounts)
-    .values({
-      organizationId: req.user.orgId,
-      platform: "telegram",
-      accountHandle: handle,
-      accountId: resolvedChatId,
-      accessToken: encryptToken(token),
-      platformConfig: {
-        chatId: resolvedChatId,
-        chatTitle: handle,
-        chatType: chatInfo.type,
-        botUsername: bot.username,
-      },
-      isActive: true,
-    })
-    .onConflictDoUpdate({
-      target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [
-        typeof socialAccounts.organizationId,
-        typeof socialAccounts.platform,
-        typeof socialAccounts.accountHandle,
-      ],
-      set: {
+    const handle = chatInfo.title ?? chatInfo.username ?? `chat_${chatInfo.id}`;
+    const resolvedChatId = String(chatInfo.id);
+
+    const [account] = await db
+      .insert(socialAccounts)
+      .values({
+        organizationId: req.user.orgId,
+        platform: "telegram",
+        accountHandle: handle,
+        accountId: resolvedChatId,
         accessToken: encryptToken(token),
         platformConfig: {
           chatId: resolvedChatId,
@@ -294,19 +279,39 @@ router.post("/telegram", auth, async (req, res) => {
           chatType: chatInfo.type,
           botUsername: bot.username,
         },
-        updatedAt: new Date(),
-      },
-    })
-    .returning();
+        isActive: true,
+      })
+      .onConflictDoUpdate({
+        target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [
+          typeof socialAccounts.organizationId,
+          typeof socialAccounts.platform,
+          typeof socialAccounts.accountHandle,
+        ],
+        set: {
+          accessToken: encryptToken(token),
+          platformConfig: {
+            chatId: resolvedChatId,
+            chatTitle: handle,
+            chatType: chatInfo.type,
+            botUsername: bot.username,
+          },
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
 
-  await backfillPlanPosts(req.user.orgId, account!.id, "telegram");
+    await backfillPlanPosts(req.user.orgId, account!.id, "telegram");
 
-  return res.json({
-    id: account!.id,
-    platform: "telegram",
-    accountHandle: handle,
-    isActive: true,
-  });
+    return res.json({
+      id: account!.id,
+      platform: "telegram",
+      accountHandle: handle,
+      isActive: true,
+    });
+  } catch (err) {
+    console.error("[accounts] telegram connect error:", err);
+    return res.status(500).json({ error: "Failed to connect Telegram bot. Check your token and try again." });
+  }
 });
 
 // GET /accounts

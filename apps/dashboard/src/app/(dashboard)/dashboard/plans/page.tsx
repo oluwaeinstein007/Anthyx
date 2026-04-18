@@ -24,7 +24,8 @@ const STATUS_STYLES: Record<string, string> = {
   pending_review: "bg-amber-100 text-amber-700 border border-amber-200",
   active:         "bg-green-100 text-green-700 border border-green-200",
   completed:      "bg-gray-100 text-gray-600 border border-gray-200",
-  paused:         "bg-red-100 text-red-700 border border-red-200",
+  paused:         "bg-orange-100 text-orange-700 border border-orange-200",
+  failed:         "bg-red-100 text-red-600 border border-red-200",
 };
 
 const PLATFORMS = ["x", "instagram", "linkedin", "facebook", "telegram", "tiktok"];

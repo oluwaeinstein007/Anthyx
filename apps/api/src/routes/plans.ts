@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/client";
 import { marketingPlans, scheduledPosts, brandProfiles, agents, socialAccounts } from "../db/schema";
 import { auth } from "../middleware/auth";
@@ -36,11 +36,11 @@ router.post("/generate", auth, validate(GeneratePlanSchema), async (req, res) =>
   });
 
   const validPlatforms: string[] = [];
-  const socialAccountIds: string[] = [];
+  const socialAccountIds: (string | null)[] = [];
   for (const platform of platforms as string[]) {
     const acct = accounts.find((a) => a.platform === platform);
     validPlatforms.push(platform);
-    socialAccountIds.push(acct?.id ?? "");
+    socialAccountIds.push(acct?.id ?? null);
   }
 
   const start = new Date(startDate);
@@ -244,6 +244,22 @@ router.post("/:id/resume", auth, async (req, res) => {
     .set({ status: "active", updatedAt: new Date() })
     .where(eq(marketingPlans.id, plan.id));
   return res.json({ resumed: true });
+});
+
+// DELETE /plans/:id
+router.delete("/:id", auth, async (req, res) => {
+  const plan = await db.query.marketingPlans.findFirst({
+    where: and(
+      eq(marketingPlans.id, req.params.id!),
+      eq(marketingPlans.organizationId, req.user.orgId),
+    ),
+  });
+  if (!plan) return res.status(404).json({ error: "Not found" });
+
+  await db.delete(scheduledPosts).where(eq(scheduledPosts.planId, plan.id));
+  await db.delete(marketingPlans).where(eq(marketingPlans.id, plan.id));
+
+  return res.json({ deleted: true });
 });
 
 export { router as plansRouter };

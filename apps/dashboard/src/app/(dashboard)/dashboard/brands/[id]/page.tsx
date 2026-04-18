@@ -9,6 +9,7 @@ interface BrandProfile {
   id: string;
   name: string;
   industry: string | null;
+  ingestStatus: "idle" | "processing" | "done" | "failed" | null;
   voiceTraits: {
     professional?: boolean;
     witty?: boolean;
@@ -33,6 +34,7 @@ export default function BrandDetailPage() {
     refetchInterval: (query) => {
       const data = query.state.data;
       if (!data) return 5000;
+      if (data.ingestStatus === "processing") return 3000;
       const allColors = [...(data.primaryColors ?? []), ...(data.secondaryColors ?? [])];
       const hasData =
         allColors.length > 0 ||
@@ -87,6 +89,29 @@ export default function BrandDetailPage() {
           </Link>
         </div>
       </div>
+
+      {/* Ingestion status banner */}
+      {brand.ingestStatus === "processing" && (
+        <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+          <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-blue-800">Processing document…</p>
+            <p className="text-xs text-blue-600 mt-0.5">Extracting brand identity via AI. This takes 10–30 seconds.</p>
+          </div>
+        </div>
+      )}
+      {brand.ingestStatus === "failed" && (
+        <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+          <span className="text-red-500 text-lg">✕</span>
+          <div>
+            <p className="text-sm font-medium text-red-800">Ingestion failed</p>
+            <p className="text-xs text-red-600 mt-0.5">
+              The document could not be processed.{" "}
+              <Link href={`/dashboard/brands/${id}/ingest`} className="underline">Try again →</Link>
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Color palette */}
       {allColors.length > 0 && (

@@ -136,7 +136,6 @@ Return a JSON array of exactly ${input.durationDays} plan items covering the ful
   }
 
   const text = response.response.text();
-  const match = text.match(/\[[\s\S]*\]/);
-  if (!match) throw new Error("No JSON array found in Strategist response");
-  return PlanItemArraySchema.parse(JSON.parse(match[0]));
+  const { extractJsonArray } = await import("./llm-client");
+  return PlanItemArraySchema.parse(extractJsonArray(text));
 }

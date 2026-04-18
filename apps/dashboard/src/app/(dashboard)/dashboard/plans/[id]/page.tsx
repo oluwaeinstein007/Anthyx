@@ -1,19 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
-import { Pencil, X, Check } from "lucide-react";
+import { Pencil, X, Check, Trash2 } from "lucide-react";
 
 interface ScheduledPost {
   id: string;
   platform: string;
   scheduledAt: string;
   status: string;
-  caption: string | null;
-  hashtags: string[] | null;
+  contentText: string | null;
+  contentHashtags: string[] | null;
   mediaUrls: string[] | null;
 }
 
@@ -30,8 +30,9 @@ interface MarketingPlan {
 
 const STATUS_DOT: Record<string, string> = {
   draft: "bg-gray-300",
+  pending_review: "bg-amber-400",
   approved: "bg-blue-400",
-  scheduled: "bg-amber-400",
+  scheduled: "bg-blue-500",
   published: "bg-green-500",
   failed: "bg-red-500",
   silenced: "bg-red-300",
@@ -40,6 +41,7 @@ const STATUS_DOT: Record<string, string> = {
 
 const STATUS_LABEL: Record<string, string> = {
   draft: "Draft",
+  pending_review: "Pending review",
   approved: "Approved",
   scheduled: "Scheduled",
   published: "Published",
@@ -72,6 +74,7 @@ function getDaysInRange(start: string, end: string): Date[] {
 
 export default function PlanDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const qc = useQueryClient();
   const [view, setView] = useState<ViewMode>("calendar");
   const [editing, setEditing] = useState(false);
@@ -114,6 +117,14 @@ export default function PlanDetailPage() {
     },
   });
 
+  const deletePlan = useMutation({
+    mutationFn: () => api.delete(`/plans/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["plans"] });
+      router.push("/dashboard/plans");
+    },
+  });
+
   const startEdit = () => {
     if (!plan) return;
     setEditName(plan.name);
@@ -144,7 +155,8 @@ export default function PlanDetailPage() {
 
   const publishedCount = plan.posts.filter((p) => p.status === "published").length;
   const approvedCount = plan.posts.filter((p) => ["approved", "scheduled"].includes(p.status)).length;
-  const pendingCount = plan.posts.filter((p) => p.status === "draft").length;
+  const pendingCount = plan.posts.filter((p) => ["draft", "pending_review"].includes(p.status)).length;
+  const failedCount = plan.posts.filter((p) => p.status === "failed").length;
 
   return (
     <div className="space-y-6">
@@ -286,12 +298,24 @@ export default function PlanDetailPage() {
             {plan.status === "generating" && (
               <span className="text-xs text-blue-600 animate-pulse">Generating…</span>
             )}
+            <button
+              onClick={() => {
+                if (confirm("Delete this plan and all its posts? This cannot be undone.")) {
+                  deletePlan.mutate();
+                }
+              }}
+              disabled={deletePlan.isPending}
+              className="p-1.5 text-gray-400 hover:text-red-500 transition-colors rounded"
+              title="Delete plan"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
           </div>
         )}
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-4 gap-3">
         <div className="p-4 bg-white border border-gray-200 rounded-xl text-center">
           <p className="text-2xl font-bold text-green-600">{publishedCount}</p>
           <p className="text-xs text-gray-500 mt-0.5">Published</p>
@@ -304,6 +328,12 @@ export default function PlanDetailPage() {
           <p className="text-2xl font-bold text-amber-600">{pendingCount}</p>
           <p className="text-xs text-gray-500 mt-0.5">Pending review</p>
         </div>
+        {failedCount > 0 && (
+          <div className="p-4 bg-white border border-red-100 rounded-xl text-center">
+            <p className="text-2xl font-bold text-red-500">{failedCount}</p>
+            <p className="text-xs text-gray-500 mt-0.5">Failed</p>
+          </div>
+        )}
       </div>
 
       {/* View toggle */}
@@ -321,7 +351,7 @@ export default function PlanDetailPage() {
             {v}
           </button>
         ))}
-        {pendingCount > 0 && (
+        {pendingCount > 0 && plan.status === "active" && (
           <Link
             href="/dashboard/review"
             className="ml-auto text-xs text-amber-600 hover:underline"
@@ -456,12 +486,12 @@ export default function PlanDetailPage() {
                       </span>
                     </div>
                   </div>
-                  {post.caption && (
-                    <p className="text-sm text-gray-700 line-clamp-2">{post.caption}</p>
+                  {post.contentText && (
+                    <p className="text-sm text-gray-700 line-clamp-2">{post.contentText}</p>
                   )}
-                  {post.hashtags && post.hashtags.length > 0 && (
+                  {post.contentHashtags && post.contentHashtags.length > 0 && (
                     <div className="flex flex-wrap gap-1">
-                      {post.hashtags.map((tag) => (
+                      {post.contentHashtags.map((tag) => (
                         <span key={tag} className="text-xs text-blue-500">
                           #{tag}
                         </span>
