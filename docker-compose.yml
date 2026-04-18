@@ -1,0 +1,142 @@
+version: "3.9"
+
+# ── Shared environment injected into all app services ─────────────────────────
+x-app-env: &app-env
+  DATABASE_URL: postgresql://anthyx:password@postgres:5432/anthyx
+  REDIS_URL: redis://redis:6379
+  QDRANT_URL: http://qdrant:6333
+
+x-app-depends: &app-depends
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  qdrant:
+    condition: service_started
+
+services:
+
+  # ── Core API ─────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      <<: *app-env
+      NODE_ENV: development
+    env_file: .env
+    depends_on: *app-depends
+    restart: unless-stopped
+
+  # ── In-process workers (plan/content/post/analytics/overage) ─────────────────
+  # These run inside the api image. Once services/agent is stable you can
+  # remove this container and rely solely on the agent service below.
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: node dist/workers/index.js
+    environment:
+      <<: *app-env
+    env_file: .env
+    depends_on: *app-depends
+    restart: unless-stopped
+
+  # ── Dashboard / Frontend ──────────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+    env_file: .env
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # ── Standalone MCP Service ────────────────────────────────────────────────────
+  mcp:
+    build:
+      context: .
+      dockerfile: services/mcp/Dockerfile
+    ports:
+      - "3100:3100"
+    environment:
+      <<: *app-env
+      MCP_PORT: 3100
+    env_file: .env
+    depends_on: *app-depends
+    restart: unless-stopped
+
+  # ── Standalone Ingestor Service ───────────────────────────────────────────────
+  ingestor:
+    build:
+      context: .
+      dockerfile: services/ingestor/Dockerfile
+    environment:
+      <<: *app-env
+      INGESTOR_CONCURRENCY: 3
+    env_file: .env
+    depends_on: *app-depends
+    restart: unless-stopped
+
+  # ── Standalone Agent Service ──────────────────────────────────────────────────
+  agent:
+    build:
+      context: .
+      dockerfile: services/agent/Dockerfile
+    environment:
+      <<: *app-env
+    env_file: .env
+    depends_on: *app-depends
+    restart: unless-stopped
+
+  # ── Infrastructure ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: anthyx
+      POSTGRES_USER: anthyx
+      POSTGRES_PASSWORD: password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anthyx -d anthyx"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrantdata:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  qdrantdata:

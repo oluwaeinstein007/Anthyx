@@ -1,0 +1,30 @@
+{
+  "name": "@anthyx/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthyx/config": "workspace:*",
+    "@anthyx/queue-contracts": "workspace:*",
+    "@anthyx/types": "workspace:*",
+    "@google/generative-ai": "^0.24.1",
+    "@qdrant/js-client-rest": "^1.9.0",
+    "bullmq": "^5.4.2",
+    "drizzle-orm": "^0.30.10",
+    "ioredis": "^5.3.2",
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.2",
+    "@types/pg": "^8.11.6",
+    "tsx": "^4.11.2",
+    "typescript": "^5.4.5"
+  }
+}

@@ -1,0 +1,106 @@
+version: "3.9"
+
+# Production compose — uses pre-built images from a registry.
+# Usage: REGISTRY=ghcr.io/yourorg TAG=v1.2.3 docker compose -f docker-compose.prod.yml up -d
+
+services:
+
+  api:
+    image: ${REGISTRY}/anthyx-api:${TAG:-latest}
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: production
+    env_file: .env
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Keep in-process workers running alongside api until services/agent confirmed stable
+  worker:
+    image: ${REGISTRY}/anthyx-api:${TAG:-latest}
+    command: node dist/workers/index.js
+    environment:
+      NODE_ENV: production
+    env_file: .env
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+
+  dashboard:
+    image: ${REGISTRY}/anthyx-dashboard:${TAG:-latest}
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+    env_file: .env
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  mcp:
+    image: ${REGISTRY}/anthyx-mcp:${TAG:-latest}
+    ports:
+      - "3100:3100"
+    environment:
+      NODE_ENV: production
+      MCP_PORT: 3100
+    env_file: .env
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3100/mcp/sse"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ingestor:
+    image: ${REGISTRY}/anthyx-ingestor:${TAG:-latest}
+    environment:
+      NODE_ENV: production
+      INGESTOR_CONCURRENCY: 5
+    env_file: .env
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+
+  agent:
+    image: ${REGISTRY}/anthyx-agent:${TAG:-latest}
+    environment:
+      NODE_ENV: production
+    env_file: .env
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+      - dashboard
+    restart: unless-stopped

@@ -1,0 +1,31 @@
+{
+  "name": "@anthyx/mcp",
+  "version": "0.0.1",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=cjs --packages=external --outfile=dist/index.js",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthyx/types": "workspace:*",
+    "@google/generative-ai": "^0.24.1",
+    "@qdrant/js-client-rest": "^1.9.0",
+    "bullmq": "^5.0.0",
+    "drizzle-orm": "^0.30.0",
+    "fastmcp": "^1.0.0",
+    "ioredis": "^5.3.0",
+    "openai": "^4.47.0",
+    "pg": "^8.11.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/pg": "^8.11.0",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

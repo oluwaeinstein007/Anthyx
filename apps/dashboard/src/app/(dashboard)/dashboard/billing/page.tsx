@@ -1,0 +1,191 @@
+"use client";
+
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import Link from "next/link";
+import { CreditCard, ArrowRight, AlertTriangle, Clock, TrendingUp } from "lucide-react";
+
+interface Subscription {
+  tier: string;
+  status: string;
+  currentPeriodEnd: string | null;
+  trialEndsAt: string | null;
+  overageCapCents: number;
+}
+interface Usage {
+  postsPublished: number;
+  postsIncluded: number;
+  postsOverage: number;
+  accountsConnected: number;
+  accountsIncluded: number;
+  brandsActive: number;
+  brandsIncluded: number;
+  overageCostCents: number;
+}
+interface BillingData {
+  subscription: Subscription;
+  usage: Usage | null;
+}
+
+const TIER_LABELS: Record<string, string> = {
+  sandbox: "Sandbox (Free)",
+  starter: "Starter",
+  growth: "Growth",
+  agency: "Agency",
+  scale: "Scale",
+  enterprise: "Enterprise",
+};
+
+const TIER_PRICES: Record<string, string> = {
+  starter: "$49/mo",
+  growth: "$149/mo",
+  agency: "$399/mo",
+  scale: "$999/mo",
+};
+
+export default function BillingPage() {
+  const { data, isLoading } = useQuery<BillingData>({
+    queryKey: ["billing"],
+    queryFn: () => api.get<BillingData>("/billing/subscription"),
+  });
+
+  const cancel = useMutation({ mutationFn: () => api.post("/billing/cancel") });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4 animate-pulse max-w-2xl">
+        <div className="h-8 bg-gray-200 rounded-lg w-32" />
+        <div className="h-40 bg-gray-100 rounded-2xl" />
+        <div className="h-48 bg-gray-100 rounded-2xl" />
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  const { subscription: sub, usage } = data;
+  const isTrial = sub.status === "trialing" && sub.trialEndsAt && new Date(sub.trialEndsAt) > new Date();
+
+  return (
+    <div className="space-y-8 max-w-2xl">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">Billing</h1>
+        <p className="text-sm text-gray-500 mt-1">Manage your plan and usage.</p>
+      </div>
+
+      {/* Current plan card */}
+      <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+        <div className="px-6 py-5 border-b border-gray-100">
+          <div className="flex items-start justify-between">
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 bg-green-50 rounded-xl flex items-center justify-center shrink-0">
+                <CreditCard className="w-5 h-5 text-green-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-400 mb-0.5">Current plan</p>
+                <p className="text-lg font-bold text-gray-900">{TIER_LABELS[sub.tier] ?? sub.tier}</p>
+                {TIER_PRICES[sub.tier] && (
+                  <p className="text-sm text-gray-500">{TIER_PRICES[sub.tier]}</p>
+                )}
+              </div>
+            </div>
+            <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${
+              sub.status === "active" || sub.status === "trialing"
+                ? "bg-green-100 text-green-700"
+                : "bg-red-100 text-red-700"
+            }`}>
+              {sub.status}
+            </span>
+          </div>
+        </div>
+
+        <div className="px-6 py-5 space-y-4">
+          {isTrial && (
+            <div className="flex items-start gap-2.5 p-3.5 bg-blue-50 border border-blue-200 rounded-xl">
+              <Clock className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-blue-800">Trial ends {new Date(sub.trialEndsAt!).toLocaleDateString()}</p>
+                <p className="text-xs text-blue-600 mt-0.5">Add a payment method to keep your access after the trial.</p>
+              </div>
+            </div>
+          )}
+
+          {sub.currentPeriodEnd && (
+            <p className="text-xs text-gray-400">
+              Next renewal: {new Date(sub.currentPeriodEnd).toLocaleDateString()}
+            </p>
+          )}
+
+          <Link
+            href="/dashboard/billing/upgrade"
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-xl transition-colors"
+          >
+            Upgrade plan <ArrowRight className="w-4 h-4" />
+          </Link>
+        </div>
+      </div>
+
+      {/* Usage meters */}
+      {usage && (
+        <div className="bg-white border border-gray-200 rounded-2xl p-6 space-y-5">
+          <div className="flex items-center gap-2.5">
+            <TrendingUp className="w-4 h-4 text-gray-400" />
+            <h2 className="text-sm font-semibold text-gray-900">Usage this period</h2>
+          </div>
+          <UsageMeter label="Posts published" used={usage.postsPublished} included={usage.postsIncluded} overage={usage.postsOverage} />
+          <UsageMeter label="Social accounts" used={usage.accountsConnected} included={usage.accountsIncluded} />
+          <UsageMeter label="Brand profiles" used={usage.brandsActive} included={usage.brandsIncluded} />
+
+          {usage.overageCostCents > 0 && (
+            <div className="flex items-start gap-2.5 p-3.5 bg-amber-50 border border-amber-200 rounded-xl">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-amber-800">
+                  Overage this period: ${(usage.overageCostCents / 100).toFixed(2)}
+                </p>
+                <p className="text-xs text-amber-600 mt-0.5">Will be invoiced at end of billing period.</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Danger zone */}
+      {sub.tier !== "sandbox" && (
+        <div className="bg-white border border-red-200 rounded-2xl p-6">
+          <h2 className="text-sm font-semibold text-red-700 mb-2">Cancel subscription</h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Your access continues until end of the current billing period. You&apos;ll be downgraded to Sandbox.
+          </p>
+          <button
+            onClick={() => cancel.mutate()}
+            disabled={cancel.isPending}
+            className="px-4 py-2.5 text-sm text-red-600 border border-red-200 rounded-xl hover:bg-red-50 disabled:opacity-50 transition-colors font-medium"
+          >
+            {cancel.isPending ? "Cancelling…" : "Cancel at period end"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UsageMeter({ label, used, included, overage = 0 }: { label: string; used: number; included: number; overage?: number }) {
+  const pct = included > 0 ? Math.min(100, (used / included) * 100) : 0;
+  const overLimit = used > included && included !== -1;
+  const barColor = overLimit ? "bg-red-500" : pct > 80 ? "bg-amber-500" : "bg-green-500";
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-gray-600">{label}</span>
+        <span className={`text-sm font-medium ${overLimit ? "text-red-600" : "text-gray-700"}`}>
+          {used} / {included === -1 ? "∞" : included}
+          {overage > 0 && <span className="text-red-500 text-xs ml-1">(+{overage})</span>}
+        </span>
+      </div>
+      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}

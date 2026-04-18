@@ -1,0 +1,109 @@
+import { Worker, type Job } from "bullmq";
+import { eq } from "drizzle-orm";
+import { db } from "../db/client";
+import { marketingPlans, scheduledPosts } from "../db/schema";
+import { redisConnection } from "../queue/client";
+import { runStrategistAgent } from "../services/agent/strategist";
+import { queueContentGeneration } from "../queue/jobs";
+import type { GeneratedPlanItem } from "@anthyx/types";
+
+interface PlanJobData {
+  planId: string;
+  organizationId: string;
+  brandProfileId: string;
+  brandName: string;
+  industry: string;
+  goals: string[];
+  platforms: string[];
+  agentId: string;
+  socialAccountIds: string[]; // one per platform
+  feedbackLoopEnabled?: boolean;
+}
+
+const worker = new Worker<PlanJobData>(
+  "anthyx-plan-generation",
+  async (job: Job<PlanJobData>) => {
+    const {
+      planId,
+      organizationId,
+      brandProfileId,
+      brandName,
+      industry,
+      goals,
+      platforms,
+      agentId,
+      socialAccountIds,
+      feedbackLoopEnabled,
+    } = job.data;
+
+    console.log(`[PlanWorker] Generating plan ${planId}`);
+
+    const plan = await db.query.marketingPlans.findFirst({
+      where: eq(marketingPlans.id, planId),
+    });
+
+    if (!plan) throw new Error(`Plan ${planId} not found`);
+
+    // Run the Strategist Agent
+    const planItems = await runStrategistAgent({
+      organizationId,
+      brandProfileId,
+      brandName,
+      industry,
+      goals,
+      platforms,
+      startDate: plan.startDate.toISOString(),
+      feedbackLoopEnabled,
+    });
+
+    // Create ScheduledPost rows (status: 'draft') for each plan item
+    for (const item of planItems) {
+      // Find the social account for this platform
+      const accountIndex = platforms.indexOf(item.platform);
+      const socialAccountId = socialAccountIds[accountIndex] ?? socialAccountIds[0];
+      if (!socialAccountId) continue;
+
+      await db.insert(scheduledPosts).values({
+        planId,
+        socialAccountId,
+        agentId,
+        organizationId,
+        brandProfileId,
+        platform: item.platform,
+        contentText: item.topic, // draft holds the topic; Copywriter replaces with full content
+        contentType: item.contentType,
+        scheduledAt: new Date(item.date),
+        status: "draft",
+        suggestedMediaPrompt: item.suggestVisual ? item.notes ?? item.topic : null,
+        assetTrack: item.suggestVisual ? "template" : undefined,
+      });
+    }
+
+    // Update plan status
+    await db
+      .update(marketingPlans)
+      .set({ status: "pending_review", updatedAt: new Date() })
+      .where(eq(marketingPlans.id, planId));
+
+    // Trigger content generation for all draft posts
+    await queueContentGeneration(planId, organizationId);
+
+    console.log(`[PlanWorker] Plan ${planId} generated ${planItems.length} items`);
+  },
+  {
+    connection: redisConnection,
+    concurrency: 2,
+  },
+);
+
+worker.on("failed", async (job, err) => {
+  if (job) {
+    await db
+      .update(marketingPlans)
+      .set({ status: "paused", updatedAt: new Date() })
+      .where(eq(marketingPlans.id, job.data.planId));
+  }
+  console.error(`[PlanWorker] Job ${job?.id} failed:`, err);
+});
+
+export { worker as planWorker };
