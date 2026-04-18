@@ -108,6 +108,63 @@ router.post("/logout", (req, res) => {
   return res.json({ ok: true });
 });
 
+// PUT /auth/me — update display name
+router.put("/me", async (req, res) => {
+  const token =
+    req.cookies?.["auth_token"] || req.headers.authorization?.replace("Bearer ", "");
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const jwt = await import("jsonwebtoken");
+    const payload = jwt.default.verify(token, process.env["JWT_SECRET"]!) as { sub: string };
+    const parsed = z.object({ name: z.string().min(1).max(100) }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validation failed" });
+
+    const [updated] = await db
+      .update(users)
+      .set({ name: parsed.data.name })
+      .where(eq(users.id, payload.sub))
+      .returning();
+
+    return res.json({ id: updated!.id, email: updated!.email, name: updated!.name });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+// PUT /auth/password — change password
+router.put("/password", async (req, res) => {
+  const token =
+    req.cookies?.["auth_token"] || req.headers.authorization?.replace("Bearer ", "");
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const jwt = await import("jsonwebtoken");
+    const payload = jwt.default.verify(token, process.env["JWT_SECRET"]!) as { sub: string };
+
+    const parsed = z
+      .object({
+        currentPassword: z.string().min(1),
+        newPassword: z.string().min(8),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validation failed" });
+
+    const user = await db.query.users.findFirst({ where: eq(users.id, payload.sub) });
+    if (!user?.passwordHash) return res.status(404).json({ error: "User not found" });
+
+    const valid = await bcrypt.compare(parsed.data.currentPassword, user.passwordHash);
+    if (!valid) return res.status(400).json({ error: "Current password is incorrect" });
+
+    const newHash = await bcrypt.hash(parsed.data.newPassword, 12);
+    await db.update(users).set({ passwordHash: newHash }).where(eq(users.id, user.id));
+
+    return res.json({ ok: true });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
 // GET /auth/me
 router.get("/me", async (req, res) => {
   const token =

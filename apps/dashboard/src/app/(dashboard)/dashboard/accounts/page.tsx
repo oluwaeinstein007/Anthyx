@@ -36,8 +36,9 @@ export default function AccountsPage() {
 
   const connect = useMutation({
     mutationFn: (platform: string) =>
-      api.post<{ authUrl: string }>("/accounts/oauth/url", { platform }),
+      api.get<{ authUrl: string }>(`/accounts/oauth/${platform}`),
     onSuccess: (data) => { window.location.href = data.authUrl; },
+    onError: (err) => { alert(err instanceof Error ? err.message : "Failed to get OAuth URL"); },
     onSettled: () => setConnecting(null),
   });
 

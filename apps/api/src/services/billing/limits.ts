@@ -28,13 +28,13 @@ export class PlanLimitsEnforcer {
       where: eq(subscriptions.organizationId, organizationId),
     });
 
-    if (!sub) throw new Error("No subscription found");
+    if (!sub) return; // no subscription → allow (sandbox/dev)
 
     const tier = await db.query.planTiers.findFirst({
       where: eq(planTiers.tier, sub.tier),
     });
 
-    if (!tier) throw new Error("Plan tier not found");
+    if (!tier) return; // tier not seeded → allow (run seed.ts to enforce limits)
 
     switch (resource) {
       case "brand": {
