@@ -1,5 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
-import type { MessageParam, Tool } from "@anthropic-ai/sdk/resources/messages";
+import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import type { FunctionDeclaration, Tool } from "@google/generative-ai";
 import { PlanItemArraySchema } from "@anthyx/config";
 import type { GeneratedPlanItem } from "@anthyx/types";
 import { buildSystemPromptWithGuardrails } from "./guardrails";
@@ -7,7 +7,8 @@ import { retrieveBrandContextTool } from "../../mcp/tools/retrieve-brand-context
 import { webSearchTrendsTool } from "../../mcp/tools/web-search-trends";
 import { readEngagementAnalyticsTool } from "../../mcp/tools/read-engagement-analytics";
 
-const claude = new Anthropic({ apiKey: process.env["ANTHROPIC_API_KEY"] });
+const genAI = new GoogleGenerativeAI(process.env["GEMINI_API_KEY"] ?? "");
+const MODEL = process.env["GEMINI_STRATEGIST_MODEL"] ?? "gemini-1.5-pro";
 
 const STRATEGIST_BASE_PROMPT = `
 You are a senior digital marketing strategist.
@@ -24,16 +25,16 @@ Rules:
 - Each item: { date, platform, contentType, topic, hook, cta, suggestVisual, notes? }
 `.trim();
 
-const STRATEGIST_TOOLS: Tool[] = [
+const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: retrieveBrandContextTool.name,
     description: retrieveBrandContextTool.description,
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: SchemaType.OBJECT,
       properties: {
-        brandProfileId: { type: "string", description: "The brand profile ID" },
-        query: { type: "string", description: "Search query" },
-        topK: { type: "number", description: "Number of results" },
+        brandProfileId: { type: SchemaType.STRING, description: "The brand profile UUID" },
+        query: { type: SchemaType.STRING, description: "Semantic search query" },
+        topK: { type: SchemaType.NUMBER, description: "Number of results (default 10)" },
       },
       required: ["brandProfileId", "query"],
     },
@@ -41,12 +42,12 @@ const STRATEGIST_TOOLS: Tool[] = [
   {
     name: webSearchTrendsTool.name,
     description: webSearchTrendsTool.description,
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: SchemaType.OBJECT,
       properties: {
-        industry: { type: "string" },
-        keywords: { type: "array", items: { type: "string" } },
-        timeframe: { type: "string", enum: ["7d", "30d"] },
+        industry: { type: SchemaType.STRING },
+        keywords: { type: SchemaType.ARRAY, items: { type: SchemaType.STRING } },
+        timeframe: { type: SchemaType.STRING, format: "enum", enum: ["7d", "30d"] },
       },
       required: ["industry", "keywords", "timeframe"],
     },
@@ -54,30 +55,29 @@ const STRATEGIST_TOOLS: Tool[] = [
   {
     name: readEngagementAnalyticsTool.name,
     description: readEngagementAnalyticsTool.description,
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: SchemaType.OBJECT,
       properties: {
-        brandProfileId: { type: "string" },
-        lookbackDays: { type: "number" },
+        brandProfileId: { type: SchemaType.STRING },
+        lookbackDays: { type: SchemaType.NUMBER },
       },
       required: ["brandProfileId"],
     },
   },
 ];
 
-async function executeToolCall(
-  toolName: string,
-  toolInput: Record<string, unknown>,
-): Promise<unknown> {
-  switch (toolName) {
+const TOOLS: Tool[] = [{ functionDeclarations: TOOL_DECLARATIONS }];
+
+async function executeToolCall(name: string, args: Record<string, unknown>): Promise<unknown> {
+  switch (name) {
     case retrieveBrandContextTool.name:
-      return retrieveBrandContextTool.handler(toolInput as Parameters<typeof retrieveBrandContextTool.handler>[0]);
+      return retrieveBrandContextTool.handler(args as Parameters<typeof retrieveBrandContextTool.handler>[0]);
     case webSearchTrendsTool.name:
-      return webSearchTrendsTool.handler(toolInput as Parameters<typeof webSearchTrendsTool.handler>[0]);
+      return webSearchTrendsTool.handler(args as Parameters<typeof webSearchTrendsTool.handler>[0]);
     case readEngagementAnalyticsTool.name:
-      return readEngagementAnalyticsTool.handler(toolInput as Parameters<typeof readEngagementAnalyticsTool.handler>[0]);
+      return readEngagementAnalyticsTool.handler(args as Parameters<typeof readEngagementAnalyticsTool.handler>[0]);
     default:
-      throw new Error(`Unknown tool: ${toolName}`);
+      throw new Error(`Unknown tool: ${name}`);
   }
 }
 
@@ -92,13 +92,14 @@ export interface StrategistRunInput {
   feedbackLoopEnabled?: boolean;
 }
 
-export async function runStrategistAgent(
-  input: StrategistRunInput,
-): Promise<GeneratedPlanItem[]> {
-  const systemPrompt = await buildSystemPromptWithGuardrails(
+export async function runStrategistAgent(input: StrategistRunInput): Promise<GeneratedPlanItem[]> {
+  const systemInstruction = await buildSystemPromptWithGuardrails(
     STRATEGIST_BASE_PROMPT,
     input.organizationId,
   );
+
+  const model = genAI.getGenerativeModel({ model: MODEL, systemInstruction, tools: TOOLS });
+  const chat = model.startChat({ history: [] });
 
   const userMessage = `
 Generate a 30-day marketing calendar for:
@@ -115,60 +116,26 @@ ${input.feedbackLoopEnabled ? `Also read engagement analytics for brandProfileId
 Return a JSON array of 30 plan items covering the full 30 days.
 `.trim();
 
-  const messages: MessageParam[] = [{ role: "user", content: userMessage }];
+  let response = await chat.sendMessage(userMessage);
 
-  let response = await claude.messages.create({
-    model: "claude-opus-4-5",
-    max_tokens: 8096,
-    system: systemPrompt,
-    tools: STRATEGIST_TOOLS,
-    messages,
-  });
+  while (true) {
+    const calls = response.response.functionCalls();
+    if (!calls || calls.length === 0) break;
 
-  // Agentic loop — Strategist uses tools until it has enough context
-  while (response.stop_reason === "tool_use") {
-    const toolUseBlocks = response.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+    const toolResults = await Promise.all(
+      calls.map(async (call) => ({
+        functionResponse: {
+          name: call.name,
+          response: { result: JSON.stringify(await executeToolCall(call.name, call.args as Record<string, unknown>)) },
+        },
+      })),
     );
 
-    const toolResults: Anthropic.ToolResultBlockParam[] = await Promise.all(
-      toolUseBlocks.map(async (toolUse) => {
-        const result = await executeToolCall(
-          toolUse.name,
-          toolUse.input as Record<string, unknown>,
-        );
-        return {
-          type: "tool_result" as const,
-          tool_use_id: toolUse.id,
-          content: JSON.stringify(result),
-        };
-      }),
-    );
-
-    messages.push({ role: "assistant", content: response.content });
-    messages.push({ role: "user", content: toolResults });
-
-    response = await claude.messages.create({
-      model: "claude-opus-4-5",
-      max_tokens: 8096,
-      system: systemPrompt,
-      tools: STRATEGIST_TOOLS,
-      messages,
-    });
+    response = await chat.sendMessage(toolResults);
   }
 
-  const raw = extractJson(response.content);
-  return PlanItemArraySchema.parse(raw);
-}
-
-function extractJson(content: Anthropic.ContentBlock[]): unknown {
-  const text = content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-
-  // Find JSON array in the response
+  const text = response.response.text();
   const match = text.match(/\[[\s\S]*\]/);
   if (!match) throw new Error("No JSON array found in Strategist response");
-  return JSON.parse(match[0]);
+  return PlanItemArraySchema.parse(JSON.parse(match[0]));
 }
