@@ -6,7 +6,7 @@ import { auth } from "../middleware/auth";
 import { encryptToken } from "../services/oauth-proxy/crypto";
 import { PlanLimitsEnforcer } from "../services/billing/limits";
 import type { Platform } from "@anthyx/types";
-import { randomBytes } from "crypto";
+import { randomBytes, createHash } from "crypto";
 import { redisConnection } from "../queue/client";
 
 const router = Router();
@@ -28,8 +28,24 @@ router.get("/oauth/:platform", auth, async (req, res) => {
 
   let authUrl: string;
 
+  const missingEnv = (vars: string[]) => {
+    const missing = vars.filter((v) => !process.env[v]);
+    if (missing.length) return `Missing env vars: ${missing.join(", ")}`;
+    return null;
+  };
+
   switch (platform) {
-    case "x":
+    case "x": {
+      const envError = missingEnv(["TWITTER_CLIENT_ID", "TWITTER_CALLBACK_URL"]);
+      if (envError) return res.status(500).json({ error: envError });
+      const codeVerifier = randomBytes(32).toString("base64url");
+      const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
+      await redisConnection.set(
+        `oauth:pkce:${state}`,
+        codeVerifier,
+        "EX",
+        OAUTH_STATE_TTL,
+      );
       authUrl =
         `https://twitter.com/i/oauth2/authorize?` +
         new URLSearchParams({
@@ -38,11 +54,14 @@ router.get("/oauth/:platform", auth, async (req, res) => {
           redirect_uri: process.env["TWITTER_CALLBACK_URL"]!,
           scope: "tweet.read tweet.write users.read offline.access",
           state,
-          code_challenge: "challenge",
-          code_challenge_method: "plain",
+          code_challenge: codeChallenge,
+          code_challenge_method: "S256",
         }).toString();
       break;
-    case "linkedin":
+    }
+    case "linkedin": {
+      const envError = missingEnv(["LINKEDIN_CLIENT_ID", "LINKEDIN_CALLBACK_URL"]);
+      if (envError) return res.status(500).json({ error: envError });
       authUrl =
         `https://www.linkedin.com/oauth/v2/authorization?` +
         new URLSearchParams({
@@ -53,7 +72,10 @@ router.get("/oauth/:platform", auth, async (req, res) => {
           state,
         }).toString();
       break;
-    case "instagram":
+    }
+    case "instagram": {
+      const envError = missingEnv(["INSTAGRAM_APP_ID", "INSTAGRAM_CALLBACK_URL"]);
+      if (envError) return res.status(500).json({ error: envError });
       authUrl =
         `https://api.instagram.com/oauth/authorize?` +
         new URLSearchParams({
@@ -64,6 +86,45 @@ router.get("/oauth/:platform", auth, async (req, res) => {
           state,
         }).toString();
       break;
+    }
+    case "facebook": {
+      const envError = missingEnv(["FACEBOOK_APP_ID", "FACEBOOK_CALLBACK_URL"]);
+      if (envError) return res.status(500).json({ error: envError });
+      authUrl =
+        `https://www.facebook.com/v18.0/dialog/oauth?` +
+        new URLSearchParams({
+          client_id: process.env["FACEBOOK_APP_ID"]!,
+          redirect_uri: process.env["FACEBOOK_CALLBACK_URL"]!,
+          scope: "pages_manage_posts,pages_read_engagement,instagram_basic,instagram_content_publish",
+          response_type: "code",
+          state,
+        }).toString();
+      break;
+    }
+    case "tiktok": {
+      const envError = missingEnv(["TIKTOK_CLIENT_ID", "TIKTOK_CALLBACK_URL"]);
+      if (envError) return res.status(500).json({ error: envError });
+      const codeVerifier = randomBytes(32).toString("base64url");
+      const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
+      await redisConnection.set(
+        `oauth:pkce:${state}`,
+        codeVerifier,
+        "EX",
+        OAUTH_STATE_TTL,
+      );
+      authUrl =
+        `https://www.tiktok.com/v2/auth/authorize/?` +
+        new URLSearchParams({
+          client_key: process.env["TIKTOK_CLIENT_ID"]!,
+          redirect_uri: process.env["TIKTOK_CALLBACK_URL"]!,
+          scope: "user.info.basic,video.publish,video.upload",
+          response_type: "code",
+          state,
+          code_challenge: codeChallenge,
+          code_challenge_method: "S256",
+        }).toString();
+      break;
+    }
     default:
       return res.status(400).json({ error: `OAuth not supported for platform: ${platform}` });
   }
@@ -93,15 +154,26 @@ router.get("/oauth/callback", async (req, res) => {
   // Exchange code for tokens
   let tokens: { accessToken: string; refreshToken?: string; expiresIn?: number; accountId?: string; handle?: string };
 
+  const codeVerifier = await redisConnection.get(`oauth:pkce:${state}`);
+  if (codeVerifier) await redisConnection.del(`oauth:pkce:${state}`);
+
   switch (platform) {
     case "x":
-      tokens = await exchangeTwitterCode(code);
+      if (!codeVerifier) return res.status(400).json({ error: "Missing PKCE verifier" });
+      tokens = await exchangeTwitterCode(code, codeVerifier);
       break;
     case "linkedin":
       tokens = await exchangeLinkedInCode(code);
       break;
     case "instagram":
       tokens = await exchangeInstagramCode(code);
+      break;
+    case "facebook":
+      tokens = await exchangeFacebookCode(code);
+      break;
+    case "tiktok":
+      if (!codeVerifier) return res.status(400).json({ error: "Missing PKCE verifier" });
+      tokens = await exchangeTikTokCode(code, codeVerifier);
       break;
     default:
       return res.status(400).json({ error: "Unsupported platform" });
@@ -161,7 +233,7 @@ router.delete("/:id", auth, async (req, res) => {
   return res.json({ ok: true });
 });
 
-async function exchangeTwitterCode(code: string) {
+async function exchangeTwitterCode(code: string, codeVerifier: string) {
   const res = await fetch("https://api.twitter.com/2/oauth2/token", {
     method: "POST",
     headers: {
@@ -172,11 +244,55 @@ async function exchangeTwitterCode(code: string) {
       code,
       grant_type: "authorization_code",
       redirect_uri: process.env["TWITTER_CALLBACK_URL"]!,
-      code_verifier: "challenge",
+      code_verifier: codeVerifier,
     }),
   });
   const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };
-  return { accessToken: data.access_token, refreshToken: data.refresh_token, expiresIn: data.expires_in, handle: "twitter_user" };
+
+  // Fetch the user's handle
+  const userRes = await fetch("https://api.twitter.com/2/users/me", {
+    headers: { Authorization: `Bearer ${data.access_token}` },
+  });
+  const userData = (await userRes.json()) as { data?: { username: string } };
+  const handle = userData.data?.username ?? "twitter_user";
+
+  return { accessToken: data.access_token, refreshToken: data.refresh_token, expiresIn: data.expires_in, handle };
+}
+
+async function exchangeFacebookCode(code: string) {
+  const res = await fetch(
+    `https://graph.facebook.com/v18.0/oauth/access_token?` +
+    new URLSearchParams({
+      client_id: process.env["FACEBOOK_APP_ID"]!,
+      client_secret: process.env["FACEBOOK_APP_SECRET"]!,
+      redirect_uri: process.env["FACEBOOK_CALLBACK_URL"]!,
+      code,
+    }),
+  );
+  const data = (await res.json()) as { access_token: string; expires_in?: number };
+
+  const meRes = await fetch(`https://graph.facebook.com/me?fields=name&access_token=${data.access_token}`);
+  const me = (await meRes.json()) as { id: string; name?: string };
+
+  return { accessToken: data.access_token, expiresIn: data.expires_in, accountId: me.id, handle: me.name ?? "facebook_user" };
+}
+
+async function exchangeTikTokCode(code: string, codeVerifier: string) {
+  const res = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_key: process.env["TIKTOK_CLIENT_ID"]!,
+      client_secret: process.env["TIKTOK_CLIENT_SECRET"]!,
+      code,
+      grant_type: "authorization_code",
+      redirect_uri: process.env["TIKTOK_CALLBACK_URL"]!,
+      code_verifier: codeVerifier,
+    }),
+  });
+  const data = (await res.json()) as { data?: { access_token: string; refresh_token?: string; expires_in: number; open_id: string } };
+  const t = data.data!;
+  return { accessToken: t.access_token, refreshToken: t.refresh_token, expiresIn: t.expires_in, accountId: t.open_id, handle: "tiktok_user" };
 }
 
 async function exchangeLinkedInCode(code: string) {
@@ -192,7 +308,14 @@ async function exchangeLinkedInCode(code: string) {
     }),
   });
   const data = (await res.json()) as { access_token: string; expires_in: number; refresh_token?: string };
-  return { accessToken: data.access_token, expiresIn: data.expires_in, handle: "linkedin_user" };
+
+  const profileRes = await fetch("https://api.linkedin.com/v2/userinfo", {
+    headers: { Authorization: `Bearer ${data.access_token}` },
+  });
+  const profile = (await profileRes.json()) as { sub?: string; name?: string };
+  const handle = profile.name ?? "linkedin_user";
+
+  return { accessToken: data.access_token, expiresIn: data.expires_in, accountId: profile.sub, handle };
 }
 
 async function exchangeInstagramCode(code: string) {

@@ -19,11 +19,10 @@ const PLATFORM_META: Record<string, { label: string; textColor: string; bgColor:
   instagram: { label: "Instagram",   textColor: "text-pink-700",  bgColor: "bg-pink-50",   dotColor: "bg-pink-500" },
   linkedin:  { label: "LinkedIn",    textColor: "text-blue-700",  bgColor: "bg-blue-50",   dotColor: "bg-blue-600" },
   facebook:  { label: "Facebook",    textColor: "text-blue-600",  bgColor: "bg-blue-50",   dotColor: "bg-blue-500" },
-  telegram:  { label: "Telegram",    textColor: "text-sky-700",   bgColor: "bg-sky-50",    dotColor: "bg-sky-500" },
   tiktok:    { label: "TikTok",      textColor: "text-gray-900",  bgColor: "bg-gray-100",  dotColor: "bg-gray-800" },
 };
 
-const PLATFORMS = ["x", "instagram", "linkedin", "facebook", "telegram", "tiktok"];
+const PLATFORMS = ["x", "instagram", "linkedin", "facebook", "tiktok"];
 
 export default function AccountsPage() {
   const qc = useQueryClient();
