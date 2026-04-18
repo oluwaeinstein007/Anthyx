@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
 import Link from "next/link";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/v1";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 type IngestMode = "pdf" | "url" | "text";
 
@@ -32,7 +32,7 @@ export default function IngestPage() {
         formData.append("text", text);
       }
 
-      const res = await fetch(`${API_BASE}/brands/${id}/ingest`, {
+      const res = await fetch(`${API_BASE}/v1/brands/${id}/ingest`, {
         method: "POST",
         credentials: "include",
         body: formData,
@@ -40,7 +40,8 @@ export default function IngestPage() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error((err as { message?: string }).message ?? "Ingestion failed");
+        const errBody = err as { message?: string; error?: string };
+        throw new Error(errBody.message ?? errBody.error ?? "Ingestion failed");
       }
 
       return res.json();

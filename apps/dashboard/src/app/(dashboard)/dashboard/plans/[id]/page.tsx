@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
+import { Pencil, X, Check } from "lucide-react";
 
 interface ScheduledPost {
   id: string;
@@ -23,6 +24,7 @@ interface MarketingPlan {
   startDate: string;
   endDate: string;
   goals: string[];
+  feedbackLoopEnabled: boolean;
   posts: ScheduledPost[];
 }
 
@@ -51,7 +53,8 @@ const PLAN_STATUS_STYLES: Record<string, string> = {
   pending_review: "bg-amber-100 text-amber-700",
   active: "bg-green-100 text-green-700",
   completed: "bg-gray-100 text-gray-600",
-  paused: "bg-red-100 text-red-700",
+  paused: "bg-orange-100 text-orange-700",
+  failed: "bg-red-100 text-red-700",
 };
 
 type ViewMode = "calendar" | "list";
@@ -71,6 +74,10 @@ export default function PlanDetailPage() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
   const [view, setView] = useState<ViewMode>("calendar");
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editGoals, setEditGoals] = useState("");
+  const [editFeedback, setEditFeedback] = useState(false);
 
   const { data: plan, isLoading } = useQuery<MarketingPlan>({
     queryKey: ["plan", id],
@@ -88,6 +95,36 @@ export default function PlanDetailPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", id] }),
   });
 
+  const resume = useMutation({
+    mutationFn: () => api.post(`/plans/${id}/resume`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", id] }),
+  });
+
+  const updatePlan = useMutation({
+    mutationFn: (body: { name?: string; goals?: string[]; feedbackLoopEnabled?: boolean }) =>
+      api.put(`/plans/${id}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["plan", id] });
+      setEditing(false);
+    },
+  });
+
+  const startEdit = () => {
+    if (!plan) return;
+    setEditName(plan.name);
+    setEditGoals(plan.goals.join("\n"));
+    setEditFeedback(plan.feedbackLoopEnabled);
+    setEditing(true);
+  };
+
+  const saveEdit = () => {
+    updatePlan.mutate({
+      name: editName.trim() || undefined,
+      goals: editGoals.split("\n").map((g) => g.trim()).filter(Boolean),
+      feedbackLoopEnabled: editFeedback,
+    });
+  };
+
   if (isLoading)
     return <div className="text-sm text-gray-500 animate-pulse">Loading plan...</div>;
   if (!plan) return <div className="text-sm text-gray-500">Plan not found.</div>;
@@ -101,16 +138,14 @@ export default function PlanDetailPage() {
   }
 
   const publishedCount = plan.posts.filter((p) => p.status === "published").length;
-  const approvedCount = plan.posts.filter((p) =>
-    ["approved", "scheduled"].includes(p.status),
-  ).length;
+  const approvedCount = plan.posts.filter((p) => ["approved", "scheduled"].includes(p.status)).length;
   const pendingCount = plan.posts.filter((p) => p.status === "draft").length;
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between">
-        <div>
+        <div className="flex-1 min-w-0 pr-4">
           <div className="flex items-center gap-2 mb-1">
             <Link
               href="/dashboard/plans"
@@ -119,52 +154,131 @@ export default function PlanDetailPage() {
               ← Plans
             </Link>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">{plan.name}</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {new Date(plan.startDate).toLocaleDateString()} –{" "}
-            {new Date(plan.endDate).toLocaleDateString()}
-          </p>
-          {plan.goals.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {plan.goals.map((goal, i) => (
-                <span
-                  key={i}
-                  className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full"
+
+          {editing ? (
+            <div className="space-y-3">
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="w-full text-2xl font-bold text-gray-900 border-b border-gray-300 focus:outline-none focus:border-green-500 bg-transparent pb-1"
+              />
+              <div>
+                <label className="text-xs font-medium text-gray-500 mb-1 block">
+                  Goals <span className="text-gray-400 font-normal">(one per line)</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={editGoals}
+                  onChange={(e) => setEditGoals(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={editFeedback}
+                  onChange={(e) => setEditFeedback(e.target.checked)}
+                  className="rounded accent-green-600"
+                />
+                Enable feedback loop
+              </label>
+              <div className="flex gap-2">
+                <button
+                  onClick={saveEdit}
+                  disabled={updatePlan.isPending}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
                 >
-                  {goal}
-                </span>
-              ))}
+                  <Check className="w-3.5 h-3.5" />
+                  {updatePlan.isPending ? "Saving..." : "Save changes"}
+                </button>
+                <button
+                  onClick={() => setEditing(false)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 text-xs rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Cancel
+                </button>
+              </div>
             </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold text-gray-900">{plan.name}</h1>
+                <button
+                  onClick={startEdit}
+                  className="p-1 text-gray-400 hover:text-gray-600 transition-colors rounded"
+                  title="Edit plan"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {new Date(plan.startDate).toLocaleDateString()} –{" "}
+                {new Date(plan.endDate).toLocaleDateString()}
+              </p>
+              {plan.goals.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {plan.goals.map((goal, i) => (
+                    <span
+                      key={i}
+                      className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full"
+                    >
+                      {goal}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          <span
-            className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-              PLAN_STATUS_STYLES[plan.status] ?? "bg-gray-100 text-gray-600"
-            }`}
-          >
-            {plan.status.replace("_", " ")}
-          </span>
-          {plan.status === "pending_review" && (
-            <button
-              onClick={() => approve.mutate()}
-              disabled={approve.isPending}
-              className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+        {!editing && (
+          <div className="flex items-center gap-2 shrink-0">
+            <span
+              className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                PLAN_STATUS_STYLES[plan.status] ?? "bg-gray-100 text-gray-600"
+              }`}
             >
-              {approve.isPending ? "Approving..." : "Approve plan"}
-            </button>
-          )}
-          {plan.status === "active" && (
-            <button
-              onClick={() => pause.mutate()}
-              disabled={pause.isPending}
-              className="px-3 py-1.5 border border-red-200 text-red-600 text-xs font-medium rounded-lg hover:bg-red-50 disabled:opacity-50 transition-colors"
-            >
-              {pause.isPending ? "Pausing..." : "Pause plan"}
-            </button>
-          )}
-        </div>
+              {plan.status.replace(/_/g, " ")}
+            </span>
+            {plan.status === "pending_review" && (
+              <button
+                onClick={() => approve.mutate()}
+                disabled={approve.isPending}
+                className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+              >
+                {approve.isPending ? "Approving..." : "Approve plan"}
+              </button>
+            )}
+            {plan.status === "active" && (
+              <button
+                onClick={() => pause.mutate()}
+                disabled={pause.isPending}
+                className="px-3 py-1.5 border border-orange-200 text-orange-600 text-xs font-medium rounded-lg hover:bg-orange-50 disabled:opacity-50 transition-colors"
+              >
+                {pause.isPending ? "Pausing..." : "Pause plan"}
+              </button>
+            )}
+            {plan.status === "paused" && (
+              <button
+                onClick={() => resume.mutate()}
+                disabled={resume.isPending}
+                className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+              >
+                {resume.isPending ? "Resuming..." : "Resume plan"}
+              </button>
+            )}
+            {plan.status === "failed" && (
+              <span className="text-xs text-red-600 bg-red-50 border border-red-200 px-2.5 py-1 rounded-lg">
+                Generation failed — check agent logs
+              </span>
+            )}
+            {plan.status === "generating" && (
+              <span className="text-xs text-blue-600 animate-pulse">Generating…</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Stats row */}

@@ -2,7 +2,7 @@ import * as fs from "fs/promises";
 import * as cheerio from "cheerio";
 import pdfParse from "pdf-parse";
 
-export type SourceType = "pdf" | "markdown" | "url";
+export type SourceType = "pdf" | "markdown" | "url" | "plaintext";
 
 export interface ParsedContent {
   text: string;
@@ -40,7 +40,7 @@ export async function parseUrl(url: string): Promise<ParsedContent> {
   return { text: [title, metaDescription, bodyText].filter(Boolean).join("\n\n"), sourceType: "url", sourceName: url };
 }
 
-export async function parseSource(source: { type: SourceType; path?: string; url?: string }): Promise<ParsedContent> {
+export async function parseSource(source: { type: SourceType; path?: string; url?: string; rawText?: string }): Promise<ParsedContent> {
   switch (source.type) {
     case "pdf":
       if (!source.path) throw new Error("PDF source requires a file path");
@@ -51,6 +51,9 @@ export async function parseSource(source: { type: SourceType; path?: string; url
     case "url":
       if (!source.url) throw new Error("URL source requires a url");
       return parseUrl(source.url);
+    case "plaintext":
+      if (!source.rawText) throw new Error("Plaintext source requires rawText");
+      return { text: source.rawText, sourceType: "plaintext", sourceName: "raw-text" };
     default:
       throw new Error(`Unknown source type: ${(source as { type: string }).type}`);
   }

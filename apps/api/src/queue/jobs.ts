@@ -41,8 +41,21 @@ export async function schedulePostJob(postId: string, scheduledAt: Date): Promis
   return job.id!;
 }
 
-export async function queuePlanGeneration(planId: string, organizationId: string): Promise<void> {
-  await planGenerationQueue.add("generate-plan", { planId, organizationId });
+export interface PlanJobData {
+  planId: string;
+  organizationId: string;
+  brandProfileId: string;
+  brandName: string;
+  industry: string;
+  goals: string[];
+  platforms: string[];
+  agentId: string;
+  socialAccountIds: string[];
+  feedbackLoopEnabled?: boolean;
+}
+
+export async function queuePlanGeneration(data: PlanJobData): Promise<void> {
+  await planGenerationQueue.add("generate-plan", data);
 }
 
 export async function queueContentGeneration(planId: string, organizationId: string): Promise<void> {

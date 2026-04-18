@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  optimizeFonts: false,
   transpilePackages: ["@anthyx/types"],
   images: {
     remotePatterns: [

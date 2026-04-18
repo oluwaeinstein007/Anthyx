@@ -4,21 +4,8 @@ import { db } from "../db/client";
 import { marketingPlans, scheduledPosts } from "../db/schema";
 import { redisConnection } from "../queue/client";
 import { runStrategistAgent } from "../services/agent/strategist";
-import { queueContentGeneration } from "../queue/jobs";
+import { queueContentGeneration, type PlanJobData } from "../queue/jobs";
 import type { GeneratedPlanItem } from "@anthyx/types";
-
-interface PlanJobData {
-  planId: string;
-  organizationId: string;
-  brandProfileId: string;
-  brandName: string;
-  industry: string;
-  goals: string[];
-  platforms: string[];
-  agentId: string;
-  socialAccountIds: string[]; // one per platform
-  feedbackLoopEnabled?: boolean;
-}
 
 const worker = new Worker<PlanJobData>(
   "anthyx-plan-generation",
@@ -100,7 +87,7 @@ worker.on("failed", async (job, err) => {
   if (job) {
     await db
       .update(marketingPlans)
-      .set({ status: "paused", updatedAt: new Date() })
+      .set({ status: "failed", updatedAt: new Date() })
       .where(eq(marketingPlans.id, job.data.planId));
   }
   console.error(`[PlanWorker] Job ${job?.id} failed:`, err);

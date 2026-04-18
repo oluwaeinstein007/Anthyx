@@ -91,7 +91,7 @@ router.post(
     });
     if (!brand) return res.status(404).json({ error: "Brand not found" });
 
-    let sourceType: "pdf" | "markdown" | "url";
+    let sourceType: "pdf" | "markdown" | "url" | "plaintext";
     let filePath: string | undefined;
     let url: string | undefined;
     let sourceName: string | undefined;
@@ -105,8 +105,11 @@ router.post(
       sourceType = "url";
       url = req.body.url as string;
       sourceName = url;
+    } else if (req.body.text) {
+      sourceType = "plaintext";
+      sourceName = "raw-text";
     } else {
-      return res.status(400).json({ error: "Provide a file or URL" });
+      return res.status(400).json({ error: "Provide a file, URL, or text" });
     }
 
     const job = await ingestorQueue.add("ingest-brand", {
@@ -115,6 +118,7 @@ router.post(
       sourceType,
       filePath,
       url,
+      rawText: req.body.text as string | undefined,
       sourceName,
     });
 

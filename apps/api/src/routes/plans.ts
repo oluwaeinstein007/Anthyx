@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/client";
-import { marketingPlans, scheduledPosts, brandProfiles, agents } from "../db/schema";
+import { marketingPlans, scheduledPosts, brandProfiles, agents, socialAccounts } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { GeneratePlanSchema } from "@anthyx/config";
@@ -11,7 +11,7 @@ const router = Router();
 
 // POST /plans/generate
 router.post("/generate", auth, validate(GeneratePlanSchema), async (req, res) => {
-  const { brandProfileId, agentId, platforms, goals, startDate, feedbackLoopEnabled } = req.body;
+  const { brandProfileId, agentId, platforms, goals, startDate, feedbackLoopEnabled, durationDays = 30 } = req.body;
 
   const brand = await db.query.brandProfiles.findFirst({
     where: and(
@@ -21,8 +21,38 @@ router.post("/generate", auth, validate(GeneratePlanSchema), async (req, res) =>
   });
   if (!brand) return res.status(404).json({ error: "Brand not found" });
 
+  const agent = await db.query.agents.findFirst({
+    where: and(eq(agents.id, agentId), eq(agents.organizationId, req.user.orgId)),
+  });
+  if (!agent) return res.status(404).json({ error: "Agent not found" });
+  if (!agent.isActive) return res.status(400).json({ error: "Agent is silenced and cannot generate plans" });
+
+  // Resolve social accounts for the requested platforms (one per platform)
+  const accounts = await db.query.socialAccounts.findMany({
+    where: and(
+      eq(socialAccounts.agentId, agentId),
+      eq(socialAccounts.isActive, true),
+    ),
+  });
+
+  const validPlatforms: string[] = [];
+  const socialAccountIds: string[] = [];
+  for (const platform of platforms as string[]) {
+    const acct = accounts.find((a) => a.platform === platform);
+    if (acct) {
+      validPlatforms.push(platform);
+      socialAccountIds.push(acct.id);
+    }
+  }
+
+  if (validPlatforms.length === 0) {
+    return res.status(400).json({
+      error: "No active social accounts found for the selected platforms. Connect at least one account first.",
+    });
+  }
+
   const start = new Date(startDate);
-  const end = new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const end = new Date(start.getTime() + durationDays * 24 * 60 * 60 * 1000);
 
   const [plan] = await db
     .insert(marketingPlans)
@@ -30,7 +60,7 @@ router.post("/generate", auth, validate(GeneratePlanSchema), async (req, res) =>
       organizationId: req.user.orgId,
       brandProfileId,
       agentId,
-      name: `${brand.name} — 30-day plan (${start.toLocaleDateString()})`,
+      name: `${brand.name} — ${durationDays}-day plan (${start.toLocaleDateString()})`,
       status: "generating",
       startDate: start,
       endDate: end,
@@ -39,8 +69,18 @@ router.post("/generate", auth, validate(GeneratePlanSchema), async (req, res) =>
     })
     .returning();
 
-  // Kick off async plan generation
-  await queuePlanGeneration(plan!.id, req.user.orgId);
+  await queuePlanGeneration({
+    planId: plan!.id,
+    organizationId: req.user.orgId,
+    brandProfileId,
+    brandName: brand.name,
+    industry: brand.industry ?? "",
+    goals,
+    platforms: validPlatforms,
+    agentId,
+    socialAccountIds,
+    feedbackLoopEnabled: feedbackLoopEnabled ?? false,
+  });
 
   return res.status(202).json({ plan, message: "Plan generation queued" });
 });
@@ -70,20 +110,33 @@ router.get("/:id", auth, async (req, res) => {
   return res.json({ ...plan, posts });
 });
 
-// PUT /plans/:id
+// PUT /plans/:id — update plan metadata only
 router.put("/:id", auth, async (req, res) => {
+  const plan = await db.query.marketingPlans.findFirst({
+    where: and(
+      eq(marketingPlans.id, req.params.id!),
+      eq(marketingPlans.organizationId, req.user.orgId),
+    ),
+  });
+  if (!plan) return res.status(404).json({ error: "Not found" });
+
+  const { name, goals, feedbackLoopEnabled } = req.body as {
+    name?: string;
+    goals?: string[];
+    feedbackLoopEnabled?: boolean;
+  };
+
   const [updated] = await db
     .update(marketingPlans)
-    .set({ ...req.body, updatedAt: new Date() })
-    .where(
-      and(
-        eq(marketingPlans.id, req.params.id!),
-        eq(marketingPlans.organizationId, req.user.orgId),
-      ),
-    )
+    .set({
+      ...(name !== undefined && { name }),
+      ...(goals !== undefined && { goals }),
+      ...(feedbackLoopEnabled !== undefined && { feedbackLoopEnabled }),
+      updatedAt: new Date(),
+    })
+    .where(eq(marketingPlans.id, plan.id))
     .returning();
 
-  if (!updated) return res.status(404).json({ error: "Not found" });
   return res.json(updated);
 });
 
@@ -96,6 +149,9 @@ router.post("/:id/approve", auth, async (req, res) => {
     ),
   });
   if (!plan) return res.status(404).json({ error: "Not found" });
+  if (plan.status !== "pending_review") {
+    return res.status(400).json({ error: "Plan is not pending review" });
+  }
 
   await db
     .update(marketingPlans)
@@ -107,16 +163,42 @@ router.post("/:id/approve", auth, async (req, res) => {
 
 // POST /plans/:id/pause
 router.post("/:id/pause", auth, async (req, res) => {
+  const plan = await db.query.marketingPlans.findFirst({
+    where: and(
+      eq(marketingPlans.id, req.params.id!),
+      eq(marketingPlans.organizationId, req.user.orgId),
+    ),
+  });
+  if (!plan) return res.status(404).json({ error: "Not found" });
+  if (plan.status !== "active") {
+    return res.status(400).json({ error: "Only active plans can be paused" });
+  }
+
   await db
     .update(marketingPlans)
     .set({ status: "paused", updatedAt: new Date() })
-    .where(
-      and(
-        eq(marketingPlans.id, req.params.id!),
-        eq(marketingPlans.organizationId, req.user.orgId),
-      ),
-    );
+    .where(eq(marketingPlans.id, plan.id));
   return res.json({ paused: true });
+});
+
+// POST /plans/:id/resume
+router.post("/:id/resume", auth, async (req, res) => {
+  const plan = await db.query.marketingPlans.findFirst({
+    where: and(
+      eq(marketingPlans.id, req.params.id!),
+      eq(marketingPlans.organizationId, req.user.orgId),
+    ),
+  });
+  if (!plan) return res.status(404).json({ error: "Not found" });
+  if (plan.status !== "paused") {
+    return res.status(400).json({ error: "Plan is not paused" });
+  }
+
+  await db
+    .update(marketingPlans)
+    .set({ status: "active", updatedAt: new Date() })
+    .where(eq(marketingPlans.id, plan.id));
+  return res.json({ resumed: true });
 });
 
 export { router as plansRouter };

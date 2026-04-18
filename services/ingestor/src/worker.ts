@@ -16,11 +16,11 @@ const connection = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
 const worker = new Worker<IngestBrandPayload>(
   QUEUE_NAME,
   async (job) => {
-    const { brandId, organizationId, sourceType, filePath, url, sourceName } = job.data;
+    const { brandId, organizationId, sourceType, filePath, url, rawText, sourceName } = job.data;
 
     console.log(`[ingestor] Processing job ${job.id} for brand ${brandId}`);
 
-    const parsed = await parseSource({ type: sourceType, path: filePath, url });
+    const parsed = await parseSource({ type: sourceType, path: filePath, url, rawText });
     const extraction = await extractBrandData(parsed.text);
 
     await ingestBrandDocument(

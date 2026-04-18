@@ -104,6 +104,7 @@ export const GeneratePlanSchema = z.object({
   platforms: z.array(PlatformSchema).min(1),
   goals: z.array(z.string()).min(1),
   startDate: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}/)),
+  durationDays: z.number().int().min(7).max(90).optional().default(30),
   feedbackLoopEnabled: z.boolean().optional().default(false),
 });
 

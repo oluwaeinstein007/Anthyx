@@ -38,6 +38,7 @@ export default function PlansPage() {
     platforms: [] as string[],
     goals: "",
     startDate: new Date().toISOString().split("T")[0] ?? "",
+    durationDays: 30,
     feedbackLoopEnabled: false,
   });
 
@@ -57,6 +58,7 @@ export default function PlansPage() {
         platforms: form.platforms,
         goals: form.goals.split("\n").map((g) => g.trim()).filter(Boolean),
         startDate: form.startDate,
+        durationDays: form.durationDays,
         feedbackLoopEnabled: form.feedbackLoopEnabled,
       }),
     onSuccess: () => { setGenerating(false); qc.invalidateQueries({ queryKey: ["plans"] }); },
@@ -73,7 +75,7 @@ export default function PlansPage() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Marketing Plans</h1>
-          <p className="text-sm text-gray-500 mt-1">AI-generated 30-day content calendars.</p>
+          <p className="text-sm text-gray-500 mt-1">AI-generated content calendars (7–90 days).</p>
         </div>
         <button
           onClick={() => setGenerating(true)}
@@ -92,7 +94,7 @@ export default function PlansPage() {
                 <Sparkles className="w-4 h-4 text-green-600" />
               </div>
               <div>
-                <h2 className="font-semibold text-gray-900 text-sm">New 30-day plan</h2>
+                <h2 className="font-semibold text-gray-900 text-sm">New content plan</h2>
                 <p className="text-xs text-gray-400">AI will generate a full content calendar</p>
               </div>
             </div>
@@ -158,13 +160,26 @@ export default function PlansPage() {
               />
             </div>
 
-            <div className="grid md:grid-cols-2 gap-4 items-end">
+            <div className="grid md:grid-cols-3 gap-4 items-end">
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">Start date</label>
                 <input
                   type="date"
                   value={form.startDate}
                   onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+                  className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                  Duration <span className="text-gray-400 font-normal">(days, 7–90)</span>
+                </label>
+                <input
+                  type="number"
+                  min={7}
+                  max={90}
+                  value={form.durationDays}
+                  onChange={(e) => setForm({ ...form, durationDays: Math.min(90, Math.max(7, Number(e.target.value))) })}
                   className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                 />
               </div>
@@ -186,7 +201,7 @@ export default function PlansPage() {
                 className="flex items-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white text-sm font-medium rounded-xl transition-colors"
               >
                 <Sparkles className="w-4 h-4" />
-                {generate.isPending ? "Generating…" : "Generate 30-day plan"}
+                {generate.isPending ? "Generating…" : `Generate ${form.durationDays}-day plan`}
               </button>
               <button onClick={() => setGenerating(false)} className="px-5 py-2.5 border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 rounded-xl transition-colors">
                 Cancel

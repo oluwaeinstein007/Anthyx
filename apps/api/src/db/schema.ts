@@ -38,6 +38,7 @@ export const planStatusEnum = pgEnum("plan_status", [
   "active",
   "completed",
   "paused",
+  "failed",
 ]);
 
 export const planTierEnum = pgEnum("plan_tier", [

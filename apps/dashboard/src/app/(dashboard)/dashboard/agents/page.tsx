@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { Bot, PauseCircle, PlayCircle, AlertTriangle } from "lucide-react";
+import { Bot, PauseCircle, PlayCircle, AlertTriangle, Plus, X } from "lucide-react";
 
 interface Agent {
   id: string;
@@ -27,6 +27,12 @@ export default function AgentsPage() {
   const [silenceReason, setSilenceReason] = useState("");
   const [confirmName, setConfirmName] = useState("");
 
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newBrandId, setNewBrandId] = useState("");
+  const [newDescription, setNewDescription] = useState("");
+  const [newDiet, setNewDiet] = useState("");
+
   const { data: agents = [], isLoading } = useQuery<Agent[]>({
     queryKey: ["agents"],
     queryFn: () => api.get<Agent[]>("/agents"),
@@ -35,6 +41,19 @@ export default function AgentsPage() {
   const { data: brands = [] } = useQuery<Brand[]>({
     queryKey: ["brands"],
     queryFn: () => api.get<Brand[]>("/brands"),
+  });
+
+  const create = useMutation({
+    mutationFn: (body: { brandProfileId: string; name: string; description?: string; dietInstructions?: string }) =>
+      api.post<Agent>("/agents", body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["agents"] });
+      setShowCreate(false);
+      setNewName("");
+      setNewBrandId("");
+      setNewDescription("");
+      setNewDiet("");
+    },
   });
 
   const silence = useMutation({
@@ -65,10 +84,103 @@ export default function AgentsPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Agents</h1>
-        <p className="text-sm text-gray-500 mt-1">Named AI personas that generate and publish content for your brands.</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Agents</h1>
+          <p className="text-sm text-gray-500 mt-1">Named AI personas that generate and publish content for your brands.</p>
+        </div>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-xl hover:bg-green-700 transition-colors"
+        >
+          <Plus className="w-4 h-4" /> New agent
+        </button>
       </div>
+
+      {showCreate && (
+        <div className="bg-white border border-gray-200 rounded-2xl p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-gray-900">Create agent</h2>
+            <button onClick={() => setShowCreate(false)} className="text-gray-400 hover:text-gray-600">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Brand *</label>
+              <select
+                value={newBrandId}
+                onChange={(e) => setNewBrandId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+              >
+                <option value="">Select a brand</option>
+                {brands.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Agent name *</label>
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="e.g. Anthyx Content Writer"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Description</label>
+              <input
+                type="text"
+                value={newDescription}
+                onChange={(e) => setNewDescription(e.target.value)}
+                placeholder="What this agent focuses on"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Diet instructions</label>
+              <textarea
+                rows={3}
+                value={newDiet}
+                onChange={(e) => setNewDiet(e.target.value)}
+                placeholder="Topics or content types to avoid (e.g. 'No political content, no competitor mentions')"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-green-400"
+              />
+            </div>
+          </div>
+
+          {create.isError && (
+            <p className="text-sm text-red-600">{(create.error as Error).message}</p>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={() => create.mutate({
+                brandProfileId: newBrandId,
+                name: newName,
+                description: newDescription || undefined,
+                dietInstructions: newDiet || undefined,
+              })}
+              disabled={!newBrandId || !newName.trim() || create.isPending}
+              className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-xl hover:bg-green-700 disabled:opacity-50 transition-colors"
+            >
+              {create.isPending ? "Creating…" : "Create agent"}
+            </button>
+            <button
+              onClick={() => setShowCreate(false)}
+              className="px-4 py-2 border border-gray-200 text-sm rounded-xl hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {agents.length === 0 ? (
         <div className="text-center py-20 bg-white border border-dashed border-gray-200 rounded-2xl">
@@ -77,7 +189,7 @@ export default function AgentsPage() {
           </div>
           <h3 className="text-base font-semibold text-gray-900 mb-1">No agents yet</h3>
           <p className="text-sm text-gray-500 max-w-xs mx-auto">
-            Agents are created automatically when you generate a content plan. Create a brand and plan to get started.
+            Agents are AI personas tied to a brand. Create an agent first, then generate a content plan to put it to work.
           </p>
         </div>
       ) : (
