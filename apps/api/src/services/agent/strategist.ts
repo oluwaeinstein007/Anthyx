@@ -22,7 +22,8 @@ Rules:
 - Never generate more than 2 promotional posts per 7-day window
 - Distribute platforms based on the brand's active accounts
 - Output must be a valid JSON array matching the GeneratedPlanItem schema
-- Each item: { date, platform, contentType, topic, hook, cta, suggestVisual, notes? }
+- Each item: { date, platform, contentType, topic, hook, cta, suggestVisual (boolean true/false), notes? }
+- IMPORTANT: suggestVisual must be a JSON boolean (true or false), NOT a string
 `.trim();
 
 const TOOL_DECLARATIONS: FunctionDeclaration[] = [
@@ -135,7 +136,14 @@ Return a JSON array of exactly ${input.durationDays} plan items covering the ful
     response = await chat.sendMessage(toolResults);
   }
 
-  const text = response.response.text();
+  let text = response.response.text();
+
+  const JSON_RETRY_PROMPT = `Output ONLY the raw JSON array of ${input.durationDays} plan items. No markdown fences, no explanation. Start with [ and end with ].`;
+  for (let attempt = 0; attempt < 3 && !text.match(/\[[\s\S]*\]/); attempt++) {
+    response = await chat.sendMessage(JSON_RETRY_PROMPT);
+    text = response.response.text();
+  }
+
   const { extractJsonArray } = await import("./llm-client");
   return PlanItemArraySchema.parse(extractJsonArray(text));
 }

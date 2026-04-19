@@ -41,7 +41,7 @@ export async function extractBrandData(documentText: string): Promise<BrandExtra
   const text = await generateWithFallback({
     systemPrompt: EXTRACTION_SYSTEM_PROMPT,
     userMessage: EXTRACTION_USER_TEMPLATE(truncated),
-    geminiModel: GEMINI_FLASH,
+    geminiModel: process.env["GEMINI_EXTRACTION_MODEL"] ?? GEMINI_FLASH,
     claudeModel: CLAUDE_HAIKU,
     maxTokens: 1024,
   });

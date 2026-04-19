@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, or, isNull } from "drizzle-orm";
 import { db } from "../db/client";
 import { marketingPlans, scheduledPosts, brandProfiles, agents, socialAccounts } from "../db/schema";
 import { auth } from "../middleware/auth";
@@ -27,10 +27,11 @@ router.post("/generate", auth, validate(GeneratePlanSchema), async (req, res) =>
   if (!agent) return res.status(404).json({ error: "Agent not found" });
   if (!agent.isActive) return res.status(400).json({ error: "Agent is silenced and cannot generate plans" });
 
-  // Resolve social accounts for the requested platforms (one per platform)
+  // Resolve social accounts for the requested platforms (agent-linked + org-level)
   const accounts = await db.query.socialAccounts.findMany({
     where: and(
-      eq(socialAccounts.agentId, agentId),
+      eq(socialAccounts.organizationId, req.user.orgId),
+      or(eq(socialAccounts.agentId, agentId), isNull(socialAccounts.agentId)),
       eq(socialAccounts.isActive, true),
     ),
   });
@@ -167,10 +168,16 @@ router.post("/:id/retry", auth, async (req, res) => {
     return res.status(400).json({ error: "Only failed plans can be retried" });
   }
 
+  if (!plan.agentId) return res.status(400).json({ error: "Plan has no agent assigned" });
+
   const [brand, accounts] = await Promise.all([
     db.query.brandProfiles.findFirst({ where: eq(brandProfiles.id, plan.brandProfileId) }),
     db.query.socialAccounts.findMany({
-      where: and(eq(socialAccounts.agentId, plan.agentId), eq(socialAccounts.isActive, true)),
+      where: and(
+        eq(socialAccounts.organizationId, req.user.orgId),
+        or(eq(socialAccounts.agentId, plan.agentId!), isNull(socialAccounts.agentId)),
+        eq(socialAccounts.isActive, true),
+      ),
     }),
   ]);
 
@@ -198,9 +205,9 @@ router.post("/:id/retry", auth, async (req, res) => {
     goals: plan.goals as string[],
     platforms: allPlatforms,
     agentId: plan.agentId,
-    socialAccountIds: allPlatforms.map((p) => platformAccountMap[p] ?? ""),
+    socialAccountIds: allPlatforms.map((p) => platformAccountMap[p] ?? null),
     durationDays,
-    feedbackLoopEnabled: plan.feedbackLoopEnabled,
+    feedbackLoopEnabled: plan.feedbackLoopEnabled ?? false,
   });
 
   return res.json({ retrying: true });

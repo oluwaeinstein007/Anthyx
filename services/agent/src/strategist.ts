@@ -21,11 +21,13 @@ and read past engagement performance.
 
 Rules:
 - Every plan item must map to a content pillar: educational | promotional | engagement | trending | user_generated
+- CRITICAL: contentType MUST be exactly one of those 5 values. Never use goal names (e.g. "collaboration", "branding", "awareness") as contentType — goals inform topics and strategy, not contentType.
 - Prioritize content types that historically performed well (use read_engagement_analytics)
 - Never generate more than 2 promotional posts per 7-day window
 - Distribute platforms based on the brand's active accounts
 - Output must be a valid JSON array matching the GeneratedPlanItem schema
-- Each item: { date, platform, contentType, topic, hook, cta, suggestVisual, notes? }`.trim();
+- Each item: { date, platform, contentType, topic, hook, cta, suggestVisual (boolean true/false), notes? }
+- IMPORTANT: suggestVisual must be a JSON boolean (true or false), NOT a string`.trim();
 
 const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   {
@@ -141,8 +143,15 @@ Return a JSON array of 30 plan items covering the full 30 days.`;
     response = await chat.sendMessage(toolResults);
   }
 
-  const text = response.response.text();
+  let text = response.response.text();
+
+  const JSON_RETRY_PROMPT = "Output ONLY the raw JSON array of 30 plan items. No markdown fences, no explanation. Start with [ and end with ].";
+  for (let attempt = 0; attempt < 3 && !text.match(/\[[\s\S]*\]/); attempt++) {
+    response = await chat.sendMessage(JSON_RETRY_PROMPT);
+    text = response.response.text();
+  }
+
   const match = text.match(/\[[\s\S]*\]/);
-  if (!match) throw new Error("No JSON array found in Strategist response");
+  if (!match) throw new Error("No JSON array found in Strategist response after retries");
   return PlanItemArraySchema.parse(JSON.parse(match[0]));
 }

@@ -50,7 +50,7 @@ export interface PlanJobData {
   goals: string[];
   platforms: string[];
   agentId: string;
-  socialAccountIds: string[];
+  socialAccountIds: (string | null)[];
   durationDays: number;
   feedbackLoopEnabled?: boolean;
 }

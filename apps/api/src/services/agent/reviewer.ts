@@ -52,7 +52,7 @@ Return ONLY valid JSON:
   const text = await generateWithFallback({
     systemPrompt: REVIEWER_SYSTEM_PROMPT,
     userMessage,
-    geminiModel: GEMINI_FLASH,
+    geminiModel: process.env["GEMINI_REVIEWER_MODEL"] ?? GEMINI_FLASH,
     claudeModel: CLAUDE_HAIKU,
     maxTokens: 1024,
   });

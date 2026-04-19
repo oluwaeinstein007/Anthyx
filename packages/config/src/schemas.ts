@@ -40,22 +40,49 @@ export type BrandExtraction = z.infer<typeof BrandExtractionSchema>;
 
 // ── Plan Items ─────────────────────────────────────────────────────────────────
 
-export const ContentTypeSchema = z.enum([
-  "educational",
-  "promotional",
-  "engagement",
-  "trending",
-  "user_generated",
-]);
+const CONTENT_TYPE_COERCE: Record<string, string> = {
+  collaboration: "engagement",
+  branding: "promotional",
+  awareness: "educational",
+  informational: "educational",
+  inspirational: "engagement",
+  community: "engagement",
+  product: "promotional",
+  news: "trending",
+  viral: "trending",
+};
+
+export const ContentTypeSchema = z.preprocess(
+  (v) => {
+    if (typeof v !== "string") return v;
+    const lower = v.toLowerCase().trim();
+    return CONTENT_TYPE_COERCE[lower] ?? lower;
+  },
+  z.enum([
+    "educational",
+    "promotional",
+    "engagement",
+    "trending",
+    "user_generated",
+  ]),
+);
 
 export const PlanItemSchema = z.object({
   date: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}/)),
-  platform: PlatformSchema,
+  platform: z.preprocess((s) => (typeof s === "string" ? s.toLowerCase() : s), PlatformSchema),
   contentType: ContentTypeSchema,
   topic: z.string().min(1).max(200),
   hook: z.string().min(1).max(500),
   cta: z.string().min(1).max(200),
-  suggestVisual: z.boolean(),
+  suggestVisual: z.preprocess((v) => {
+    if (typeof v === "boolean") return v;
+    if (typeof v === "string") {
+      const lower = v.toLowerCase().trim();
+      if (lower === "true" || lower === "yes" || lower === "1") return true;
+      if (lower === "false" || lower === "no" || lower === "0") return false;
+    }
+    return v;
+  }, z.boolean()),
   notes: z.string().optional(),
 });
 

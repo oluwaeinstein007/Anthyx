@@ -8,8 +8,8 @@ const qdrant = new QdrantClient({
   apiKey: process.env["QDRANT_API_KEY"],
 });
 
-const VECTOR_SIZE = 768; // text-embedding-004
-const EMBEDDING_MODEL = process.env["GEMINI_EMBEDDING_MODEL"] ?? "text-embedding-004";
+const EMBEDDING_MODEL = process.env["GEMINI_EMBEDDING_MODEL"] ?? "gemini-embedding-001";
+const VECTOR_SIZE = parseInt(process.env["GEMINI_EMBEDDING_VECTOR_SIZE"] ?? "3072", 10);
 
 export interface ChunkMetadata {
   type: "voice_rule" | "tone_descriptor" | "color_reference" | "brand_statement" | "audience_note";
@@ -33,13 +33,15 @@ export function chunkText(text: string, chunkSize = 500, overlap = 50): string[]
 export async function ensureQdrantCollection(brandProfileId: string): Promise<void> {
   const collectionName = `brand_${brandProfileId}`;
   try {
-    await qdrant.getCollection(collectionName);
+    const info = await qdrant.getCollection(collectionName);
+    const existingSize = (info.config?.params?.vectors as { size?: number } | undefined)?.size;
+    if (existingSize !== undefined && existingSize !== VECTOR_SIZE) {
+      await qdrant.deleteCollection(collectionName);
+      throw new Error("dimension mismatch — recreating");
+    }
   } catch {
     await qdrant.createCollection(collectionName, {
-      vectors: {
-        size: VECTOR_SIZE,
-        distance: "Cosine",
-      },
+      vectors: { size: VECTOR_SIZE, distance: "Cosine" },
     });
   }
 }

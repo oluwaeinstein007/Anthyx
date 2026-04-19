@@ -153,6 +153,14 @@ export async function generateContentForPlan(planId: string, organizationId: str
         suggestVisual: false,
       };
 
+      if (!post.socialAccountId) {
+        await db
+          .update(scheduledPosts)
+          .set({ status: "failed", errorMessage: "No social account linked to this post", updatedAt: new Date() })
+          .where(eq(scheduledPosts.id, post.id));
+        continue;
+      }
+
       const result = await generateAndReviewPost(
         { ...planItem, id: post.id },
         post.agentId,

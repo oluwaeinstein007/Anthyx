@@ -56,7 +56,7 @@ export async function runCopywriterAgent(input: CopywriterRunInput): Promise<Cop
   const text = await generateWithFallback({
     systemPrompt,
     userMessage: "Write the post. Return only valid JSON.",
-    geminiModel: GEMINI_PRO,
+    geminiModel: process.env["GEMINI_COPYWRITER_MODEL"] ?? GEMINI_PRO,
     claudeModel: CLAUDE_SONNET,
     maxTokens: 1024,
   });

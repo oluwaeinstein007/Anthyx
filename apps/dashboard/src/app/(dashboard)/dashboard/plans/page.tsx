@@ -1,10 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, KeyboardEvent } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
 import { Plus, Calendar, ArrowRight, X, Sparkles } from "lucide-react";
+
+const SUGGESTED_GOALS = [
+  "Increase brand awareness",
+  "Drive website traffic",
+  "Grow followers",
+  "Build community engagement",
+  "Generate leads",
+  "Showcase products",
+  "Establish thought leadership",
+  "Promote content",
+];
 
 interface Plan {
   id: string;
@@ -37,11 +48,13 @@ export default function PlansPage() {
     brandProfileId: "",
     agentId: "",
     platforms: [] as string[],
-    goals: "",
+    goals: [] as string[],
     startDate: new Date().toISOString().split("T")[0] ?? "",
     durationDays: 30,
     feedbackLoopEnabled: false,
   });
+  const [goalInput, setGoalInput] = useState("");
+  const goalInputRef = useRef<HTMLInputElement>(null);
 
   const { data: plans = [], isLoading } = useQuery<Plan[]>({
     queryKey: ["plans"],
@@ -57,7 +70,7 @@ export default function PlansPage() {
         brandProfileId: form.brandProfileId,
         agentId: form.agentId,
         platforms: form.platforms,
-        goals: form.goals.split("\n").map((g) => g.trim()).filter(Boolean),
+        goals: form.goals,
         startDate: form.startDate,
         durationDays: form.durationDays,
         feedbackLoopEnabled: form.feedbackLoopEnabled,
@@ -66,7 +79,27 @@ export default function PlansPage() {
   });
 
   const filteredAgents = agents.filter((a) => !form.brandProfileId || a.brandProfileId === form.brandProfileId);
-  const canGenerate = form.brandProfileId && form.agentId && form.platforms.length > 0 && form.goals;
+  const canGenerate = form.brandProfileId && form.agentId && form.platforms.length > 0 && form.goals.length > 0;
+
+  const addGoal = (goal: string) => {
+    const trimmed = goal.trim();
+    if (trimmed && !form.goals.includes(trimmed)) {
+      setForm({ ...form, goals: [...form.goals, trimmed] });
+    }
+    setGoalInput("");
+  };
+
+  const removeGoal = (goal: string) =>
+    setForm({ ...form, goals: form.goals.filter((g) => g !== goal) });
+
+  const handleGoalKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      addGoal(goalInput);
+    } else if (e.key === "Backspace" && !goalInput && form.goals.length > 0) {
+      removeGoal(form.goals[form.goals.length - 1]!);
+    }
+  };
 
   const togglePlatform = (p: string) =>
     setForm({ ...form, platforms: form.platforms.includes(p) ? form.platforms.filter((x) => x !== p) : [...form.platforms, p] });
@@ -151,14 +184,53 @@ export default function PlansPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Goals <span className="text-gray-400 font-normal">(one per line)</span></label>
-              <textarea
-                rows={3}
-                value={form.goals}
-                onChange={(e) => setForm({ ...form, goals: e.target.value })}
-                placeholder={"Increase brand awareness\nDrive website traffic\nGrow LinkedIn followers"}
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
+              <label className="block text-xs font-medium text-gray-600 mb-2">Goals</label>
+              {/* Suggested goals */}
+              <div className="flex flex-wrap gap-1.5 mb-2.5">
+                {SUGGESTED_GOALS.map((g) => {
+                  const active = form.goals.includes(g);
+                  return (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => active ? removeGoal(g) : addGoal(g)}
+                      className={`px-3 py-1 text-xs rounded-full border font-medium transition-colors ${
+                        active
+                          ? "bg-green-600 text-white border-green-600"
+                          : "border-gray-200 text-gray-500 hover:border-green-300 hover:text-green-700"
+                      }`}
+                    >
+                      {active && <span className="mr-1">✓</span>}{g}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Tag input with selected goals */}
+              <div
+                className="flex flex-wrap gap-1.5 min-h-[42px] px-3 py-2 border border-gray-300 rounded-xl focus-within:ring-2 focus-within:ring-green-500 cursor-text"
+                onClick={() => goalInputRef.current?.focus()}
+              >
+                {form.goals.filter((g) => !SUGGESTED_GOALS.includes(g)).map((g) => (
+                  <span key={g} className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-green-100 text-green-800 text-xs rounded-full font-medium">
+                    {g}
+                    <button type="button" onClick={(e) => { e.stopPropagation(); removeGoal(g); }} className="hover:text-green-600">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+                <input
+                  ref={goalInputRef}
+                  value={goalInput}
+                  onChange={(e) => setGoalInput(e.target.value)}
+                  onKeyDown={handleGoalKeyDown}
+                  onBlur={() => goalInput.trim() && addGoal(goalInput)}
+                  placeholder={form.goals.length === 0 ? "Type a custom goal and press Enter…" : "Add another…"}
+                  className="flex-1 min-w-[140px] text-sm outline-none bg-transparent placeholder:text-gray-400"
+                />
+              </div>
+              {form.goals.length > 0 && (
+                <p className="text-xs text-gray-400 mt-1">{form.goals.length} goal{form.goals.length > 1 ? "s" : ""} selected</p>
+              )}
             </div>
 
             <div className="grid md:grid-cols-3 gap-4 items-end">

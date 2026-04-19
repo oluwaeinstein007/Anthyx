@@ -85,15 +85,18 @@ services:
     restart: unless-stopped
 
   # ── Standalone Agent Service ──────────────────────────────────────────────────
-  agent:
-    build:
-      context: .
-      dockerfile: services/agent/Dockerfile
-    environment:
-      <<: *app-env
-    env_file: .env
-    depends_on: *app-depends
-    restart: unless-stopped
+  # Disabled: services/agent competes with the worker service on the same BullMQ
+  # queues and has bugs (hardcoded 30-day prompt, silent null-account skips).
+  # Re-enable once services/agent is stable and the worker service is removed.
+  # agent:
+  #   build:
+  #     context: .
+  #     dockerfile: services/agent/Dockerfile
+  #   environment:
+  #     <<: *app-env
+  #   env_file: .env
+  #   depends_on: *app-depends
+  #   restart: unless-stopped
 
   # ── Infrastructure ────────────────────────────────────────────────────────────
   postgres:

@@ -8,6 +8,7 @@ import {
   boolean,
   integer,
   pgEnum,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 // ── Enums ──────────────────────────────────────────────────────────────────────
@@ -123,24 +124,33 @@ export const agents = pgTable("agents", {
 
 // ── Social Accounts ────────────────────────────────────────────────────────────
 
-export const socialAccounts = pgTable("social_accounts", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  organizationId: uuid("organization_id")
-    .references(() => organizations.id)
-    .notNull(),
-  agentId: uuid("agent_id").references(() => agents.id),
-  platform: platformEnum("platform").notNull(),
-  accountHandle: text("account_handle").notNull(),
-  accountId: text("account_id"),
-  // AES-256-GCM encrypted tokens
-  accessToken: text("access_token"),
-  refreshToken: text("refresh_token"),
-  tokenExpiresAt: timestamp("token_expires_at"),
-  platformConfig: jsonb("platform_config"),
-  isActive: boolean("is_active").default(true),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
+export const socialAccounts = pgTable(
+  "social_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    agentId: uuid("agent_id").references(() => agents.id),
+    platform: platformEnum("platform").notNull(),
+    accountHandle: text("account_handle").notNull(),
+    accountId: text("account_id"),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    tokenExpiresAt: timestamp("token_expires_at"),
+    platformConfig: jsonb("platform_config"),
+    isActive: boolean("is_active").default(true),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (t) => ({
+    orgPlatformHandleUniq: uniqueIndex("social_accounts_org_platform_handle_idx").on(
+      t.organizationId,
+      t.platform,
+      t.accountHandle,
+    ),
+  }),
+);
 
 // ── Marketing Plans ────────────────────────────────────────────────────────────
 
