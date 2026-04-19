@@ -694,6 +694,76 @@ async function exchangeInstagramCode(code: string) {
   return { accessToken: data.access_token, accountId: String(data.user_id), handle: "ig_user" };
 }
 
+async function exchangeRedditCode(code: string) {
+  const res = await fetch("https://www.reddit.com/api/v1/access_token", {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${process.env["REDDIT_CLIENT_ID"]}:${process.env["REDDIT_CLIENT_SECRET"]}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "Anthyx/1.0",
+    },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: process.env["REDDIT_CALLBACK_URL"]!,
+    }),
+  });
+  const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };
+  const meRes = await fetch("https://oauth.reddit.com/api/v1/me", {
+    headers: { Authorization: `Bearer ${data.access_token}`, "User-Agent": "Anthyx/1.0" },
+  });
+  const me = (await meRes.json()) as { name?: string };
+  return { accessToken: data.access_token, refreshToken: data.refresh_token, expiresIn: data.expires_in, handle: me.name ?? "reddit_user" };
+}
+
+async function exchangeThreadsCode(code: string) {
+  const res = await fetch("https://graph.threads.net/oauth/access_token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: process.env["THREADS_APP_ID"]!,
+      client_secret: process.env["THREADS_APP_SECRET"]!,
+      grant_type: "authorization_code",
+      redirect_uri: process.env["THREADS_CALLBACK_URL"]!,
+      code,
+    }),
+  });
+  const data = (await res.json()) as { access_token: string; user_id: string };
+  const profileRes = await fetch(
+    `https://graph.threads.net/v1.0/me?fields=id,username&access_token=${data.access_token}`,
+  );
+  const profile = (await profileRes.json()) as { id: string; username?: string };
+  return { accessToken: data.access_token, accountId: data.user_id, handle: profile.username ?? "threads_user" };
+}
+
+async function exchangeYouTubeCode(code: string) {
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      client_id: process.env["GOOGLE_CLIENT_ID"]!,
+      client_secret: process.env["GOOGLE_CLIENT_SECRET"]!,
+      redirect_uri: process.env["GOOGLE_CALLBACK_URL"]!,
+      grant_type: "authorization_code",
+    }),
+  });
+  const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };
+  const channelRes = await fetch(
+    "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
+    { headers: { Authorization: `Bearer ${data.access_token}` } },
+  );
+  const channelData = (await channelRes.json()) as { items?: Array<{ id: string; snippet: { title: string } }> };
+  const channel = channelData.items?.[0];
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+    expiresIn: data.expires_in,
+    accountId: channel?.id,
+    handle: channel?.snippet.title ?? "youtube_channel",
+  };
+}
+
 async function backfillPlanPosts(orgId: string, accountId: string, platform: string) {
   await db
     .update(scheduledPosts)
