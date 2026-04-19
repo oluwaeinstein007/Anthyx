@@ -125,6 +125,51 @@ router.get("/oauth/:platform", auth, async (req, res) => {
         }).toString();
       break;
     }
+    case "reddit": {
+      const envError = missingEnv(["REDDIT_CLIENT_ID", "REDDIT_CALLBACK_URL"]);
+      if (envError) return res.status(500).json({ error: envError });
+      authUrl =
+        `https://www.reddit.com/api/v1/authorize?` +
+        new URLSearchParams({
+          client_id: process.env["REDDIT_CLIENT_ID"]!,
+          response_type: "code",
+          state,
+          redirect_uri: process.env["REDDIT_CALLBACK_URL"]!,
+          duration: "permanent",
+          scope: "submit,identity,read",
+        }).toString();
+      break;
+    }
+    case "threads": {
+      const envError = missingEnv(["THREADS_APP_ID", "THREADS_CALLBACK_URL"]);
+      if (envError) return res.status(500).json({ error: envError });
+      authUrl =
+        `https://threads.net/oauth/authorize?` +
+        new URLSearchParams({
+          client_id: process.env["THREADS_APP_ID"]!,
+          redirect_uri: process.env["THREADS_CALLBACK_URL"]!,
+          scope: "threads_basic,threads_content_publish",
+          response_type: "code",
+          state,
+        }).toString();
+      break;
+    }
+    case "youtube": {
+      const envError = missingEnv(["GOOGLE_CLIENT_ID", "GOOGLE_CALLBACK_URL"]);
+      if (envError) return res.status(500).json({ error: envError });
+      authUrl =
+        `https://accounts.google.com/o/oauth2/v2/auth?` +
+        new URLSearchParams({
+          client_id: process.env["GOOGLE_CLIENT_ID"]!,
+          redirect_uri: process.env["GOOGLE_CALLBACK_URL"]!,
+          scope: "https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.force-ssl",
+          response_type: "code",
+          access_type: "offline",
+          prompt: "consent",
+          state,
+        }).toString();
+      break;
+    }
     default:
       return res.status(400).json({ error: `OAuth not supported for platform: ${platform}` });
   }
@@ -174,6 +219,15 @@ router.get("/oauth/callback", async (req, res) => {
     case "tiktok":
       if (!codeVerifier) return res.status(400).json({ error: "Missing PKCE verifier" });
       tokens = await exchangeTikTokCode(code, codeVerifier);
+      break;
+    case "reddit":
+      tokens = await exchangeRedditCode(code);
+      break;
+    case "threads":
+      tokens = await exchangeThreadsCode(code);
+      break;
+    case "youtube":
+      tokens = await exchangeYouTubeCode(code);
       break;
     default:
       return res.status(400).json({ error: "Unsupported platform" });
@@ -312,6 +366,207 @@ router.post("/telegram", auth, async (req, res) => {
     console.error("[accounts] telegram connect error:", err);
     return res.status(500).json({ error: "Failed to connect Telegram bot. Check your token and try again." });
   }
+});
+
+// POST /accounts/discord — connect via bot token + channel ID
+router.post("/discord", auth, async (req, res) => {
+  const { botToken, channelId } = req.body as { botToken?: string; channelId?: string };
+  if (!botToken?.trim() || !channelId?.trim()) {
+    return res.status(400).json({ error: "Bot token and channel ID are required" });
+  }
+
+  // Validate bot token by fetching the bot's own user
+  const meRes = await fetch("https://discord.com/api/v10/users/@me", {
+    headers: { Authorization: `Bot ${botToken.trim()}` },
+  });
+  if (!meRes.ok) return res.status(400).json({ error: "Invalid Discord bot token" });
+  const me = (await meRes.json()) as { id: string; username: string };
+
+  // Validate bot has access to the channel
+  const chRes = await fetch(`https://discord.com/api/v10/channels/${channelId.trim()}`, {
+    headers: { Authorization: `Bot ${botToken.trim()}` },
+  });
+  if (!chRes.ok) return res.status(400).json({ error: "Bot cannot access that channel — make sure it has been added to the server with Send Messages permission" });
+  const ch = (await chRes.json()) as { id: string; name?: string; guild_id?: string };
+
+  await PlanLimitsEnforcer.check(req.user.orgId, "account");
+
+  const handle = ch.name ?? `channel_${ch.id}`;
+  const [account] = await db
+    .insert(socialAccounts)
+    .values({
+      organizationId: req.user.orgId,
+      platform: "discord",
+      accountHandle: handle,
+      accountId: ch.id,
+      accessToken: encryptToken(botToken.trim()),
+      platformConfig: { channelId: ch.id, channelName: ch.name, botUsername: me.username },
+      isActive: true,
+    })
+    .onConflictDoUpdate({
+      target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [typeof socialAccounts.organizationId, typeof socialAccounts.platform, typeof socialAccounts.accountHandle],
+      set: { accessToken: encryptToken(botToken.trim()), updatedAt: new Date() },
+    })
+    .returning();
+
+  await backfillPlanPosts(req.user.orgId, account!.id, "discord");
+  return res.json({ id: account!.id, platform: "discord", accountHandle: handle, isActive: true });
+});
+
+// POST /accounts/slack — connect via bot OAuth token + channel ID
+router.post("/slack", auth, async (req, res) => {
+  const { botToken, channelId } = req.body as { botToken?: string; channelId?: string };
+  if (!botToken?.trim() || !channelId?.trim()) {
+    return res.status(400).json({ error: "Bot token and channel ID are required" });
+  }
+
+  const authRes = await fetch("https://slack.com/api/auth.test", {
+    headers: { Authorization: `Bearer ${botToken.trim()}` },
+  });
+  const authData = (await authRes.json()) as { ok: boolean; user?: string; team?: string; error?: string };
+  if (!authData.ok) return res.status(400).json({ error: `Invalid Slack token: ${authData.error}` });
+
+  await PlanLimitsEnforcer.check(req.user.orgId, "account");
+
+  const handle = `${authData.team ?? "workspace"}#${channelId.trim()}`;
+  const [account] = await db
+    .insert(socialAccounts)
+    .values({
+      organizationId: req.user.orgId,
+      platform: "slack",
+      accountHandle: handle,
+      accountId: channelId.trim(),
+      accessToken: encryptToken(botToken.trim()),
+      platformConfig: { channelId: channelId.trim(), workspace: authData.team, botUser: authData.user },
+      isActive: true,
+    })
+    .onConflictDoUpdate({
+      target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [typeof socialAccounts.organizationId, typeof socialAccounts.platform, typeof socialAccounts.accountHandle],
+      set: { accessToken: encryptToken(botToken.trim()), updatedAt: new Date() },
+    })
+    .returning();
+
+  await backfillPlanPosts(req.user.orgId, account!.id, "slack");
+  return res.json({ id: account!.id, platform: "slack", accountHandle: handle, isActive: true });
+});
+
+// POST /accounts/whatsapp — connect via WhatsApp Business Cloud API token + phone number ID
+router.post("/whatsapp", auth, async (req, res) => {
+  const { accessToken, phoneNumberId, displayName } = req.body as { accessToken?: string; phoneNumberId?: string; displayName?: string };
+  if (!accessToken?.trim() || !phoneNumberId?.trim()) {
+    return res.status(400).json({ error: "Access token and phone number ID are required" });
+  }
+
+  // Validate by fetching the phone number info
+  const validRes = await fetch(
+    `https://graph.facebook.com/v19.0/${phoneNumberId.trim()}?fields=display_phone_number,verified_name&access_token=${accessToken.trim()}`,
+  );
+  if (!validRes.ok) return res.status(400).json({ error: "Invalid access token or phone number ID" });
+  const info = (await validRes.json()) as { display_phone_number?: string; verified_name?: string; error?: { message: string } };
+  if (info.error) return res.status(400).json({ error: info.error.message });
+
+  await PlanLimitsEnforcer.check(req.user.orgId, "account");
+
+  const handle = displayName?.trim() || info.verified_name || info.display_phone_number || phoneNumberId.trim();
+  const [account] = await db
+    .insert(socialAccounts)
+    .values({
+      organizationId: req.user.orgId,
+      platform: "whatsapp",
+      accountHandle: handle,
+      accountId: phoneNumberId.trim(),
+      accessToken: encryptToken(accessToken.trim()),
+      platformConfig: { phoneNumberId: phoneNumberId.trim(), displayPhoneNumber: info.display_phone_number },
+      isActive: true,
+    })
+    .onConflictDoUpdate({
+      target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [typeof socialAccounts.organizationId, typeof socialAccounts.platform, typeof socialAccounts.accountHandle],
+      set: { accessToken: encryptToken(accessToken.trim()), updatedAt: new Date() },
+    })
+    .returning();
+
+  await backfillPlanPosts(req.user.orgId, account!.id, "whatsapp");
+  return res.json({ id: account!.id, platform: "whatsapp", accountHandle: handle, isActive: true });
+});
+
+// POST /accounts/bluesky — connect via AT Protocol identifier + app password
+router.post("/bluesky", auth, async (req, res) => {
+  const { identifier, appPassword } = req.body as { identifier?: string; appPassword?: string };
+  if (!identifier?.trim() || !appPassword?.trim()) {
+    return res.status(400).json({ error: "Identifier and app password are required" });
+  }
+
+  // Create a session to validate credentials
+  const sessionRes = await fetch("https://bsky.social/xrpc/com.atproto.server.createSession", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier: identifier.trim(), password: appPassword.trim() }),
+  });
+  if (!sessionRes.ok) return res.status(400).json({ error: "Invalid Bluesky identifier or app password" });
+  const session = (await sessionRes.json()) as { did: string; handle: string; accessJwt: string; refreshJwt: string };
+
+  await PlanLimitsEnforcer.check(req.user.orgId, "account");
+
+  const [account] = await db
+    .insert(socialAccounts)
+    .values({
+      organizationId: req.user.orgId,
+      platform: "bluesky",
+      accountHandle: session.handle,
+      accountId: session.did,
+      accessToken: encryptToken(session.accessJwt),
+      refreshToken: session.refreshJwt ? encryptToken(session.refreshJwt) : null,
+      platformConfig: { did: session.did, handle: session.handle },
+      isActive: true,
+    })
+    .onConflictDoUpdate({
+      target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [typeof socialAccounts.organizationId, typeof socialAccounts.platform, typeof socialAccounts.accountHandle],
+      set: { accessToken: encryptToken(session.accessJwt), refreshToken: session.refreshJwt ? encryptToken(session.refreshJwt) : undefined, updatedAt: new Date() },
+    })
+    .returning();
+
+  await backfillPlanPosts(req.user.orgId, account!.id, "bluesky");
+  return res.json({ id: account!.id, platform: "bluesky", accountHandle: session.handle, isActive: true });
+});
+
+// POST /accounts/mastodon — connect via instance URL + access token
+router.post("/mastodon", auth, async (req, res) => {
+  const { instanceUrl, accessToken } = req.body as { instanceUrl?: string; accessToken?: string };
+  if (!instanceUrl?.trim() || !accessToken?.trim()) {
+    return res.status(400).json({ error: "Instance URL and access token are required" });
+  }
+
+  const instance = instanceUrl.trim().replace(/\/$/, "").replace(/^https?:\/\//, "");
+
+  // Validate by fetching the authenticated account
+  const verifyRes = await fetch(`https://${instance}/api/v1/accounts/verify_credentials`, {
+    headers: { Authorization: `Bearer ${accessToken.trim()}` },
+  });
+  if (!verifyRes.ok) return res.status(400).json({ error: "Invalid Mastodon token or instance URL" });
+  const acct = (await verifyRes.json()) as { id: string; username: string; acct: string };
+
+  await PlanLimitsEnforcer.check(req.user.orgId, "account");
+
+  const handle = `@${acct.acct}`;
+  const [account] = await db
+    .insert(socialAccounts)
+    .values({
+      organizationId: req.user.orgId,
+      platform: "mastodon",
+      accountHandle: handle,
+      accountId: acct.id,
+      accessToken: encryptToken(accessToken.trim()),
+      platformConfig: { instance, accountId: acct.id, username: acct.username },
+      isActive: true,
+    })
+    .onConflictDoUpdate({
+      target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [typeof socialAccounts.organizationId, typeof socialAccounts.platform, typeof socialAccounts.accountHandle],
+      set: { accessToken: encryptToken(accessToken.trim()), updatedAt: new Date() },
+    })
+    .returning();
+
+  await backfillPlanPosts(req.user.orgId, account!.id, "mastodon");
+  return res.json({ id: account!.id, platform: "mastodon", accountHandle: handle, isActive: true });
 });
 
 // GET /accounts

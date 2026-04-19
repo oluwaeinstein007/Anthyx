@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import { GoogleGenerativeAI, SchemaType, type ResponseSchema } from "@google/generative-ai";
 import type { FunctionDeclaration, Tool } from "@google/generative-ai";
 import { PlanItemArraySchema } from "@anthyx/config";
 import type { GeneratedPlanItem } from "@anthyx/types";
@@ -6,6 +6,7 @@ import { buildSystemPromptWithGuardrails } from "./guardrails";
 import { retrieveBrandContextTool } from "../../mcp/tools/retrieve-brand-context";
 import { webSearchTrendsTool } from "../../mcp/tools/web-search-trends";
 import { readEngagementAnalyticsTool } from "../../mcp/tools/read-engagement-analytics";
+import { competitorAnalysisTool } from "../../mcp/tools/competitor-analysis";
 
 const genAI = new GoogleGenerativeAI(process.env["GEMINI_API_KEY"] ?? "");
 const MODEL = process.env["GEMINI_STRATEGIST_MODEL"] ?? "gemini-1.5-pro";
@@ -66,9 +67,42 @@ const TOOL_DECLARATIONS: FunctionDeclaration[] = [
       required: ["brandProfileId"],
     },
   },
+  {
+    name: competitorAnalysisTool.name,
+    description: competitorAnalysisTool.description,
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        industry: { type: SchemaType.STRING },
+        competitors: { type: SchemaType.ARRAY, items: { type: SchemaType.STRING } },
+        platforms: { type: SchemaType.ARRAY, items: { type: SchemaType.STRING } },
+        lookbackDays: { type: SchemaType.NUMBER },
+      },
+      required: ["industry", "competitors", "platforms"],
+    },
+  },
 ];
 
 const TOOLS: Tool[] = [{ functionDeclarations: TOOL_DECLARATIONS }];
+
+// Structured output schema for the final plan item array — eliminates the retry loop
+const PLAN_ITEM_RESPONSE_SCHEMA: ResponseSchema = {
+  type: SchemaType.ARRAY,
+  items: {
+    type: SchemaType.OBJECT,
+    properties: {
+      date: { type: SchemaType.STRING },
+      platform: { type: SchemaType.STRING },
+      contentType: { type: SchemaType.STRING },
+      topic: { type: SchemaType.STRING },
+      hook: { type: SchemaType.STRING },
+      cta: { type: SchemaType.STRING },
+      suggestVisual: { type: SchemaType.BOOLEAN },
+      notes: { type: SchemaType.STRING },
+    },
+    required: ["date", "platform", "contentType", "topic", "hook", "cta", "suggestVisual"],
+  },
+};
 
 async function executeToolCall(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
@@ -78,6 +112,8 @@ async function executeToolCall(name: string, args: Record<string, unknown>): Pro
       return webSearchTrendsTool.handler(args as Parameters<typeof webSearchTrendsTool.handler>[0]);
     case readEngagementAnalyticsTool.name:
       return readEngagementAnalyticsTool.handler(args as Parameters<typeof readEngagementAnalyticsTool.handler>[0]);
+    case competitorAnalysisTool.name:
+      return competitorAnalysisTool.handler(args as Parameters<typeof competitorAnalysisTool.handler>[0]);
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -93,6 +129,8 @@ export interface StrategistRunInput {
   startDate: string;
   durationDays: number;
   feedbackLoopEnabled?: boolean;
+  targetLocale?: string; // e.g. "es-MX", "fr-FR", "pt-BR" — content generated in that language
+  competitors?: string[]; // brand names/handles to run competitor analysis against
 }
 
 export async function runStrategistAgent(input: StrategistRunInput): Promise<GeneratedPlanItem[]> {
@@ -106,23 +144,34 @@ export async function runStrategistAgent(input: StrategistRunInput): Promise<Gen
   const platformCount = input.platforms.length;
   const targetItemCount = input.durationDays * Math.min(platformCount, 2);
 
-  const model = genAI.getGenerativeModel({ model: MODEL, systemInstruction, tools: TOOLS });
+  const model = genAI.getGenerativeModel({
+    model: MODEL,
+    systemInstruction,
+    tools: TOOLS,
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: PLAN_ITEM_RESPONSE_SCHEMA,
+    },
+  });
   const chat = model.startChat({ history: [] });
 
   const platformList = input.platforms.join(", ");
+  const localeInstruction = input.targetLocale
+    ? `\nLanguage / Locale: Generate ALL post content (topic, hook, cta, notes) in the locale "${input.targetLocale}". Do not fall back to English unless the locale is "en-*".`
+    : "";
   const userMessage = `
 Generate a ${input.durationDays}-day marketing calendar for:
 Brand: ${input.brandName}
 Industry: ${input.industry}
 Goals: ${input.goals.join(", ")}
-Target platforms: ${platformList}
+Target platforms: ${platformList}${localeInstruction}
 NOTE: These platforms may not have social accounts linked yet — generate posts for ALL of them anyway. Account linking happens independently after plan creation.
 Start date: ${input.startDate}
 
 First, retrieve brand context for "${input.brandName}" with brandProfileId "${input.brandProfileId}".
 Then search for current trends in ${input.industry}.
 ${input.feedbackLoopEnabled ? `Also read engagement analytics for brandProfileId "${input.brandProfileId}" to adjust content weighting.` : ""}
-
+${input.competitors?.length ? `Run competitor_analysis for competitors [${input.competitors.join(", ")}] in ${input.industry} on [${input.platforms.join(", ")}] — use the differentiation opportunities to make content stand out.` : ""}
 Return a JSON array of exactly ${targetItemCount} plan items covering the full ${input.durationDays} days.
 IMPORTANT: Distribute posts evenly across ALL ${platformCount} platforms (${platformList}). Each platform must appear roughly equally. Do not concentrate posts on a single platform.
 `.trim();
@@ -145,30 +194,13 @@ IMPORTANT: Distribute posts evenly across ALL ${platformCount} platforms (${plat
     response = await chat.sendMessage(toolResults);
   }
 
-  let text = response.response.text();
-
-  const { extractJsonArray } = await import("./llm-client");
-  const JSON_RETRY_PROMPT = `Output ONLY the raw JSON array of ${targetItemCount} plan items. No markdown fences, no explanation. Start with [ and end with ].`;
-
-  let parsed: unknown = null;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      const candidate = extractJsonArray(text);
-      if (Array.isArray(candidate) && candidate.length > 0) {
-        parsed = candidate;
-        break;
-      }
-    } catch {
-      // not valid JSON yet
-    }
-    if (attempt < 3) {
-      response = await chat.sendMessage(JSON_RETRY_PROMPT);
-      text = response.response.text();
-    }
-  }
+  // With responseMimeType: "application/json" + responseSchema, Gemini guarantees
+  // valid structured JSON — no retry loop needed.
+  const text = response.response.text();
+  const parsed: unknown = JSON.parse(text);
 
   if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error("Strategist returned no valid JSON array after retries");
+    throw new Error("Strategist returned an empty plan array");
   }
 
   return PlanItemArraySchema.parse(parsed);

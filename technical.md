@@ -424,6 +424,14 @@ export const platformEnum = pgEnum("platform", [
   "facebook",
   "telegram",
   "tiktok",
+  "discord",
+  "whatsapp",
+  "slack",
+  "reddit",
+  "threads",
+  "bluesky",
+  "mastodon",
+  "youtube",
 ]);
 
 export const postStatusEnum = pgEnum("post_status", [
@@ -434,6 +442,7 @@ export const postStatusEnum = pgEnum("post_status", [
   "published",
   "failed",
   "vetoed",
+  "silenced",
 ]);
 
 export const planStatusEnum = pgEnum("plan_status", [
@@ -2278,27 +2287,52 @@ if (guardrails.activeBlackouts.length > 0) {
 | `PUT`  | `/billing/overage-cap`  | Update monthly overage spending cap                  |
 | `POST` | `/billing/webhook`      | Stripe webhook receiver (internal — not user-facing) |
 
+### New routes added (improvement cycle)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/agents/:id/logs` | Per-agent action log stream |
+| `GET/POST/PATCH/DELETE` | `/campaigns` | Campaign CRUD |
+| `GET` | `/campaigns/:id/analytics` | Campaign rollup analytics with per-platform breakdown |
+| `POST` | `/repurpose/blog` | URL → platform-specific social posts |
+| `GET/POST/PATCH/DELETE` | `/team` | Workflow participant management |
+| `POST` | `/team/invite` | Issue signed 7-day invite token |
+| `POST` | `/team/accept` | Accept invite, create user + participant row |
+| `GET/POST/PATCH/DELETE` | `/webhooks` | Webhook endpoint CRUD with HMAC secrets |
+| `GET` | `/reports/plan/:planId` | CSV plan performance export (Agency+) |
+| `GET` | `/reports/brand/:brandId` | CSV brand performance export (Agency+) |
+| `POST` | `/posts/:id/ab-test` | Generate A/B content variant pair |
+| `POST` | `/posts/:id/ab-test/promote` | Promote A/B winner based on engagement |
+| `GET` | `/posts/review` | HITL queue (filter: brandProfileId, platform, contentType) |
+| `POST` | `/posts/batch-approve` | Bulk approve filtered selection |
+
 ---
 
 ## 14. Frontend Dashboard
 
 ### Pages
 
-| Route                           | Component         | Description                                       |
-| ------------------------------- | ----------------- | ------------------------------------------------- |
-| `/dashboard`                    | `Overview`        | Stats, upcoming posts, recent activity            |
-| `/dashboard/brands`             | `BrandList`       | All brand profiles                                |
-| `/dashboard/brands/[id]`        | `BrandDetail`     | Brand details, ingested files, extracted identity |
-| `/dashboard/brands/[id]/ingest` | `Ingest`          | Upload PDFs / enter URL                           |
-| `/dashboard/agents`             | `AgentList`       | All agents                                        |
-| `/dashboard/agents/[id]`        | `AgentDetail`     | Edit persona, diet instructions, linked accounts  |
-| `/dashboard/accounts`           | `AccountList`     | Connected social accounts with OAuth status       |
-| `/dashboard/plans`              | `PlanList`        | All marketing plans                               |
-| `/dashboard/plans/[id]`         | `PlanCalendar`    | 30-day calendar view of scheduled posts           |
-| `/dashboard/review`             | `HITLQueue`       | Posts awaiting human approval                     |
-| `/dashboard/analytics`          | `Analytics`       | Engagement charts by platform / agent / campaign  |
-| `/dashboard/billing`            | `BillingOverview` | Current plan, usage meters, upgrade CTA           |
-| `/dashboard/billing/upgrade`    | `UpgradeFlow`     | Plan comparison table + Stripe checkout           |
+| Route | Description |
+|---|---|
+| `/dashboard` | Stats, upcoming posts, recent activity |
+| `/dashboard/brands` | All brand profiles |
+| `/dashboard/brands/[id]` | Brand details, ingested files, extracted identity |
+| `/dashboard/brands/[id]/ingest` | Upload PDFs / enter URL |
+| `/dashboard/agents` | All agents |
+| `/dashboard/agents/[id]` | Edit persona, diet instructions, linked accounts + log viewer |
+| `/dashboard/accounts` | Connected social accounts with OAuth status |
+| `/dashboard/plans` | All marketing plans |
+| `/dashboard/plans/[id]` | 30-day calendar view of scheduled posts |
+| `/dashboard/campaigns` | Campaign list with goals and budget cap |
+| `/dashboard/campaigns/[id]` | Campaign rollup analytics by platform |
+| `/dashboard/review` | HITL queue with filter by brand/platform/content type + bulk actions + A/B test |
+| `/dashboard/repurpose` | Blog URL → platform-specific social posts |
+| `/dashboard/reports` | CSV export for plan and brand performance (Agency+) |
+| `/dashboard/team` | Invite and manage workflow participants |
+| `/dashboard/webhooks` | Webhook endpoint CRUD |
+| `/dashboard/analytics` | Engagement charts by platform / agent |
+| `/dashboard/billing` | Current plan, usage meters, upgrade CTA |
+| `/dashboard/settings` | Org settings and guardrails |
 
 ### HITL Review Component
 

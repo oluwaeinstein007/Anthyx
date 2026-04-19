@@ -16,9 +16,39 @@ export interface CopywriterRunInput {
   hook: string;
   cta: string;
   scheduledAt: string;
+  targetLocale?: string; // e.g. "es-MX" — write the post in this language/locale
+  engagementInsights?: string; // analytics-derived tone/style guidance for deeper feedback loop
+  threadMode?: boolean; // if true, output a segments[] array for thread/carousel support
 }
 
 function buildCopywriterBasePrompt(ctx: CopywriterRunInput): string {
+  const localeSection = ctx.targetLocale
+    ? `\n## Language\nWrite the post in the locale "${ctx.targetLocale}". All content, hashtags, and CTAs must be in that language.\n`
+    : "";
+
+  const insightsSection = ctx.engagementInsights
+    ? `\n## Performance Insights (adjust your tone accordingly)\n${ctx.engagementInsights}\n`
+    : "";
+
+  const threadSection = ctx.threadMode
+    ? `\n## Thread / Carousel Mode\nThis post should be formatted as a thread (X) or carousel (Instagram). Break the content into 3–7 distinct segments. Each segment is a self-contained slide or tweet. The first segment must hook; the last must CTA. Output a "segments" array alongside "content" (which contains the full combined text for fallback).\n`
+    : "";
+
+  const outputSchema = ctx.threadMode
+    ? `{
+  "content": "full combined post text (fallback)",
+  "segments": ["segment 1 text", "segment 2 text", "..."],
+  "hashtags": ["tag1", "tag2"],
+  "suggestedMediaPrompt": "image prompt if visual needed, otherwise null",
+  "reasoning": "1-2 sentence explanation of creative choices"
+}`
+    : `{
+  "content": "final post text",
+  "hashtags": ["tag1", "tag2"],
+  "suggestedMediaPrompt": "image prompt if visual needed, otherwise null",
+  "reasoning": "1-2 sentence explanation of creative choices"
+}`;
+
   return `
 You are ${ctx.personaName}, a social media copywriter for ${ctx.brandName}.
 
@@ -30,7 +60,7 @@ ${ctx.dietInstructions || "No specific persona instructions."}
 
 ## Platform: ${ctx.platform.toUpperCase()}
 ${getPlatformConstraints(ctx.platform)}
-
+${localeSection}${insightsSection}${threadSection}
 ## Assignment
 Write a single post for the following plan item:
 - Topic: ${ctx.topic}
@@ -40,12 +70,7 @@ Write a single post for the following plan item:
 - Scheduled date: ${ctx.scheduledAt}
 
 ## Output (return ONLY valid JSON, no prose)
-{
-  "content": "final post text",
-  "hashtags": ["tag1", "tag2"],
-  "suggestedMediaPrompt": "image prompt if visual needed, otherwise null",
-  "reasoning": "1-2 sentence explanation of creative choices"
-}
+${outputSchema}
 `.trim();
 }
 

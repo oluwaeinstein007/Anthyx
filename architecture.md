@@ -52,54 +52,68 @@ anthyx/
 │   │       │   └── validate.ts     ← Zod body validation
 │   │       ├── routes/
 │   │       │   ├── auth.ts         ← /v1/auth (login, register, refresh)
-│   │       │   ├── brands.ts       ← /v1/brands + /ingest (dispatches to ingestor queue)
-│   │       │   ├── agents.ts       ← /v1/agents (CRUD)
+│   │       │   ├── brands.ts       ← /v1/brands + /ingest
+│   │       │   ├── agents.ts       ← /v1/agents (CRUD + /logs)
 │   │       │   ├── plans.ts        ← /v1/plans (create, approve, generate)
-│   │       │   ├── posts.ts        ← /v1/posts (HITL approve/veto)
+│   │       │   ├── posts.ts        ← /v1/posts (HITL, bulk, A/B test, filter)
 │   │       │   ├── accounts.ts     ← /v1/accounts (OAuth connect/disconnect)
-│   │       │   ├── billing.ts      ← /v1/billing (Stripe + Paystack subscriptions)
+│   │       │   ├── billing.ts      ← /v1/billing (Stripe + Paystack)
 │   │       │   ├── analytics.ts    ← /v1/analytics
-│   │       │   └── guardrails.ts   ← /v1/guardrails (prohibitions, blackouts)
+│   │       │   ├── campaigns.ts    ← /v1/campaigns (CRUD + rollup analytics)
+│   │       │   ├── guardrails.ts   ← /v1/guardrails (prohibitions, blackouts)
+│   │       │   ├── reports.ts      ← /v1/reports (CSV plan + brand export, Agency+)
+│   │       │   ├── repurpose.ts    ← /v1/repurpose/blog (URL → social posts)
+│   │       │   ├── team.ts         ← /v1/team (invite, accept, PATCH, DELETE)
+│   │       │   └── webhooks.ts     ← /v1/webhooks (endpoint CRUD + HMAC secrets)
 │   │       ├── services/
-│   │       │   ├── agent/          ← Strategist/Copywriter/Reviewer (Anthropic — legacy)
+│   │       │   ├── agent/
+│   │       │   │   ├── ab-tester.ts      ← A/B variant generation + winner promotion
+│   │       │   │   ├── auto-reply.ts     ← Comment/DM auto-reply agent (fourth agent)
+│   │       │   │   ├── copywriter.ts     ← Claude Sonnet, structured output
+│   │       │   │   ├── orchestrator.ts   ← Parallel content gen (p-limit 5) + drift detection
+│   │       │   │   ├── reviewer.ts       ← Claude Haiku, adversarial, 2 retries
+│   │       │   │   └── strategist.ts     ← Gemini structured output, competitor analysis
 │   │       │   ├── analytics/      ← scorer.ts (engagement rate calculator)
 │   │       │   ├── assets/         ← BannerBear template + DALL-E AI generation + CDN
 │   │       │   ├── billing/
+│   │       │   │   ├── limits.ts   ← PlanLimitError + requireLimit()
 │   │       │   │   ├── stripe.ts   ← Stripe subscriptions + webhooks
-│   │       │   │   ├── paystack.ts ← Paystack subscriptions + webhooks
-│   │       │   │   ├── limits.ts   ← PlanLimitsEnforcer (credit/seat enforcement)
-│   │       │   │   ├── overage.ts  ← Nightly overage invoice calculator
-│   │       │   │   └── usage-tracker.ts
-│   │       │   ├── brand-ingestion/← Parser + Extractor (Anthropic) + Embedder (kept for legacy)
+│   │       │   │   └── usage-tracker.ts ← incrementPost() + 80%/100% quota alerts
+│   │       │   ├── brand-ingestion/← Parser + Extractor + Embedder (incremental re-ingest)
 │   │       │   ├── oauth-proxy/    ← AES-256-GCM token encryption + platform refreshers
-│   │       │   └── posting/
-│   │       │       ├── social-mcp.ts ← Unified publisher (all platforms)
-│   │       │       └── executor.ts  ← Post execution orchestrator
+│   │       │   ├── posting/
+│   │       │   │   ├── executor.ts     ← publishToplatform() → formatter → social-mcp
+│   │       │   │   ├── formatter.ts    ← formatPostForPlatform() for all 14 platforms
+│   │       │   │   └── social-mcp.ts   ← publishPost() + fetchEngagementData() all platforms
+│   │       │   └── repurpose/      ← blog-repurposer.ts (URL fetch → social posts)
 │   │       ├── queue/
 │   │       │   ├── client.ts       ← BullMQ queue definitions (6 queues)
 │   │       │   └── jobs.ts         ← Helper: schedulePostJob, queuePlanGeneration, etc.
-│   │       ├── workers/            ← In-process BullMQ workers (still active until services/agent stable)
-│   │       │   ├── plan.worker.ts
-│   │       │   ├── content.worker.ts
-│   │       │   ├── post.worker.ts
-│   │       │   ├── analytics.worker.ts
-│   │       │   └── overage.worker.ts (nightly cron via node-cron)
+│   │       ├── workers/
+│   │       │   ├── plan.worker.ts          ← Strategist → seed draft posts
+│   │       │   ├── content.worker.ts       ← Copywriter + reviewer per post
+│   │       │   ├── post.worker.ts          ← Execute scheduled posts via executor
+│   │       │   ├── analytics.worker.ts     ← Poll published posts for engagement data
+│   │       │   └── notification.worker.ts  ← Webhooks + usage quota alerts
 │   │       └── mcp/
-│   │           └── server.ts       ← SSEServerTransport (legacy, kept while services/mcp stabilizes)
+│   │           ├── server.ts               ← MCP SSE route registration
+│   │           └── tools/                  ← 9 tools: brand context, trends, competitor, analytics, image
 │   │
-│   └── dashboard/                  ← Next.js 14 dashboard (original, kept in sync with frontend/)
-│       └── src/app/
-│           ├── (auth)/             ← login, register
-│           └── (dashboard)/dashboard/
-│               ├── brands/         ← brand profiles + ingest upload
-│               ├── agents/         ← persona management
-│               ├── plans/          ← marketing calendar
-│               ├── accounts/       ← social account OAuth
-│               ├── billing/        ← usage meters + plan upgrade + overage cap
-│               └── analytics/      ← engagement charts + voice performance
-│
-├── frontend/                       ← Standalone Next.js (copy of dashboard, deployable alone)
-│   └── (same structure as apps/dashboard)
+│   └── dashboard/  (frontend/)             ← Next.js 14 App Router
+│       └── src/app/(dashboard)/dashboard/
+│           ├── accounts/   ← social account OAuth
+│           ├── agents/     ← persona management + agent log viewer
+│           ├── analytics/  ← engagement charts + voice performance
+│           ├── billing/    ← usage meters + plan upgrade
+│           ├── brands/     ← brand profiles + ingest upload
+│           ├── campaigns/  ← campaign CRUD + rollup analytics
+│           ├── plans/      ← marketing calendar
+│           ├── repurpose/  ← blog URL → social posts
+│           ├── reports/    ← CSV export (Agency+ only)
+│           ├── review/     ← HITL queue with filter + bulk actions + A/B test
+│           ├── settings/   ← org settings + guardrails
+│           ├── team/       ← invite + RBAC management
+│           └── webhooks/   ← webhook endpoint CRUD
 │
 ├── services/
 │   ├── mcp/                        ← Standalone fastmcp SSE server

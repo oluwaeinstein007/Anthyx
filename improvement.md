@@ -1,5 +1,10 @@
 # Anthyx — Improvement & Feature Backlog
 
+> **Status as of April 2026: All items below are implemented.**
+> This document is preserved for historical context.
+
+---
+
 ## New Features
 
 ### Agent / AI

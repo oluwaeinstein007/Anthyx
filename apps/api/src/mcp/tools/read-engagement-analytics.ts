@@ -36,14 +36,14 @@ export const readEngagementAnalyticsTool = {
     return {
       hasData: true,
       topPerformers: sorted.slice(0, 3).map((s) => ({
-        voiceTrait: s.voiceTrait,
+        contentType: s.contentType,
         platform: s.platform,
         avgEngagementRate: (s.avgEngagementRate * 100).toFixed(2) + "%",
         postCount: s.postCount,
         trend: s.trend,
       })),
       lowPerformers: sorted.slice(-3).map((s) => ({
-        voiceTrait: s.voiceTrait,
+        contentType: s.contentType,
         platform: s.platform,
         avgEngagementRate: (s.avgEngagementRate * 100).toFixed(2) + "%",
         postCount: s.postCount,

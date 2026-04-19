@@ -10,6 +10,7 @@ import { generateAssetForPost } from "../services/assets/generator";
 import { getActiveGuardrails } from "../services/agent/guardrails";
 import { logAgentAction } from "../services/agent/logger";
 import { incrementPost } from "../services/billing/usage-tracker";
+import { notificationQueue } from "../queue/client";
 import type { Platform } from "@anthyx/types";
 import { productConfig } from "@anthyx/config";
 
@@ -118,6 +119,19 @@ const worker = new Worker<PostJobData>(
 
     // Queue analytics fetch 30 min later
     await queueAnalyticsFetch(postId);
+
+    // Notify configured webhooks of the publish event
+    await notificationQueue.add("post-published", {
+      organizationId: post.organizationId,
+      type: "post_published",
+      payload: {
+        postId,
+        platformPostId: result.postId,
+        platform: post.platform,
+        scheduledAt: post.scheduledAt,
+        publishedAt: new Date().toISOString(),
+      },
+    });
   },
   {
     connection: redisConnection,

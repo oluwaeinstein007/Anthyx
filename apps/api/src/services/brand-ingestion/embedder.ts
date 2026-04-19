@@ -95,6 +95,108 @@ export async function embed(text: string, retries = 3): Promise<number[]> {
   throw lastError;
 }
 
+/**
+ * Hash a string to a stable 8-char hex fingerprint for change detection.
+ * Used by the incremental re-ingest to skip unchanged chunks.
+ */
+function fingerprint(text: string): string {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h) ^ text.charCodeAt(i);
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Incremental re-ingest: only re-embeds chunks that changed and tombstones removed ones.
+ * Compares incoming chunks to what is already stored in Qdrant for this source.
+ * Falls back to a full ingest if no existing points are found.
+ */
+export async function incrementalIngestBrandDocument(
+  text: string,
+  brandProfileId: string,
+  organizationId: string,
+  sourceName: string,
+  extraction: BrandExtraction,
+): Promise<{ added: number; unchanged: number; removed: number }> {
+  await ensureQdrantCollection(brandProfileId);
+  const collectionName = `brand_${brandProfileId}`;
+
+  // 1. Fetch existing points for this source from Qdrant
+  const { points: existing } = await qdrant.scroll(collectionName, {
+    filter: {
+      must: [
+        { key: "brandProfileId", match: { value: brandProfileId } },
+        { key: "source", match: { value: sourceName } },
+      ],
+    },
+    limit: 2000,
+    with_payload: true,
+    with_vector: false,
+  });
+
+  // Build fingerprint → pointId map for existing chunks
+  const existingMap = new Map<string, string>();
+  for (const p of existing) {
+    const fp = p.payload?.["fingerprint"] as string | undefined;
+    if (fp) existingMap.set(fp, String(p.id));
+  }
+
+  const incomingChunks = chunkText(text);
+  const incomingFps = new Set<string>();
+
+  let added = 0;
+  const chunksToEmbed: string[] = [];
+
+  for (const chunk of incomingChunks) {
+    const fp = fingerprint(chunk);
+    incomingFps.add(fp);
+    if (!existingMap.has(fp)) {
+      chunksToEmbed.push(chunk);
+    }
+  }
+
+  // 2. Embed and store new/changed chunks with fingerprint in payload
+  if (chunksToEmbed.length > 0) {
+    const BATCH_SIZE = 100;
+    const embeddingModel = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
+    for (let i = 0; i < chunksToEmbed.length; i += BATCH_SIZE) {
+      const batch = chunksToEmbed.slice(i, i + BATCH_SIZE);
+      const { embeddings } = await embeddingModel.batchEmbedContents({
+        requests: batch.map((t) => ({ content: { role: "user", parts: [{ text: t }] } })),
+      });
+      const points = embeddings.map((e, idx) => ({
+        id: crypto.randomUUID(),
+        vector: e.values,
+        payload: {
+          text: batch[idx],
+          fingerprint: fingerprint(batch[idx]!),
+          type: "brand_statement" as const,
+          source: sourceName,
+          organizationId,
+          brandProfileId,
+        },
+      }));
+      await qdrant.upsert(collectionName, { points });
+      added += points.length;
+    }
+  }
+
+  // 3. Tombstone (delete) points whose fingerprint is no longer in the incoming set
+  const toDelete = [...existingMap.entries()]
+    .filter(([fp]) => !incomingFps.has(fp))
+    .map(([, id]) => id);
+
+  let removed = 0;
+  if (toDelete.length > 0) {
+    await qdrant.delete(collectionName, { points: toDelete });
+    removed = toDelete.length;
+  }
+
+  // 4. Full re-embed voice/tone/audience structured fields (small, always fresh)
+  await ingestBrandDocument(text, brandProfileId, organizationId, `${sourceName}:structured`, extraction);
+
+  return { added, unchanged: incomingChunks.length - chunksToEmbed.length, removed };
+}
+
 export async function ingestBrandDocument(
   text: string,
   brandProfileId: string,

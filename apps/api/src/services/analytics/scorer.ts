@@ -1,26 +1,29 @@
-import { and, eq, gte, inArray } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 import { db } from "../../db/client";
 import { scheduledPosts, postAnalytics } from "../../db/schema";
 import type { Platform } from "@anthyx/types";
 import { productConfig } from "@anthyx/config";
 
-export interface VoicePerformanceScore {
-  voiceTrait: string;
+export interface ContentTypePerformanceScore {
+  contentType: string;
   platform: Platform;
   avgEngagementRate: number;
   postCount: number;
   trend: "rising" | "flat" | "declining";
 }
 
+/** @deprecated Use ContentTypePerformanceScore — voiceTrait was misnamed (it grouped by contentType) */
+export type VoicePerformanceScore = ContentTypePerformanceScore;
+
 export async function computeVoicePerformance(
   brandProfileId: string,
   lookbackDays = 30,
-): Promise<VoicePerformanceScore[]> {
+): Promise<ContentTypePerformanceScore[]> {
   const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
 
   const rows = await db
     .select({
-      voiceTrait: scheduledPosts.contentType,
+      contentType: scheduledPosts.contentType,
       platform: scheduledPosts.platform,
       engagementRate: postAnalytics.engagementRate,
       publishedAt: scheduledPosts.publishedAt,
@@ -35,23 +38,23 @@ export async function computeVoicePerformance(
       ),
     );
 
-  // Group by voiceTrait:platform
+  // Group by contentType:platform
   const groups = new Map<string, { rates: number[]; dates: Date[] }>();
 
   for (const row of rows) {
-    const key = `${row.voiceTrait ?? "unknown"}:${row.platform}`;
+    const key = `${row.contentType ?? "unknown"}:${row.platform}`;
     if (!groups.has(key)) groups.set(key, { rates: [], dates: [] });
     const group = groups.get(key)!;
     group.rates.push(parseFloat(row.engagementRate ?? "0"));
     if (row.publishedAt) group.dates.push(row.publishedAt);
   }
 
-  const scores: VoicePerformanceScore[] = [];
-  for (const [key, { rates, dates }] of groups.entries()) {
-    const [voiceTrait, platform] = key.split(":") as [string, Platform];
+  const scores: ContentTypePerformanceScore[] = [];
+  for (const [key, { rates }] of groups.entries()) {
+    const [contentType, platform] = key.split(":") as [string, Platform];
     const avg = rates.reduce((a, b) => a + b, 0) / rates.length;
     scores.push({
-      voiceTrait,
+      contentType,
       platform,
       avgEngagementRate: avg,
       postCount: rates.length,
@@ -64,7 +67,6 @@ export async function computeVoicePerformance(
 
 function computeTrend(rates: number[]): "rising" | "flat" | "declining" {
   if (rates.length < 3) return "flat";
-  // Simple linear regression slope
   const n = rates.length;
   const x = Array.from({ length: n }, (_, i) => i);
   const sumX = x.reduce((a, b) => a + b, 0);
@@ -78,7 +80,7 @@ function computeTrend(rates: number[]): "rising" | "flat" | "declining" {
   return "flat";
 }
 
-export function classifyVoices(scores: VoicePerformanceScore[]): {
+export function classifyVoices(scores: ContentTypePerformanceScore[]): {
   promote: string[];
   demote: string[];
   cut: string[];
@@ -91,18 +93,18 @@ export function classifyVoices(scores: VoicePerformanceScore[]): {
   return {
     promote: scores
       .filter((s) => s.avgEngagementRate >= avgOverall * outperformMultiplier)
-      .map((s) => `${s.voiceTrait} on ${s.platform}`),
+      .map((s) => `${s.contentType} on ${s.platform}`),
     demote: scores
       .filter(
         (s) =>
           s.avgEngagementRate < avgOverall &&
           s.avgEngagementRate >= underperformThreshold,
       )
-      .map((s) => `${s.voiceTrait} on ${s.platform}`),
+      .map((s) => `${s.contentType} on ${s.platform}`),
     cut: scores
       .filter(
         (s) => s.avgEngagementRate < underperformThreshold && s.postCount >= 5,
       )
-      .map((s) => `${s.voiceTrait} on ${s.platform}`),
+      .map((s) => `${s.contentType} on ${s.platform}`),
   };
 }

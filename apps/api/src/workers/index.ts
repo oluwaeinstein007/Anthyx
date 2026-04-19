@@ -7,6 +7,7 @@ import { contentWorker } from "./content.worker";
 import { planWorker } from "./plan.worker";
 import { analyticsWorker } from "./analytics.worker";
 import { ingestorWorker } from "./ingestor.worker";
+import { notificationWorker } from "./notification.worker";
 import "./overage.worker";
 
 console.log("[Workers] Starting all BullMQ workers...");
@@ -16,6 +17,7 @@ console.log("[Workers] Plan generation worker: active");
 console.log("[Workers] Analytics worker: active");
 console.log("[Workers] Overage cron worker: active");
 console.log("[Workers] Ingestor worker: active");
+console.log("[Workers] Notification worker: active");
 
 // Graceful shutdown
 process.on("SIGTERM", async () => {
@@ -26,6 +28,7 @@ process.on("SIGTERM", async () => {
     planWorker.close(),
     analyticsWorker.close(),
     ingestorWorker.close(),
+    notificationWorker.close(),
   ]);
   process.exit(0);
 });

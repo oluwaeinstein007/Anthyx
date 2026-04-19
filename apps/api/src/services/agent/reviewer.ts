@@ -29,10 +29,14 @@ export interface ReviewerRunInput {
   platform: Platform;
   brandRules: string;
   dietInstructions: string;
+  strictMode?: boolean; // tighten thresholds when analytics show clear underperformers
 }
 
 export async function runReviewerAgent(input: ReviewerRunInput): Promise<ReviewerOutput> {
   const platformConstraints = getPlatformConstraints(input.platform);
+  const strictNote = input.strictMode
+    ? "\n\nSTRICT MODE (analytics-driven): Historical engagement data shows clear underperformers for this brand. Apply a tighter bar — flag content that feels generic, off-trend, or unlikely to outperform past results. Prefer 'rewrite' over 'pass' for borderline cases."
+    : "";
 
   const instagramHashtagNote =
     input.platform === "instagram"
@@ -54,7 +58,7 @@ BRAND RULES:
 ${input.brandRules}
 
 AGENT DIET INSTRUCTIONS:
-${input.dietInstructions || "None"}
+${input.dietInstructions || "None"}${strictNote}
 
 Return ONLY valid JSON:
 {

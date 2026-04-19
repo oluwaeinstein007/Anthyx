@@ -1,4 +1,18 @@
-export type Platform = "x" | "instagram" | "linkedin" | "facebook" | "telegram" | "tiktok";
+export type Platform =
+  | "x"
+  | "instagram"
+  | "linkedin"
+  | "facebook"
+  | "telegram"
+  | "tiktok"
+  | "discord"
+  | "whatsapp"
+  | "slack"
+  | "reddit"
+  | "threads"
+  | "bluesky"
+  | "mastodon"
+  | "youtube";
 
 export const PLATFORMS: Platform[] = [
   "x",
@@ -7,6 +21,14 @@ export const PLATFORMS: Platform[] = [
   "facebook",
   "telegram",
   "tiktok",
+  "discord",
+  "whatsapp",
+  "slack",
+  "reddit",
+  "threads",
+  "bluesky",
+  "mastodon",
+  "youtube",
 ];
 
 export interface PlatformConstraints {
@@ -48,6 +70,46 @@ export const PLATFORM_CONSTRAINTS: Record<Platform, PlatformConstraints> = {
     maxCharacters: 2200,
     maxHashtags: 5,
     notes: 'Hook in first 3 words — this is the caption shown before "more". Trend-aware. 3–5 hashtags.',
+  },
+  discord: {
+    maxCharacters: 2000,
+    maxHashtags: 0,
+    notes: "Full Markdown supported (bold, italic, code blocks, headers). No hashtags. Community-first tone.",
+  },
+  whatsapp: {
+    maxCharacters: 4096,
+    maxHashtags: 0,
+    notes: "Bold via *text*, italic via _text_. No hashtags. Links auto-preview. Conversational register.",
+  },
+  slack: {
+    maxCharacters: null,
+    maxHashtags: 0,
+    notes: "Slack mrkdwn: *bold*, _italic_, `code`, <url|text>. No hashtags. B2B / internal comms tone.",
+  },
+  reddit: {
+    maxCharacters: null,
+    maxHashtags: 0,
+    notes: "Title (first line, 300 char max) + Markdown body. No inline hashtags. Community-specific tone.",
+  },
+  threads: {
+    maxCharacters: 500,
+    maxHashtags: 30,
+    notes: "Same caption rules as Instagram — hashtags in first comment. Visual-first framing. 500 char caption limit.",
+  },
+  bluesky: {
+    maxCharacters: 300,
+    maxHashtags: 5,
+    notes: "300 char hard limit including hashtags. Hashtags as plain text (encoded as facets by publisher). No markdown.",
+  },
+  mastodon: {
+    maxCharacters: 500,
+    maxHashtags: 10,
+    notes: "500 char limit. Hashtags inline. Markdown partially supported. Decentralised, brand-safe tone.",
+  },
+  youtube: {
+    maxCharacters: null,
+    maxHashtags: 15,
+    notes: "Description: first 100 chars are the visible preview snippet. Chapters as 00:00 Section name. Hashtags in body.",
   },
 };
 

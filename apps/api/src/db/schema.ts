@@ -20,6 +20,14 @@ export const platformEnum = pgEnum("platform", [
   "facebook",
   "telegram",
   "tiktok",
+  "discord",
+  "whatsapp",
+  "slack",
+  "reddit",
+  "threads",
+  "bluesky",
+  "mastodon",
+  "youtube",
 ]);
 
 export const postStatusEnum = pgEnum("post_status", [
@@ -52,6 +60,17 @@ export const planTierEnum = pgEnum("plan_tier", [
 ]);
 
 export const billingIntervalEnum = pgEnum("billing_interval", ["monthly", "annual"]);
+
+export const workflowStageEnum = pgEnum("workflow_stage", [
+  "plan_review",
+  "hitl",
+  "legal_review",
+  "analytics_only",
+]);
+
+export const actorTypeEnum = pgEnum("actor_type", ["agent", "human"]);
+
+export const entityTypeEnum = pgEnum("entity_type", ["post", "plan", "brand", "agent"]);
 
 // ── Organizations ──────────────────────────────────────────────────────────────
 
@@ -154,6 +173,20 @@ export const socialAccounts = pgTable(
 
 // ── Marketing Plans ────────────────────────────────────────────────────────────
 
+// ── Campaigns ─────────────────────────────────────────────────────────────────
+
+export const campaigns = pgTable("campaigns", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .references(() => organizations.id)
+    .notNull(),
+  name: text("name").notNull(),
+  goals: text("goals").array(),
+  budgetCapCents: integer("budget_cap_cents"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 export const marketingPlans = pgTable("marketing_plans", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id")
@@ -163,6 +196,7 @@ export const marketingPlans = pgTable("marketing_plans", {
     .references(() => brandProfiles.id)
     .notNull(),
   agentId: uuid("agent_id").references(() => agents.id),
+  campaignId: uuid("campaign_id").references(() => campaigns.id),
   name: text("name").notNull(),
   status: planStatusEnum("status").default("generating"),
   startDate: timestamp("start_date").notNull(),
@@ -209,6 +243,7 @@ export const scheduledPosts = pgTable("scheduled_posts", {
   reviewNotes: text("review_notes"),
   assetTrack: text("asset_track").default("template"), // 'template' | 'ai'
   suggestedMediaPrompt: text("suggested_media_prompt"),
+  segments: jsonb("segments"), // string[] for threads / carousels (multi-part content)
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -266,6 +301,7 @@ export const planTiers = pgTable("plan_tiers", {
   guardrails: boolean("guardrails").default(false),
   agentSilence: boolean("agent_silence").default(false),
   rbac: boolean("rbac").default(false),
+  maxTeamMembers: integer("max_team_members").default(1),
   overagePricePerPost: integer("overage_price_per_post").default(4),
   overagePricePerAccount: integer("overage_price_per_account").default(800),
   overagePricePerBrand: integer("overage_price_per_brand").default(2500),
@@ -319,6 +355,80 @@ export const usageRecords = pgTable("usage_records", {
   brandsOverage: integer("brands_overage").default(0),
   overageCostCents: integer("overage_cost_cents").default(0),
   overageInvoiced: boolean("overage_invoiced").default(false),
+  teamMembersActive: integer("team_members_active").default(0),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ── A/B Test Variants ──────────────────────────────────────────────────────────
+
+export const abTestStatusEnum = pgEnum("ab_test_status", [
+  "running",
+  "completed",
+  "winner_promoted",
+]);
+
+export const abTests = pgTable("ab_tests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .references(() => organizations.id)
+    .notNull(),
+  postAId: uuid("post_a_id").references(() => scheduledPosts.id).notNull(),
+  postBId: uuid("post_b_id").references(() => scheduledPosts.id).notNull(),
+  winnerId: uuid("winner_id").references(() => scheduledPosts.id),
+  status: abTestStatusEnum("status").default("running"),
+  promotedAt: timestamp("promoted_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ── Webhook Endpoints ──────────────────────────────────────────────────────────
+
+export const webhookEndpoints = pgTable("webhook_endpoints", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .references(() => organizations.id)
+    .notNull(),
+  url: text("url").notNull(),
+  events: text("events").array().default(sql`'{}'`), // ['post_published', 'post_failed', 'plan_ready']
+  channels: text("channels").array().default(sql`'{}'`), // ['slack', 'discord', 'email', 'webhook']
+  secret: text("secret"), // HMAC signing secret for verification
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ── Workflow Participants (RBAC) ───────────────────────────────────────────────
+
+export const workflowParticipants = pgTable("workflow_participants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .references(() => organizations.id)
+    .notNull(),
+  userId: uuid("user_id")
+    .references(() => users.id)
+    .notNull(),
+  brandProfileId: uuid("brand_profile_id").references(() => brandProfiles.id), // null = org-wide
+  agentId: uuid("agent_id").references(() => agents.id), // null = all agents on brand
+  stage: workflowStageEnum("stage").notNull(),
+  canEdit: boolean("can_edit").default(false),
+  canVeto: boolean("can_veto").default(false),
+  notifyOn: text("notify_on").array().default(sql`'{}'`),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Activity Events (Unified Audit Log) ───────────────────────────────────────
+
+export const activityEvents = pgTable("activity_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .references(() => organizations.id)
+    .notNull(),
+  actorType: actorTypeEnum("actor_type").notNull(),
+  actorId: uuid("actor_id").notNull(), // agentId or userId depending on actorType
+  entityType: entityTypeEnum("entity_type").notNull(),
+  entityId: uuid("entity_id").notNull(),
+  event: text("event").notNull(), // 'caption_edited' | 'reviewer_fail' | 'post_approved' | 'plan_vetoed'
+  diff: jsonb("diff"), // { field, oldValue, newValue } for edits
+  createdAt: timestamp("created_at").defaultNow(),
 });

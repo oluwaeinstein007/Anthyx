@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, type SQL } from "drizzle-orm";
 import { db } from "../db/client";
 import { scheduledPosts, postAnalytics } from "../db/schema";
 import { auth } from "../middleware/auth";
@@ -13,17 +13,34 @@ import {
   BatchApproveSchema,
 } from "@anthyx/config";
 import { schedulePostJob } from "../queue/jobs";
+import { generateAbVariants, evaluateAndPromoteWinner } from "../services/agent/ab-tester";
 
 const router = Router();
 
-// GET /posts/review — posts pending human review
+// GET /posts/review — posts pending human review, with filter support
+// Query params: brandProfileId, platform, contentType, limit, offset
 router.get("/review", auth, async (req, res) => {
+  const { brandProfileId, platform, contentType, limit: limitStr, offset: offsetStr } = req.query as Record<string, string | undefined>;
+
+  const filters: SQL[] = [
+    eq(scheduledPosts.organizationId, req.user.orgId),
+    eq(scheduledPosts.status, "pending_review"),
+  ];
+
+  if (brandProfileId) filters.push(eq(scheduledPosts.brandProfileId, brandProfileId));
+  if (platform) filters.push(eq(scheduledPosts.platform, platform as never));
+  if (contentType) filters.push(eq(scheduledPosts.contentType, contentType));
+
+  const limit = Math.min(parseInt(limitStr ?? "50"), 200);
+  const offset = parseInt(offsetStr ?? "0");
+
   const posts = await db.query.scheduledPosts.findMany({
-    where: and(
-      eq(scheduledPosts.organizationId, req.user.orgId),
-      eq(scheduledPosts.status, "pending_review"),
-    ),
+    where: and(...filters),
+    orderBy: (p, { asc }) => [asc(p.scheduledAt)],
+    limit,
+    offset,
   });
+
   return res.json(posts);
 });
 
@@ -135,6 +152,37 @@ router.post("/approve-batch", auth, requireLimit("post"), validate(BatchApproveS
   return res.json({ approved: posts.length, jobIds });
 });
 
+// POST /posts/veto-batch
+router.post("/veto-batch", auth, async (req, res) => {
+  const { postIds, reason } = req.body as { postIds: string[]; reason?: string };
+  if (!Array.isArray(postIds) || postIds.length === 0) {
+    return res.status(400).json({ error: "postIds must be a non-empty array" });
+  }
+
+  const posts = await db.query.scheduledPosts.findMany({
+    where: and(
+      inArray(scheduledPosts.id, postIds),
+      eq(scheduledPosts.organizationId, req.user.orgId),
+      eq(scheduledPosts.status, "pending_review"),
+    ),
+  });
+
+  for (const post of posts) {
+    await db
+      .update(scheduledPosts)
+      .set({
+        status: "vetoed",
+        reviewedBy: req.user.id,
+        reviewedAt: new Date(),
+        reviewNotes: reason ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(scheduledPosts.id, post.id));
+  }
+
+  return res.json({ vetoed: posts.length });
+});
+
 // POST /posts/:id/veto
 router.post("/:id/veto", auth, validate(VetoPostSchema), async (req, res) => {
   await db
@@ -191,6 +239,18 @@ router.get("/:id/analytics", auth, async (req, res) => {
   });
 
   return res.json(analytics);
+});
+
+// POST /posts/:id/ab-test — generate a second content variant for A/B testing
+router.post("/:id/ab-test", auth, async (req, res) => {
+  const result = await generateAbVariants(req.params.id!, req.user.orgId);
+  return res.status(201).json(result);
+});
+
+// POST /posts/ab-tests/:abTestId/promote — evaluate and promote A/B test winner
+router.post("/ab-tests/:abTestId/promote", auth, async (req, res) => {
+  const result = await evaluateAndPromoteWinner(req.params.abTestId!);
+  return res.json(result);
 });
 
 export { router as postsRouter };

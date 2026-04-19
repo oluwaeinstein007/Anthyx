@@ -52,3 +52,13 @@ export const ingestorQueue = new Queue("anthyx-ingestor", {
     removeOnFail: { age: 604800 },
   },
 });
+
+export const notificationQueue = new Queue("anthyx-notifications", {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: "exponential", delay: 5000 },
+    removeOnComplete: { age: 86400 },
+    removeOnFail: { age: 604800 },
+  },
+});

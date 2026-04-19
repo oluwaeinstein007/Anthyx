@@ -1,6 +1,7 @@
 import type { Platform } from "@anthyx/types";
 import { buildProxiedAgent, getRandomUserAgent } from "./proxy-router";
 import { publishPost } from "./social-mcp";
+import { formatPostForPlatform } from "./formatter";
 
 export interface PublishParams {
   platform: Platform;
@@ -15,20 +16,26 @@ export interface PublishParams {
 export interface PublishResult {
   postId: string;
   url?: string;
+  truncated?: boolean;
 }
 
 export async function publishToplatform(params: PublishParams): Promise<PublishResult> {
   const proxyAgent = buildProxiedAgent(params.organizationId);
   const userAgent = getRandomUserAgent();
 
-  return publishPost({
+  // Format content and hashtags for the target platform before publishing
+  const formatted = formatPostForPlatform(params.platform, params.content, params.hashtags);
+
+  const result = await publishPost({
     platform: params.platform,
     accessToken: params.accessToken,
-    content: params.content,
-    hashtags: params.hashtags,
+    content: formatted.primaryText,
+    hashtags: formatted.firstComment ? [] : (formatted.hashtags ?? params.hashtags),
     mediaUrls: params.mediaUrls,
     accountId: params.accountId,
     proxyAgent: proxyAgent ?? undefined,
     userAgent,
   });
+
+  return { ...result, truncated: formatted.truncated };
 }

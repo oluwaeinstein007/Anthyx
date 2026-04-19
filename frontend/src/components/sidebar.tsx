@@ -5,19 +5,25 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard, Building2, Bot, Link2, Calendar,
   ClipboardCheck, BarChart3, CreditCard, LogOut, Zap, Settings,
+  Megaphone, Users, Rss, Webhook, FileDown,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
 const NAV = [
-  { label: "Overview",     href: "/dashboard",          icon: LayoutDashboard },
-  { label: "Brands",       href: "/dashboard/brands",   icon: Building2 },
-  { label: "Agents",       href: "/dashboard/agents",   icon: Bot },
-  { label: "Accounts",     href: "/dashboard/accounts", icon: Link2 },
-  { label: "Plans",        href: "/dashboard/plans",    icon: Calendar },
-  { label: "Review Queue", href: "/dashboard/review",   icon: ClipboardCheck },
-  { label: "Analytics",    href: "/dashboard/analytics",icon: BarChart3 },
-  { label: "Billing",      href: "/dashboard/billing",  icon: CreditCard },
-  { label: "Settings",     href: "/dashboard/settings", icon: Settings },
+  { label: "Overview",     href: "/dashboard",             icon: LayoutDashboard },
+  { label: "Brands",       href: "/dashboard/brands",      icon: Building2 },
+  { label: "Agents",       href: "/dashboard/agents",      icon: Bot },
+  { label: "Accounts",     href: "/dashboard/accounts",    icon: Link2 },
+  { label: "Plans",        href: "/dashboard/plans",       icon: Calendar },
+  { label: "Campaigns",    href: "/dashboard/campaigns",   icon: Megaphone },
+  { label: "Review Queue", href: "/dashboard/review",      icon: ClipboardCheck },
+  { label: "Analytics",    href: "/dashboard/analytics",   icon: BarChart3 },
+  { label: "Repurpose",    href: "/dashboard/repurpose",   icon: Rss },
+  { label: "Team",         href: "/dashboard/team",        icon: Users },
+  { label: "Webhooks",     href: "/dashboard/webhooks",    icon: Webhook },
+  { label: "Reports",      href: "/dashboard/reports",     icon: FileDown },
+  { label: "Billing",      href: "/dashboard/billing",     icon: CreditCard },
+  { label: "Settings",     href: "/dashboard/settings",    icon: Settings },
 ];
 
 export function Sidebar() {

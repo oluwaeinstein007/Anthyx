@@ -10,6 +10,11 @@ import { postsRouter } from "./routes/posts";
 import { billingRouter } from "./routes/billing";
 import { guardrailsRouter } from "./routes/guardrails";
 import { analyticsRouter } from "./routes/analytics";
+import { repurposeRouter } from "./routes/repurpose";
+import { campaignsRouter } from "./routes/campaigns";
+import { teamRouter } from "./routes/team";
+import { webhooksRouter } from "./routes/webhooks";
+import { reportsRouter } from "./routes/reports";
 import { PlanLimitError } from "./services/billing/limits";
 import { registerMcpRoutes } from "./mcp/server";
 
@@ -45,6 +50,11 @@ app.use("/v1/posts", postsRouter);
 app.use("/v1/billing", billingRouter);
 app.use("/v1/guardrails", guardrailsRouter);
 app.use("/v1/analytics", analyticsRouter);
+app.use("/v1/repurpose", repurposeRouter);
+app.use("/v1/campaigns", campaignsRouter);
+app.use("/v1/team", teamRouter);
+app.use("/v1/webhooks", webhooksRouter);
+app.use("/v1/reports", reportsRouter);
 
 // ── MCP SSE routes ────────────────────────────────────────────────────────────
 registerMcpRoutes(app);
