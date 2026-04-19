@@ -24,7 +24,7 @@ Rules:
 - CRITICAL: contentType MUST be exactly one of those 5 values. Never use goal names (e.g. "collaboration", "branding", "awareness") as contentType — goals inform topics and strategy, not contentType.
 - Prioritize content types that historically performed well (use read_engagement_analytics)
 - Never generate more than 2 promotional posts per 7-day window
-- Distribute platforms based on the brand's active accounts
+- Distribute posts evenly across ALL provided platforms regardless of account link status
 - Output must be a valid JSON array matching the GeneratedPlanItem schema
 - Each item: { date, platform, contentType, topic, hook, cta, suggestVisual (boolean true/false), notes? }
 - IMPORTANT: suggestVisual must be a JSON boolean (true or false), NOT a string
@@ -120,7 +120,8 @@ export async function runStrategistAgent(input: StrategistRunInput): Promise<Gen
 Brand: ${input.brandName}
 Industry: ${input.industry}
 Goals: ${input.goals.join(", ")}
-Active platforms: ${platformList}
+Target platforms: ${platformList}
+NOTE: These platforms may not have social accounts linked yet — generate posts for ALL of them anyway. Account linking happens independently after plan creation.
 Start date: ${input.startDate}
 
 First, retrieve brand context for "${input.brandName}" with brandProfileId "${input.brandProfileId}".

@@ -42,12 +42,11 @@ const worker = new Worker<PlanJobData>(
 
     for (const item of planItems as GeneratedPlanItem[]) {
       const accountIndex = platforms.indexOf(item.platform);
-      const socialAccountId = socialAccountIds[accountIndex] ?? socialAccountIds[0];
-      if (!socialAccountId) continue;
+      const socialAccountId = socialAccountIds[accountIndex] ?? null;
 
       await db.insert(scheduledPosts).values({
         planId,
-        socialAccountId,
+        socialAccountId: socialAccountId ?? undefined,
         agentId,
         organizationId,
         brandProfileId,

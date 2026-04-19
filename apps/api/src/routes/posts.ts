@@ -89,9 +89,13 @@ router.post("/:id/approve", auth, requireLimit("post"), validate(ApprovePostSche
     })
     .where(eq(scheduledPosts.id, post.id));
 
-  // Schedule the BullMQ job
-  const jobId = await schedulePostJob(post.id, post.scheduledAt);
+  // Only schedule BullMQ job if a social account is linked; otherwise the post
+  // stays in "approved" state until the user connects an account and reschedules.
+  if (!post.socialAccountId) {
+    return res.json({ approved: true, jobId: null, warning: `No ${post.platform} account linked — post approved but not scheduled. Connect an account to schedule it.` });
+  }
 
+  const jobId = await schedulePostJob(post.id, post.scheduledAt);
   return res.json({ approved: true, jobId });
 });
 
@@ -121,8 +125,11 @@ router.post("/approve-batch", auth, requireLimit("post"), validate(BatchApproveS
       })
       .where(eq(scheduledPosts.id, post.id));
 
-    const jobId = await schedulePostJob(post.id, post.scheduledAt);
-    jobIds.push(jobId);
+    // Skip scheduling if no account linked — post stays "approved" until account is connected.
+    if (post.socialAccountId) {
+      const jobId = await schedulePostJob(post.id, post.scheduledAt);
+      jobIds.push(jobId);
+    }
   }
 
   return res.json({ approved: posts.length, jobIds });

@@ -5,7 +5,7 @@ import { marketingPlans, scheduledPosts, brandProfiles, agents, socialAccounts }
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { GeneratePlanSchema } from "@anthyx/config";
-import { queuePlanGeneration } from "../queue/jobs";
+import { queuePlanGeneration, queueContentGeneration } from "../queue/jobs";
 
 const router = Router();
 

@@ -21,6 +21,40 @@ After each review cycle, compute semantic distance between the generated post an
 
 ---
 
+### Platform Expansion via social-mcp
+
+Anthyx currently posts to X, Instagram, LinkedIn, Facebook, Telegram, and TikTok. The `social-mcp` package (v1.7.0) adds the following platforms and richer tool sets — all available via `npm i social-mcp`:
+
+| Platform | Available Tools | Priority |
+|---|---|---|
+| **Discord** | Send message, get messages | High — community-first brands |
+| **WhatsApp** | Send message | High — high-reach for emerging markets |
+| **Slack** | Send message, get messages, list channels | Medium — B2B / internal comms |
+| **Reddit** | Submit post, get posts, comment, vote, search, get user info | Medium — niche community marketing |
+| **Threads** | Get profile, create post, reply, get posts, delete post | High — Instagram-adjacent, fast growing |
+| **Bluesky** | Get profile, create post, reply, get posts, delete post, like post, search posts | Medium — tech/creator audience |
+| **Mastodon** | Get profile, create post, reply, search posts, boost post, favourite post, delete post | Low — niche but brand-safe |
+| **YouTube** | Get channel info, search videos, get video info, list channel videos, get comments, post comment, update video | High — video repurposing and comment engagement |
+
+**What needs to change:**
+- Add new values to the `platformEnum` in [apps/api/src/db/schema.ts](apps/api/src/db/schema.ts) for each new platform.
+- Extend `social-mcp.ts` in the posting service to route to social-mcp tool calls for each new platform.
+- Extend the strategist's platform distribution logic to include the new platforms when active accounts exist.
+- Upgrade the existing X, Instagram, and LinkedIn integrations to use richer social-mcp tools (reply to tweet, like post, add comment) to support the comment/DM auto-reply agent feature.
+
+**Existing platform upgrades available from social-mcp:**
+
+| Platform | New Tools Unlocked |
+|---|---|
+| X / Twitter | Reply to tweet, like tweet, delete tweet, search tweets |
+| Instagram | Get posts (enables analytics sync) |
+| LinkedIn | Get profile, like post, add comment, search people |
+| Facebook | Get posts (enables analytics sync) |
+| Telegram | Forward message, pin message, get channel admins, edit/delete message |
+| TikTok | Query creator info, get user info, get post status, photo post |
+
+---
+
 ### Content Formats
 
 **Thread and carousel support**
