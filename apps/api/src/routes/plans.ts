@@ -213,6 +213,29 @@ router.post("/:id/retry", auth, async (req, res) => {
   return res.json({ retrying: true });
 });
 
+// POST /plans/:id/retry-failed — reset failed posts to draft and re-run content generation
+router.post("/:id/retry-failed", auth, async (req, res) => {
+  const plan = await db.query.marketingPlans.findFirst({
+    where: and(
+      eq(marketingPlans.id, req.params.id!),
+      eq(marketingPlans.organizationId, req.user.orgId),
+    ),
+  });
+  if (!plan) return res.status(404).json({ error: "Not found" });
+  if (!["active", "pending_review"].includes(plan.status!)) {
+    return res.status(400).json({ error: "Plan must be active or pending review to retry failed posts" });
+  }
+
+  await db
+    .update(scheduledPosts)
+    .set({ status: "draft", errorMessage: null, updatedAt: new Date() })
+    .where(and(eq(scheduledPosts.planId, plan.id), inArray(scheduledPosts.status, ["failed"])));
+
+  await queueContentGeneration(plan.id, req.user.orgId);
+
+  return res.json({ retrying: true });
+});
+
 // POST /plans/:id/pause
 router.post("/:id/pause", auth, async (req, res) => {
   const plan = await db.query.marketingPlans.findFirst({

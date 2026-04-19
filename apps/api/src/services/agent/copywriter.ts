@@ -58,7 +58,7 @@ export async function runCopywriterAgent(input: CopywriterRunInput): Promise<Cop
     userMessage: "Write the post. Return only valid JSON.",
     geminiModel: process.env["GEMINI_COPYWRITER_MODEL"] ?? GEMINI_PRO,
     claudeModel: CLAUDE_SONNET,
-    maxTokens: 1024,
+    maxTokens: 2048,
   });
 
   return CopywriterOutputSchema.parse(extractJsonObject(text));

@@ -24,6 +24,7 @@ Rules:
 - Output must be a valid JSON array matching the GeneratedPlanItem schema
 - Each item: { date, platform, contentType, topic, hook, cta, suggestVisual (boolean true/false), notes? }
 - IMPORTANT: suggestVisual must be a JSON boolean (true or false), NOT a string
+- IMPORTANT: date must be a full ISO 8601 datetime string (e.g. "2026-04-20T09:00:00Z"). Use realistic posting times between 08:00 and 20:00 UTC. Vary times across posts — do not use the same time for every post
 `.trim();
 
 const TOOL_DECLARATIONS: FunctionDeclaration[] = [
@@ -138,12 +139,29 @@ Return a JSON array of exactly ${input.durationDays} plan items covering the ful
 
   let text = response.response.text();
 
+  const { extractJsonArray } = await import("./llm-client");
   const JSON_RETRY_PROMPT = `Output ONLY the raw JSON array of ${input.durationDays} plan items. No markdown fences, no explanation. Start with [ and end with ].`;
-  for (let attempt = 0; attempt < 3 && !text.match(/\[[\s\S]*\]/); attempt++) {
-    response = await chat.sendMessage(JSON_RETRY_PROMPT);
-    text = response.response.text();
+
+  let parsed: unknown = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const candidate = extractJsonArray(text);
+      if (Array.isArray(candidate) && candidate.length > 0) {
+        parsed = candidate;
+        break;
+      }
+    } catch {
+      // not valid JSON yet
+    }
+    if (attempt < 3) {
+      response = await chat.sendMessage(JSON_RETRY_PROMPT);
+      text = response.response.text();
+    }
   }
 
-  const { extractJsonArray } = await import("./llm-client");
-  return PlanItemArraySchema.parse(extractJsonArray(text));
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error("Strategist returned no valid JSON array after retries");
+  }
+
+  return PlanItemArraySchema.parse(parsed);
 }

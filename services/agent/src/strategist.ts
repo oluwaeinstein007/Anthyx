@@ -27,7 +27,8 @@ Rules:
 - Distribute platforms based on the brand's active accounts
 - Output must be a valid JSON array matching the GeneratedPlanItem schema
 - Each item: { date, platform, contentType, topic, hook, cta, suggestVisual (boolean true/false), notes? }
-- IMPORTANT: suggestVisual must be a JSON boolean (true or false), NOT a string`.trim();
+- IMPORTANT: suggestVisual must be a JSON boolean (true or false), NOT a string
+- IMPORTANT: date must be a full ISO 8601 datetime string (e.g. "2026-04-20T09:00:00Z"). Use realistic posting times between 08:00 and 20:00 UTC. Vary times across posts — do not use the same time for every post`.trim();
 
 const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   {
@@ -146,12 +147,29 @@ Return a JSON array of 30 plan items covering the full 30 days.`;
   let text = response.response.text();
 
   const JSON_RETRY_PROMPT = "Output ONLY the raw JSON array of 30 plan items. No markdown fences, no explanation. Start with [ and end with ].";
-  for (let attempt = 0; attempt < 3 && !text.match(/\[[\s\S]*\]/); attempt++) {
-    response = await chat.sendMessage(JSON_RETRY_PROMPT);
-    text = response.response.text();
+
+  let parsed: unknown = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const match = text.match(/\[[\s\S]*\]/);
+    if (match) {
+      try {
+        const candidate = JSON.parse(match[0]);
+        if (Array.isArray(candidate) && candidate.length > 0) {
+          parsed = candidate;
+          break;
+        }
+      } catch {
+        // not valid JSON yet
+      }
+    }
+    if (attempt < 3) {
+      response = await chat.sendMessage(JSON_RETRY_PROMPT);
+      text = response.response.text();
+    }
   }
 
-  const match = text.match(/\[[\s\S]*\]/);
-  if (!match) throw new Error("No JSON array found in Strategist response after retries");
-  return PlanItemArraySchema.parse(JSON.parse(match[0]));
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error("No valid JSON array found in Strategist response after retries");
+  }
+  return PlanItemArraySchema.parse(parsed);
 }

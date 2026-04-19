@@ -15,6 +15,7 @@ interface ScheduledPost {
   contentText: string | null;
   contentHashtags: string[] | null;
   mediaUrls: string[] | null;
+  errorMessage: string | null;
 }
 
 interface MarketingPlan {
@@ -108,6 +109,11 @@ export default function PlanDetailPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", id] }),
   });
 
+  const retryFailed = useMutation({
+    mutationFn: () => api.post(`/plans/${id}/retry-failed`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", id] }),
+  });
+
   const updatePlan = useMutation({
     mutationFn: (body: { name?: string; goals?: string[]; feedbackLoopEnabled?: boolean }) =>
       api.put(`/plans/${id}`, body),
@@ -155,7 +161,7 @@ export default function PlanDetailPage() {
 
   const publishedCount = plan.posts.filter((p) => p.status === "published").length;
   const approvedCount = plan.posts.filter((p) => ["approved", "scheduled"].includes(p.status)).length;
-  const pendingCount = plan.posts.filter((p) => ["draft", "pending_review"].includes(p.status)).length;
+  const pendingCount = plan.posts.filter((p) => p.status === "pending_review").length;
   const failedCount = plan.posts.filter((p) => p.status === "failed").length;
 
   return (
@@ -322,18 +328,16 @@ export default function PlanDetailPage() {
         </div>
         <div className="p-4 bg-white border border-gray-200 rounded-xl text-center">
           <p className="text-2xl font-bold text-blue-600">{approvedCount}</p>
-          <p className="text-xs text-gray-500 mt-0.5">Scheduled</p>
+          <p className="text-xs text-gray-500 mt-0.5">Approved</p>
         </div>
         <div className="p-4 bg-white border border-gray-200 rounded-xl text-center">
           <p className="text-2xl font-bold text-amber-600">{pendingCount}</p>
           <p className="text-xs text-gray-500 mt-0.5">Pending review</p>
         </div>
-        {failedCount > 0 && (
-          <div className="p-4 bg-white border border-red-100 rounded-xl text-center">
-            <p className="text-2xl font-bold text-red-500">{failedCount}</p>
-            <p className="text-xs text-gray-500 mt-0.5">Failed</p>
-          </div>
-        )}
+        <div className={`p-4 bg-white rounded-xl text-center ${failedCount > 0 ? "border border-red-100" : "border border-gray-200"}`}>
+          <p className={`text-2xl font-bold ${failedCount > 0 ? "text-red-500" : "text-gray-300"}`}>{failedCount}</p>
+          <p className="text-xs text-gray-500 mt-0.5">Failed</p>
+        </div>
       </div>
 
       {/* View toggle */}
@@ -351,14 +355,25 @@ export default function PlanDetailPage() {
             {v}
           </button>
         ))}
-        {pendingCount > 0 && plan.status === "active" && (
-          <Link
-            href="/dashboard/review"
-            className="ml-auto text-xs text-amber-600 hover:underline"
-          >
-            {pendingCount} post{pendingCount !== 1 ? "s" : ""} need review →
-          </Link>
-        )}
+        <div className="ml-auto flex items-center gap-3">
+          {pendingCount > 0 && plan.status === "active" && (
+            <Link
+              href="/dashboard/review"
+              className="text-xs text-amber-600 hover:underline"
+            >
+              {pendingCount} post{pendingCount !== 1 ? "s" : ""} need review →
+            </Link>
+          )}
+          {failedCount > 0 && ["active", "pending_review"].includes(plan.status) && (
+            <button
+              onClick={() => retryFailed.mutate()}
+              disabled={retryFailed.isPending}
+              className="text-xs text-red-500 hover:underline disabled:opacity-50"
+            >
+              {retryFailed.isPending ? "Retrying…" : `Retry ${failedCount} failed post${failedCount !== 1 ? "s" : ""} →`}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Calendar view */}
@@ -401,34 +416,43 @@ export default function PlanDetailPage() {
                       {dayPosts.map((post) => (
                         <div
                           key={post.id}
-                          className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs shadow-sm"
+                          className={`flex flex-col bg-white border rounded-lg px-2.5 py-1.5 text-xs shadow-sm ${
+                            post.status === "failed" ? "border-red-200" : "border-gray-200"
+                          }`}
                         >
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                              STATUS_DOT[post.status] ?? "bg-gray-300"
-                            }`}
-                          />
-                          <span className="capitalize font-medium text-gray-700">
-                            {post.platform}
-                          </span>
-                          <span className="text-gray-400">
-                            {new Date(post.scheduledAt).toLocaleTimeString("en-US", {
-                              hour: "numeric",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                          <span className="text-gray-300">·</span>
-                          <span
-                            className={`${
-                              post.status === "published"
-                                ? "text-green-600"
-                                : post.status === "draft"
-                                  ? "text-amber-600"
-                                  : "text-gray-500"
-                            }`}
-                          >
-                            {STATUS_LABEL[post.status] ?? post.status}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                STATUS_DOT[post.status] ?? "bg-gray-300"
+                              }`}
+                            />
+                            <span className="capitalize font-medium text-gray-700">
+                              {post.platform}
+                            </span>
+                            <span className="text-gray-400">
+                              {new Date(post.scheduledAt).toLocaleTimeString("en-US", {
+                                hour: "numeric",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                            <span className="text-gray-300">·</span>
+                            <span
+                              className={`${
+                                post.status === "published"
+                                  ? "text-green-600"
+                                  : post.status === "failed"
+                                    ? "text-red-500"
+                                    : "text-gray-500"
+                              }`}
+                            >
+                              {STATUS_LABEL[post.status] ?? post.status}
+                            </span>
+                          </div>
+                          {post.status === "failed" && post.errorMessage && (
+                            <p className="mt-0.5 text-red-400 leading-tight pl-3">
+                              {post.errorMessage}
+                            </p>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -486,8 +510,14 @@ export default function PlanDetailPage() {
                       </span>
                     </div>
                   </div>
-                  {post.contentText && (
-                    <p className="text-sm text-gray-700 line-clamp-2">{post.contentText}</p>
+                  {post.status === "failed" ? (
+                    post.errorMessage && (
+                      <p className="text-sm text-red-500">{post.errorMessage}</p>
+                    )
+                  ) : (
+                    post.contentText && (
+                      <p className="text-sm text-gray-700 line-clamp-2">{post.contentText}</p>
+                    )
                   )}
                   {post.contentHashtags && post.contentHashtags.length > 0 && (
                     <div className="flex flex-wrap gap-1">

@@ -154,10 +154,7 @@ export async function generateContentForPlan(planId: string, organizationId: str
       };
 
       if (!post.socialAccountId) {
-        await db
-          .update(scheduledPosts)
-          .set({ status: "failed", errorMessage: "No social account linked to this post", updatedAt: new Date() })
-          .where(eq(scheduledPosts.id, post.id));
+        // No account yet — leave as draft so it can be processed once an account is connected
         continue;
       }
 
