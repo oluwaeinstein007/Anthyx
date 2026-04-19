@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, and, inArray, or, isNull } from "drizzle-orm";
 import { db } from "../db/client";
-import { marketingPlans, scheduledPosts, brandProfiles, agents, socialAccounts } from "../db/schema";
+import { marketingPlans, scheduledPosts, brandProfiles, agents, socialAccounts, postAnalytics, agentLogs } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { GeneratePlanSchema } from "@anthyx/config";
@@ -303,6 +303,17 @@ router.delete("/:id", auth, async (req, res) => {
   });
   if (!plan) return res.status(404).json({ error: "Not found" });
 
+  // Collect post IDs so we can cascade-delete FK-dependent rows first
+  const posts = await db.query.scheduledPosts.findMany({
+    where: eq(scheduledPosts.planId, plan.id),
+    columns: { id: true },
+  });
+  const postIds = posts.map((p) => p.id);
+
+  if (postIds.length > 0) {
+    await db.delete(postAnalytics).where(inArray(postAnalytics.postId, postIds));
+    await db.delete(agentLogs).where(inArray(agentLogs.postId, postIds));
+  }
   await db.delete(scheduledPosts).where(eq(scheduledPosts.planId, plan.id));
   await db.delete(marketingPlans).where(eq(marketingPlans.id, plan.id));
 

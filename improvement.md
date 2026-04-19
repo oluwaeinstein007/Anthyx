@@ -78,6 +78,43 @@ Push post-publish events to Slack, Discord, or email. BullMQ already emits a job
 
 ---
 
+---
+
+### Team Members & Role-Based Access (RBAC)
+
+**Why it's needed:** Without this, every seat in an org is effectively an owner. For agency-tier customers managing multiple clients, this is a security and accountability problem — a junior social media manager should not be able to delete a brand or change billing.
+
+**Foundation already in place:**
+- `users.role` column already stores `owner | admin | member`
+- `planTiers.rbac` boolean already gates the feature (currently only unlocked on agency / scale / enterprise tiers)
+- `scheduledPosts.reviewedBy` and `agentLogs.agentId` already capture user IDs for audit trails
+
+**Proposed role permissions:**
+
+| Action | Owner | Admin | Member |
+|---|:---:|:---:|:---:|
+| Manage billing / subscription | ✓ | — | — |
+| Invite / remove team members | ✓ | ✓ | — |
+| Create / delete brands | ✓ | ✓ | — |
+| Create / configure agents | ✓ | ✓ | — |
+| Create / activate plans | ✓ | ✓ | — |
+| HITL approve / veto posts | ✓ | ✓ | ✓ |
+| Inline edit post content | ✓ | ✓ | ✓ |
+| View analytics | ✓ | ✓ | ✓ |
+| View agent logs | ✓ | ✓ | — |
+| Connect social accounts | ✓ | ✓ | — |
+
+**What needs to be built:**
+1. `POST /auth/invite` — generates a signed invite token, emails the invitee, creates a `users` row with `role: member` on accept.
+2. `GET/PATCH/DELETE /team` — list members, change roles, revoke access.
+3. Auth middleware needs to enforce role checks per route, not just org membership.
+4. Dashboard: a `/settings/team` page for invite management and role editing.
+
+**Primary use case — agency tier:**
+Account manager creates brand profiles and kicks off plans. Social media managers work the HITL review queue. Clients get a read-only analytics view. All under one org, each with scoped access.
+
+---
+
 ## Improvements to Existing Features
 
 ### Agent Pipeline
@@ -113,3 +150,16 @@ The strategist retries raw text extraction up to 4 times (`strategist.ts:145–1
 
 **Add filter and bulk-action to the HITL review queue**
 The review queue currently shows all `pending_review` posts flat. Agency-tier customers managing multiple brands and platforms need filter by brand, platform, and content type, plus bulk approve/veto on a filtered selection. Without this, the queue becomes unmanageable at volume.
+
+---
+
+### TikTok and Facebook are not implemented — social-mcp is not used at all
+
+`publishPost` in [apps/api/src/services/posting/social-mcp.ts](apps/api/src/services/posting/social-mcp.ts) only handles `x`, `instagram`, `linkedin`, and `telegram`. Both `tiktok` and `facebook` fall to the `default` throw (`"Platform X not yet supported"`), meaning any scheduled TikTok or Facebook post will fail at execution time despite being valid in the schema.
+
+More broadly, **no platform is using the `social-mcp` npm package**. The file contains fully hand-rolled `fetch` calls and has a TODO comment at the top explicitly saying to migrate. social-mcp v1.7.0 is now available and covers all six current platforms plus eight more.
+
+**What needs to be done:**
+1. Install `social-mcp` as a dependency in `apps/api`.
+2. Replace `social-mcp.ts` with a thin adapter that instantiates `SocialMCP` with the org's access token and proxied agent, then delegates all `publishPost` and `fetchEngagementData` calls to it.
+3. This immediately unblocks TikTok and Facebook, and makes adding the new platforms (Discord, WhatsApp, Slack, Reddit, Threads, Bluesky, Mastodon, YouTube) a matter of adding cases to the `platformEnum` and strategy routing — not writing new API clients.

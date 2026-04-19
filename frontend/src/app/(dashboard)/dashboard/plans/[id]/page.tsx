@@ -483,10 +483,10 @@ export default function PlanDetailPage() {
                         {canEdit && isEditableStatus && !isEditing && (
                           <button
                             onClick={() => startEdit(post)}
-                            className="p-1 text-gray-300 hover:text-gray-600 rounded transition-colors"
+                            className="flex items-center gap-1 px-2 py-0.5 text-xs text-gray-500 border border-gray-200 rounded-md hover:bg-gray-50 hover:text-gray-800 transition-colors"
                             title="Edit post"
                           >
-                            <Pencil className="w-3.5 h-3.5" />
+                            <Pencil className="w-3 h-3" /> Edit
                           </button>
                         )}
                       </div>
