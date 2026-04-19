@@ -82,36 +82,92 @@ Push post-publish events to Slack, Discord, or email. BullMQ already emits a job
 
 ### Team Members & Role-Based Access (RBAC)
 
-**Why it's needed:** Without this, every seat in an org is effectively an owner. For agency-tier customers managing multiple clients, this is a security and accountability problem — a junior social media manager should not be able to delete a brand or change billing.
+**The problem with a flat role system:**
+The `users.role` column is org-level and flat. Adding brand-scoped access, seat billing, handoff notifications, and audit trails as separate features produces four disconnected tables that all encode "who can do what" in different ways — guaranteed sync bugs and every new feature touches all of them.
 
-**Foundation already in place:**
-- `users.role` column already stores `owner | admin | member`
-- `planTiers.rbac` boolean already gates the feature (currently only unlocked on agency / scale / enterprise tiers)
-- `scheduledPosts.reviewedBy` and `agentLogs.agentId` already capture user IDs for audit trails
+**Better design: the workflow participant model**
 
-**Proposed role permissions:**
+The agent pipeline already has natural human intervention points:
 
-| Action | Owner | Admin | Member |
-|---|:---:|:---:|:---:|
-| Manage billing / subscription | ✓ | — | — |
-| Invite / remove team members | ✓ | ✓ | — |
-| Create / delete brands | ✓ | ✓ | — |
-| Create / configure agents | ✓ | ✓ | — |
-| Create / activate plans | ✓ | ✓ | — |
-| HITL approve / veto posts | ✓ | ✓ | ✓ |
-| Inline edit post content | ✓ | ✓ | ✓ |
-| View analytics | ✓ | ✓ | ✓ |
-| View agent logs | ✓ | ✓ | — |
-| Connect social accounts | ✓ | ✓ | — |
+```
+Plan generation → Content generation → Reviewer agent → HITL → Publisher
+```
 
-**What needs to be built:**
-1. `POST /auth/invite` — generates a signed invite token, emails the invitee, creates a `users` row with `role: member` on accept.
-2. `GET/PATCH/DELETE /team` — list members, change roles, revoke access.
-3. Auth middleware needs to enforce role checks per route, not just org membership.
-4. Dashboard: a `/settings/team` page for invite management and role editing.
+A team member is simply a human assigned to intervene at one or more of those stages, on one or more brands. One table replaces separate brand-membership, role, and handoff-assignment tables:
 
-**Primary use case — agency tier:**
-Account manager creates brand profiles and kicks off plans. Social media managers work the HITL review queue. Clients get a read-only analytics view. All under one org, each with scoped access.
+```
+workflow_participants
+─────────────────────────────────────────────────────────
+id               uuid PK
+organizationId   uuid FK → organizations
+userId           uuid FK → users
+brandProfileId   uuid FK → brandProfiles  (nullable = org-wide)
+agentId          uuid FK → agents         (nullable = all agents on brand)
+stage            enum: plan_review | hitl | legal_review | analytics_only
+canEdit          boolean
+canVeto          boolean
+notifyOn         text[]   -- e.g. ['high_risk', 'reviewer_fail', 'plan_ready']
+createdAt        timestamp
+```
+
+**Unified event log** — replaces `agentLogs` and fills the missing human audit trail:
+
+```
+activity_events
+─────────────────────────────────────────────────────────
+id               uuid PK
+organizationId   uuid FK → organizations
+actorType        enum: agent | human
+actorId          uuid  -- agentId or userId depending on actorType
+entityType       enum: post | plan | brand | agent
+entityId         uuid
+event            text  -- 'caption_edited' | 'reviewer_fail' | 'post_approved' | 'plan_vetoed'
+diff             jsonb -- { field, oldValue, newValue } for edits
+createdAt        timestamp
+```
+
+**What this unified model gives you for free:**
+
+- **RBAC** — middleware checks `workflow_participants` for the user's stage and brand. No separate role table needed.
+- **Brand scoping** — nullable `brandProfileId` means org-wide or per-brand in one column, not a separate join table.
+- **Agent-to-human handoff** — when the reviewer agent flags a high-risk post, query `workflow_participants` for users with `stage: legal_review` on that brand and `'high_risk'` in `notifyOn`. One notification worker handles all cases.
+- **Full audit trail** — agent actions and human edits both write to `activity_events`. "Reviewer agent failed on Post #455" and "User B edited the caption on Post #455" are in the same queryable log.
+- **Seat billing** — `SELECT COUNT(DISTINCT userId) FROM workflow_participants WHERE organizationId = ?`, enforced against `planTiers.maxTeamMembers` at invite time.
+
+**Seat limits by tier:**
+
+| Tier | Max Team Members |
+|---|---|
+| Sandbox / Starter | 1 (owner only) |
+| Growth | 3 |
+| Agency | 10 |
+| Scale / Enterprise | Unlimited |
+
+Add `maxTeamMembers integer` to `planTiers` and add `teamMembersActive integer` to `usageRecords`.
+
+**Agency client portal — one row:**
+```
+{ userId: clientId, brandProfileId: clientBrandId, stage: 'hitl',
+  canEdit: false, canVeto: true, notifyOn: ['plan_ready'] }
+```
+Client gets an email when the 30-day plan is ready, logs in, sees only their brand, can approve or veto posts, nothing else.
+
+**Legal / compliance reviewer — one row:**
+```
+{ userId: legalId, brandProfileId: null, stage: 'legal_review',
+  canEdit: false, canVeto: true, notifyOn: ['high_risk', 'reviewer_fail'] }
+```
+Gets notified only on flagged posts across all brands. Cannot touch plans, agents, or billing.
+
+**Implementation order:**
+1. Add `workflow_participants` and `activity_events` tables to schema + migrations
+2. Migrate existing `agentLogs` writes to `activity_events`
+3. Add `maxTeamMembers` to `planTiers` and `teamMembersActive` to `usageRecords`
+4. Auth middleware: replace org-membership check with participant + stage check per route
+5. `POST /auth/invite` — signed invite token, seat limit check, creates participant row on accept
+6. `GET/PATCH/DELETE /team` — list, reassign stage, revoke
+7. Notification worker subscribed to `activity_events` filtered by `notifyOn`
+8. Dashboard: `/settings/team` page for invite management, stage assignment, and per-brand scoping
 
 ---
 

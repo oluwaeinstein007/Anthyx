@@ -170,31 +170,59 @@ export default function PlanDetailPage() {
   return (
     <div className="space-y-6">
       {/* Delete confirmation modal */}
-      {showDeleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-2xl shadow-xl p-6 max-w-sm w-full mx-4 space-y-4">
-            <h3 className="font-semibold text-gray-900">Delete this plan?</h3>
-            <p className="text-sm text-gray-500">
-              All {plan.posts.length} posts will be permanently deleted. This cannot be undone.
-            </p>
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setShowDeleteConfirm(false)}
-                className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => deletePlan.mutate()}
-                disabled={deletePlan.isPending}
-                className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
-              >
-                {deletePlan.isPending ? "Deleting…" : "Delete plan"}
-              </button>
+      {showDeleteConfirm && (() => {
+        const scheduledCount = plan.posts.filter((p) => ["approved", "scheduled"].includes(p.status)).length;
+        const isActivePlan = plan.status === "active";
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="bg-white rounded-2xl shadow-xl p-6 max-w-md w-full mx-4 space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+                  <Trash2 className="w-5 h-5 text-red-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">Delete "{plan.name}"?</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">This action cannot be undone.</p>
+                </div>
+              </div>
+
+              <div className="bg-gray-50 rounded-xl p-3 space-y-1 text-sm">
+                <p className="text-gray-700 font-medium">This will permanently delete:</p>
+                <ul className="text-gray-500 space-y-0.5 pl-3">
+                  <li>• {plan.posts.length} post{plan.posts.length !== 1 ? "s" : ""} total</li>
+                  {scheduledCount > 0 && (
+                    <li className="text-amber-600 font-medium">
+                      • {scheduledCount} approved/scheduled post{scheduledCount !== 1 ? "s" : ""} (publishing jobs will be cancelled)
+                    </li>
+                  )}
+                </ul>
+              </div>
+
+              {isActivePlan && scheduledCount > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
+                  This plan is <strong>active</strong> — {scheduledCount} post{scheduledCount !== 1 ? "s are" : " is"} queued to publish. Deleting will cancel all of them.
+                </div>
+              )}
+
+              <div className="flex gap-2 justify-end pt-1">
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+                >
+                  Keep plan
+                </button>
+                <button
+                  onClick={() => deletePlan.mutate()}
+                  disabled={deletePlan.isPending}
+                  className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 font-medium"
+                >
+                  {deletePlan.isPending ? "Deleting…" : "Yes, delete plan"}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Header */}
       <div className="flex items-start justify-between">

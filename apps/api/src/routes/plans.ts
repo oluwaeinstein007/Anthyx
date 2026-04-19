@@ -6,6 +6,7 @@ import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { GeneratePlanSchema } from "@anthyx/config";
 import { queuePlanGeneration, queueContentGeneration } from "../queue/jobs";
+import { postExecutionQueue } from "../queue/client";
 
 const router = Router();
 
@@ -311,6 +312,17 @@ router.delete("/:id", auth, async (req, res) => {
   const postIds = posts.map((p) => p.id);
 
   if (postIds.length > 0) {
+    // Cancel any pending BullMQ jobs so scheduled posts don't fire after deletion
+    const postsWithJobs = await db.query.scheduledPosts.findMany({
+      where: and(eq(scheduledPosts.planId, plan.id), inArray(scheduledPosts.status, ["approved", "scheduled"])),
+      columns: { bullJobId: true },
+    });
+    await Promise.allSettled(
+      postsWithJobs
+        .filter((p) => p.bullJobId)
+        .map((p) => postExecutionQueue.remove(p.bullJobId!)),
+    );
+
     await db.delete(postAnalytics).where(inArray(postAnalytics.postId, postIds));
     await db.delete(agentLogs).where(inArray(agentLogs.postId, postIds));
   }

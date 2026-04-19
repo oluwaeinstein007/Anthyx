@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/client";
-import { agents, scheduledPosts } from "../db/schema";
+import { agents, scheduledPosts, agentLogs } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { requireLimit } from "../middleware/plan-limits";
@@ -138,6 +138,30 @@ router.post("/:id/assign", auth, async (req, res) => {
 
   if (!updated) return res.status(404).json({ error: "Social account not found" });
   return res.json(updated);
+});
+
+// GET /agents/:id/logs
+router.get("/:id/logs", auth, async (req, res) => {
+  const agent = await db.query.agents.findFirst({
+    where: and(eq(agents.id, req.params.id!), eq(agents.organizationId, req.user.orgId)),
+  });
+  if (!agent) return res.status(404).json({ error: "Not found" });
+
+  const limit = Math.min(parseInt(req.query["limit"] as string) || 50, 100);
+  const offset = parseInt(req.query["offset"] as string) || 0;
+  const action = req.query["action"] as string | undefined;
+
+  const logs = await db.query.agentLogs.findMany({
+    where: and(
+      eq(agentLogs.agentId, agent.id),
+      ...(action ? [eq(agentLogs.action, action)] : []),
+    ),
+    orderBy: (l, { desc }) => [desc(l.createdAt)],
+    limit,
+    offset,
+  });
+
+  return res.json(logs);
 });
 
 export { router as agentsRouter };

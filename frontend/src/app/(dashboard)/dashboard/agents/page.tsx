@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { Bot, PauseCircle, PlayCircle, AlertTriangle } from "lucide-react";
+import Link from "next/link";
+import { Bot, PauseCircle, PlayCircle, AlertTriangle, ArrowRight } from "lucide-react";
 
 interface Agent {
   id: string;
@@ -98,7 +99,12 @@ export default function AgentsPage() {
                   </div>
                   <div>
                     <div className="flex items-center gap-2.5 mb-0.5">
-                      <h3 className="font-semibold text-gray-900">{agent.name}</h3>
+                      <Link
+                        href={`/dashboard/agents/${agent.id}`}
+                        className="font-semibold text-gray-900 hover:text-green-700 transition-colors"
+                      >
+                        {agent.name}
+                      </Link>
                       {!agent.isActive && (
                         <span className="text-xs bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 rounded-full font-medium">
                           Silenced
@@ -118,6 +124,12 @@ export default function AgentsPage() {
                         Silenced: {agent.silenceReason}
                       </div>
                     )}
+                    <Link
+                      href={`/dashboard/agents/${agent.id}?tab=logs`}
+                      className="inline-flex items-center gap-1 mt-2 text-xs text-gray-400 hover:text-gray-700 transition-colors"
+                    >
+                      View activity logs <ArrowRight className="w-3 h-3" />
+                    </Link>
                   </div>
                 </div>
                 <div className="shrink-0">
