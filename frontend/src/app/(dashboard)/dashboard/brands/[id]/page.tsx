@@ -9,15 +9,19 @@ interface BrandProfile {
   id: string;
   name: string;
   industry: string | null;
-  website: string | null;
-  colorPalette: string[];
+  ingestStatus: "idle" | "processing" | "done" | "failed" | null;
   voiceTraits: {
-    tone: string[];
-    style: string[];
-    avoid: string[];
+    professional?: boolean;
+    witty?: boolean;
+    aggressive?: boolean;
+    empathetic?: boolean;
+    authoritative?: boolean;
+    casual?: boolean;
   } | null;
-  targetAudience: string | null;
-  values: string[];
+  toneDescriptors: string[] | null;
+  primaryColors: string[] | null;
+  secondaryColors: string[] | null;
+  typography: { primary: string | null; secondary: string | null } | null;
   createdAt: string;
 }
 
@@ -27,11 +31,38 @@ export default function BrandDetailPage() {
   const { data: brand, isLoading } = useQuery<BrandProfile>({
     queryKey: ["brand", id],
     queryFn: () => api.get<BrandProfile>(`/brands/${id}`),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return 5000;
+      if (data.ingestStatus === "processing") return 3000;
+      const allColors = [...(data.primaryColors ?? []), ...(data.secondaryColors ?? [])];
+      const hasData =
+        allColors.length > 0 ||
+        (data.toneDescriptors?.length ?? 0) > 0 ||
+        (data.voiceTraits && Object.values(data.voiceTraits).some(Boolean));
+      return hasData ? false : 5000;
+    },
   });
 
   if (isLoading)
     return <div className="text-sm text-gray-500 animate-pulse">Loading brand...</div>;
   if (!brand) return <div className="text-sm text-gray-500">Brand not found.</div>;
+
+  const allColors = [
+    ...(brand.primaryColors ?? []),
+    ...(brand.secondaryColors ?? []),
+  ];
+
+  const activeVoiceTraits = brand.voiceTraits
+    ? Object.entries(brand.voiceTraits)
+        .filter(([, active]) => active)
+        .map(([trait]) => trait)
+    : [];
+
+  const hasData =
+    allColors.length > 0 ||
+    (brand.toneDescriptors?.length ?? 0) > 0 ||
+    activeVoiceTraits.length > 0;
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -49,16 +80,6 @@ export default function BrandDetailPage() {
             {brand.industry && (
               <p className="text-sm text-gray-500 mt-0.5">{brand.industry}</p>
             )}
-            {brand.website && (
-              <a
-                href={brand.website}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-blue-500 hover:underline mt-0.5 inline-block"
-              >
-                {brand.website}
-              </a>
-            )}
           </div>
           <Link
             href={`/dashboard/brands/${id}/ingest`}
@@ -69,37 +90,83 @@ export default function BrandDetailPage() {
         </div>
       </div>
 
+      {/* Ingestion status banner */}
+      {brand.ingestStatus === "processing" && (
+        <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+          <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-blue-800">Processing document…</p>
+            <p className="text-xs text-blue-600 mt-0.5">Extracting brand identity via AI. This takes 10–30 seconds.</p>
+          </div>
+        </div>
+      )}
+      {brand.ingestStatus === "failed" && (
+        <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+          <span className="text-red-500 text-lg">✕</span>
+          <div>
+            <p className="text-sm font-medium text-red-800">Ingestion failed</p>
+            <p className="text-xs text-red-600 mt-0.5">
+              The document could not be processed.{" "}
+              <Link href={`/dashboard/brands/${id}/ingest`} className="underline">Try again →</Link>
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Color palette */}
-      {brand.colorPalette.length > 0 && (
+      {allColors.length > 0 && (
         <div className="p-5 bg-white border border-gray-200 rounded-xl space-y-3">
           <h2 className="text-sm font-semibold text-gray-900">Brand colors</h2>
           <div className="flex flex-wrap gap-3">
-            {brand.colorPalette.map((color, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <div
-                  className="w-8 h-8 rounded-lg border border-gray-200 shadow-sm"
-                  style={{ backgroundColor: color }}
-                />
-                <span className="text-xs text-gray-500 font-mono">{color}</span>
+            {brand.primaryColors && brand.primaryColors.length > 0 && (
+              <div className="w-full">
+                <p className="text-xs text-gray-400 mb-2">Primary</p>
+                <div className="flex flex-wrap gap-3">
+                  {brand.primaryColors.map((color, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <div
+                        className="w-8 h-8 rounded-lg border border-gray-200 shadow-sm"
+                        style={{ backgroundColor: color }}
+                      />
+                      <span className="text-xs text-gray-500 font-mono">{color}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            ))}
+            )}
+            {brand.secondaryColors && brand.secondaryColors.length > 0 && (
+              <div className="w-full">
+                <p className="text-xs text-gray-400 mb-2">Secondary</p>
+                <div className="flex flex-wrap gap-3">
+                  {brand.secondaryColors.map((color, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <div
+                        className="w-8 h-8 rounded-lg border border-gray-200 shadow-sm"
+                        style={{ backgroundColor: color }}
+                      />
+                      <span className="text-xs text-gray-500 font-mono">{color}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* Voice traits */}
-      {brand.voiceTraits && (
+      {(activeVoiceTraits.length > 0 || (brand.toneDescriptors?.length ?? 0) > 0) && (
         <div className="p-5 bg-white border border-gray-200 rounded-xl space-y-4">
           <h2 className="text-sm font-semibold text-gray-900">Voice & tone</h2>
 
-          {brand.voiceTraits.tone.length > 0 && (
+          {activeVoiceTraits.length > 0 && (
             <div>
-              <p className="text-xs text-gray-500 mb-1.5">Tone</p>
+              <p className="text-xs text-gray-500 mb-1.5">Personality traits</p>
               <div className="flex flex-wrap gap-1.5">
-                {brand.voiceTraits.tone.map((t) => (
+                {activeVoiceTraits.map((t) => (
                   <span
                     key={t}
-                    className="text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full"
+                    className="text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full capitalize"
                   >
                     {t}
                   </span>
@@ -108,11 +175,11 @@ export default function BrandDetailPage() {
             </div>
           )}
 
-          {brand.voiceTraits.style.length > 0 && (
+          {brand.toneDescriptors && brand.toneDescriptors.length > 0 && (
             <div>
-              <p className="text-xs text-gray-500 mb-1.5">Style</p>
+              <p className="text-xs text-gray-500 mb-1.5">Tone descriptors</p>
               <div className="flex flex-wrap gap-1.5">
-                {brand.voiceTraits.style.map((s) => (
+                {brand.toneDescriptors.map((s) => (
                   <span
                     key={s}
                     className="text-xs bg-purple-50 text-purple-700 px-2.5 py-1 rounded-full"
@@ -123,66 +190,44 @@ export default function BrandDetailPage() {
               </div>
             </div>
           )}
-
-          {brand.voiceTraits.avoid.length > 0 && (
-            <div>
-              <p className="text-xs text-gray-500 mb-1.5">Avoid</p>
-              <div className="flex flex-wrap gap-1.5">
-                {brand.voiceTraits.avoid.map((a) => (
-                  <span
-                    key={a}
-                    className="text-xs bg-red-50 text-red-600 px-2.5 py-1 rounded-full"
-                  >
-                    {a}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
-      {/* Values */}
-      {brand.values.length > 0 && (
+      {/* Typography */}
+      {brand.typography && (brand.typography.primary || brand.typography.secondary) && (
         <div className="p-5 bg-white border border-gray-200 rounded-xl space-y-3">
-          <h2 className="text-sm font-semibold text-gray-900">Brand values</h2>
-          <div className="flex flex-wrap gap-1.5">
-            {brand.values.map((v) => (
-              <span
-                key={v}
-                className="text-xs bg-green-50 text-green-700 px-2.5 py-1 rounded-full border border-green-200"
-              >
-                {v}
-              </span>
-            ))}
+          <h2 className="text-sm font-semibold text-gray-900">Typography</h2>
+          <div className="space-y-1">
+            {brand.typography.primary && (
+              <p className="text-sm text-gray-700">
+                <span className="text-xs text-gray-400 mr-2">Primary</span>
+                {brand.typography.primary}
+              </p>
+            )}
+            {brand.typography.secondary && (
+              <p className="text-sm text-gray-700">
+                <span className="text-xs text-gray-400 mr-2">Secondary</span>
+                {brand.typography.secondary}
+              </p>
+            )}
           </div>
-        </div>
-      )}
-
-      {/* Target audience */}
-      {brand.targetAudience && (
-        <div className="p-5 bg-white border border-gray-200 rounded-xl space-y-2">
-          <h2 className="text-sm font-semibold text-gray-900">Target audience</h2>
-          <p className="text-sm text-gray-700">{brand.targetAudience}</p>
         </div>
       )}
 
       {/* If no extracted data yet */}
-      {!brand.voiceTraits &&
-        brand.values.length === 0 &&
-        brand.colorPalette.length === 0 && (
-          <div className="text-center py-12 bg-white border border-dashed border-gray-200 rounded-xl">
-            <p className="text-gray-400 text-sm mb-3">
-              No brand identity extracted yet.
-            </p>
-            <Link
-              href={`/dashboard/brands/${id}/ingest`}
-              className="text-sm text-green-600 font-medium hover:underline"
-            >
-              Ingest a brand document →
-            </Link>
-          </div>
-        )}
+      {!hasData && (
+        <div className="text-center py-12 bg-white border border-dashed border-gray-200 rounded-xl">
+          <p className="text-gray-400 text-sm mb-3">
+            No brand identity extracted yet.
+          </p>
+          <Link
+            href={`/dashboard/brands/${id}/ingest`}
+            className="text-sm text-green-600 font-medium hover:underline"
+          >
+            Ingest a brand document →
+          </Link>
+        </div>
+      )}
 
       <p className="text-xs text-gray-400">
         Brand created {new Date(brand.createdAt).toLocaleDateString()}. Ingest additional

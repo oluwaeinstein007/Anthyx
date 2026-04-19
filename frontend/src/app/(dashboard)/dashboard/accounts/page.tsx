@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Link2, CheckCircle2, AlertTriangle, ExternalLink, Shield } from "lucide-react";
+import { TelegramConnectModal } from "@/components/accounts/TelegramConnectModal";
 
 interface SocialAccount {
   id: string;
@@ -28,6 +29,7 @@ const PLATFORMS = ["x", "instagram", "linkedin", "facebook", "telegram", "tiktok
 export default function AccountsPage() {
   const qc = useQueryClient();
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [showTelegramModal, setShowTelegramModal] = useState(false);
 
   const { data: accounts = [], isLoading } = useQuery<SocialAccount[]>({
     queryKey: ["accounts"],
@@ -36,8 +38,9 @@ export default function AccountsPage() {
 
   const connect = useMutation({
     mutationFn: (platform: string) =>
-      api.post<{ authUrl: string }>("/accounts/oauth/url", { platform }),
+      api.get<{ authUrl: string }>(`/accounts/oauth/${platform}`),
     onSuccess: (data) => { window.location.href = data.authUrl; },
+    onError: (err) => { alert(err instanceof Error ? err.message : "Failed to get OAuth URL"); },
     onSettled: () => setConnecting(null),
   });
 
@@ -121,7 +124,11 @@ export default function AccountsPage() {
             return (
               <button
                 key={platform}
-                onClick={() => { setConnecting(platform); connect.mutate(platform); }}
+                onClick={() => {
+                  if (platform === "telegram") { setShowTelegramModal(true); return; }
+                  setConnecting(platform);
+                  connect.mutate(platform);
+                }}
                 disabled={isConnected || connecting === platform || connect.isPending}
                 className={`flex items-center gap-3 p-4 rounded-2xl border text-sm font-medium transition-all ${
                   isConnected
@@ -148,6 +155,10 @@ export default function AccountsPage() {
           OAuth tokens are encrypted at rest using AES-256-GCM and automatically refreshed before expiry. Your credentials are never logged or stored in plaintext.
         </p>
       </div>
+
+      {showTelegramModal && (
+        <TelegramConnectModal onClose={() => setShowTelegramModal(false)} />
+      )}
     </div>
   );
 }

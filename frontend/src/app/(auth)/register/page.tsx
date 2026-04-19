@@ -13,9 +13,19 @@ const PERKS = [
   "Full access from day one",
 ];
 
+const INPUT_CLASS =
+  "w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent";
+
 export default function RegisterPage() {
   const router = useRouter();
-  const [form, setForm] = useState({ name: "", email: "", password: "", organizationName: "" });
+  const [form, setForm] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    password: "",
+    confirmPassword: "",
+    organizationName: "",
+  });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -24,10 +34,19 @@ export default function RegisterPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (form.password !== form.confirmPassword) {
+      setError("Passwords do not match");
+      return;
+    }
     setLoading(true);
     setError("");
     try {
-      await api.post("/auth/register", form);
+      await api.post("/auth/register", {
+        name: `${form.firstName} ${form.lastName}`.trim(),
+        email: form.email,
+        password: form.password,
+        organizationName: form.organizationName,
+      });
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
@@ -90,28 +109,40 @@ export default function RegisterPage() {
             )}
 
             <div className="grid grid-cols-2 gap-4">
-              <div className="col-span-2 sm:col-span-1">
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Your name</label>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">First name</label>
                 <input
                   type="text"
-                  value={form.name}
-                  onChange={update("name")}
+                  value={form.firstName}
+                  onChange={update("firstName")}
                   required
-                  placeholder="Jane Smith"
-                  className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                  placeholder="Jane"
+                  className={INPUT_CLASS}
                 />
               </div>
-              <div className="col-span-2 sm:col-span-1">
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Company / brand</label>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Last name</label>
                 <input
                   type="text"
-                  value={form.organizationName}
-                  onChange={update("organizationName")}
+                  value={form.lastName}
+                  onChange={update("lastName")}
                   required
-                  placeholder="Acme Inc."
-                  className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                  placeholder="Smith"
+                  className={INPUT_CLASS}
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Company / brand</label>
+              <input
+                type="text"
+                value={form.organizationName}
+                onChange={update("organizationName")}
+                required
+                placeholder="Acme Inc."
+                className={INPUT_CLASS}
+              />
             </div>
 
             <div>
@@ -122,20 +153,33 @@ export default function RegisterPage() {
                 onChange={update("email")}
                 required
                 placeholder="you@company.com"
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                className={INPUT_CLASS}
               />
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
-              <input
-                type="password"
-                value={form.password}
-                onChange={update("password")}
-                required
-                placeholder="8+ characters"
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
+                <input
+                  type="password"
+                  value={form.password}
+                  onChange={update("password")}
+                  required
+                  placeholder="8+ characters"
+                  className={INPUT_CLASS}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Confirm password</label>
+                <input
+                  type="password"
+                  value={form.confirmPassword}
+                  onChange={update("confirmPassword")}
+                  required
+                  placeholder="Repeat password"
+                  className={INPUT_CLASS}
+                />
+              </div>
             </div>
 
             <button

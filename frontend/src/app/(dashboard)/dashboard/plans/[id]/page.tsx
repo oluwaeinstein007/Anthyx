@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
-import { Trash2, Pencil, Check, X } from "lucide-react";
+import { Pencil, X, Check, Trash2 } from "lucide-react";
 
 interface ScheduledPost {
   id: string;
@@ -17,6 +17,7 @@ interface ScheduledPost {
   contentHashtags: string[] | null;
   hashtags: string[] | null;
   mediaUrls: string[] | null;
+  errorMessage: string | null;
   socialAccountId: string | null;
 }
 
@@ -27,18 +28,19 @@ interface MarketingPlan {
   startDate: string;
   endDate: string;
   goals: string[];
+  feedbackLoopEnabled: boolean;
   posts: ScheduledPost[];
 }
 
 const STATUS_DOT: Record<string, string> = {
   draft: "bg-gray-300",
+  pending_review: "bg-amber-400",
   approved: "bg-blue-400",
-  scheduled: "bg-amber-400",
+  scheduled: "bg-blue-500",
   published: "bg-green-500",
   failed: "bg-red-500",
   silenced: "bg-red-300",
   vetoed: "bg-red-400",
-  pending_review: "bg-orange-400",
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -57,10 +59,13 @@ const PLAN_STATUS_STYLES: Record<string, string> = {
   pending_review: "bg-amber-100 text-amber-700",
   active: "bg-green-100 text-green-700",
   completed: "bg-gray-100 text-gray-600",
-  paused: "bg-red-100 text-red-700",
+  paused: "bg-orange-100 text-orange-700",
+  failed: "bg-red-100 text-red-700",
 };
 
 type ViewMode = "calendar" | "list";
+
+const EDITABLE_STATUSES = new Set(["draft", "pending_review", "approved", "scheduled"]);
 
 function getDaysInRange(start: string, end: string): Date[] {
   const days: Date[] = [];
@@ -73,14 +78,15 @@ function getDaysInRange(start: string, end: string): Date[] {
   return days;
 }
 
-const EDITABLE_STATUSES = new Set(["draft", "pending_review", "approved", "scheduled"]);
-
 export default function PlanDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const qc = useQueryClient();
   const [view, setView] = useState<ViewMode>("calendar");
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editGoals, setEditGoals] = useState("");
+  const [editFeedback, setEditFeedback] = useState(false);
 
   // Per-post edit state
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
@@ -108,14 +114,36 @@ export default function PlanDetailPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", id] }),
   });
 
-  const deletePlan = useMutation({
-    mutationFn: () => api.delete(`/plans/${id}`),
-    onSuccess: () => router.push("/dashboard/plans"),
+  const retry = useMutation({
+    mutationFn: () => api.post(`/plans/${id}/retry`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", id] }),
+  });
+
+  const retryFailed = useMutation({
+    mutationFn: () => api.post(`/plans/${id}/retry-failed`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", id] }),
   });
 
   const generateContent = useMutation({
     mutationFn: () => api.post(`/plans/${id}/generate-content`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", id] }),
+  });
+
+  const updatePlan = useMutation({
+    mutationFn: (body: { name?: string; goals?: string[]; feedbackLoopEnabled?: boolean }) =>
+      api.put(`/plans/${id}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["plan", id] });
+      setEditing(false);
+    },
+  });
+
+  const deletePlan = useMutation({
+    mutationFn: () => api.delete(`/plans/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["plans"] });
+      router.push("/dashboard/plans");
+    },
   });
 
   const updatePost = useMutation({
@@ -127,13 +155,29 @@ export default function PlanDetailPage() {
     },
   });
 
-  function startEdit(post: ScheduledPost) {
+  const startEdit = () => {
+    if (!plan) return;
+    setEditName(plan.name);
+    setEditGoals(plan.goals.join("\n"));
+    setEditFeedback(plan.feedbackLoopEnabled);
+    setEditing(true);
+  };
+
+  const saveEdit = () => {
+    updatePlan.mutate({
+      name: editName.trim() || undefined,
+      goals: editGoals.split("\n").map((g) => g.trim()).filter(Boolean),
+      feedbackLoopEnabled: editFeedback,
+    });
+  };
+
+  function startEditPost(post: ScheduledPost) {
     setEditingPostId(post.id);
     setEditText(post.contentText ?? post.caption ?? "");
     setEditHashtags((post.contentHashtags ?? post.hashtags ?? []).join(", "));
   }
 
-  function saveEdit(postId: string) {
+  function saveEditPost(postId: string) {
     const hashtags = editHashtags
       .split(",")
       .map((h) => h.trim().replace(/^#/, ""))
@@ -159,74 +203,19 @@ export default function PlanDetailPage() {
     postsByDay[dayKey].push(post);
   }
 
+  const canEdit = !["generating", "completed"].includes(plan.status);
+
   const publishedCount = plan.posts.filter((p) => p.status === "published").length;
   const approvedCount = plan.posts.filter((p) => ["approved", "scheduled"].includes(p.status)).length;
-  const pendingReviewCount = plan.posts.filter((p) => p.status === "pending_review").length;
+  const pendingCount = plan.posts.filter((p) => p.status === "pending_review").length;
   const failedCount = plan.posts.filter((p) => p.status === "failed").length;
   const draftCount = plan.posts.filter((p) => p.status === "draft").length;
 
-  const canEdit = !["generating", "completed"].includes(plan.status);
-
   return (
     <div className="space-y-6">
-      {/* Delete confirmation modal */}
-      {showDeleteConfirm && (() => {
-        const scheduledCount = plan.posts.filter((p) => ["approved", "scheduled"].includes(p.status)).length;
-        const isActivePlan = plan.status === "active";
-        return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-            <div className="bg-white rounded-2xl shadow-xl p-6 max-w-md w-full mx-4 space-y-4">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
-                  <Trash2 className="w-5 h-5 text-red-600" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-gray-900">Delete "{plan.name}"?</h3>
-                  <p className="text-sm text-gray-500 mt-0.5">This action cannot be undone.</p>
-                </div>
-              </div>
-
-              <div className="bg-gray-50 rounded-xl p-3 space-y-1 text-sm">
-                <p className="text-gray-700 font-medium">This will permanently delete:</p>
-                <ul className="text-gray-500 space-y-0.5 pl-3">
-                  <li>• {plan.posts.length} post{plan.posts.length !== 1 ? "s" : ""} total</li>
-                  {scheduledCount > 0 && (
-                    <li className="text-amber-600 font-medium">
-                      • {scheduledCount} approved/scheduled post{scheduledCount !== 1 ? "s" : ""} (publishing jobs will be cancelled)
-                    </li>
-                  )}
-                </ul>
-              </div>
-
-              {isActivePlan && scheduledCount > 0 && (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
-                  This plan is <strong>active</strong> — {scheduledCount} post{scheduledCount !== 1 ? "s are" : " is"} queued to publish. Deleting will cancel all of them.
-                </div>
-              )}
-
-              <div className="flex gap-2 justify-end pt-1">
-                <button
-                  onClick={() => setShowDeleteConfirm(false)}
-                  className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
-                >
-                  Keep plan
-                </button>
-                <button
-                  onClick={() => deletePlan.mutate()}
-                  disabled={deletePlan.isPending}
-                  className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 font-medium"
-                >
-                  {deletePlan.isPending ? "Deleting…" : "Yes, delete plan"}
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
       {/* Header */}
       <div className="flex items-start justify-between">
-        <div>
+        <div className="flex-1 min-w-0 pr-4">
           <div className="flex items-center gap-2 mb-1">
             <Link
               href="/dashboard/plans"
@@ -235,73 +224,147 @@ export default function PlanDetailPage() {
               ← Plans
             </Link>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">{plan.name}</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {new Date(plan.startDate).toLocaleDateString()} –{" "}
-            {new Date(plan.endDate).toLocaleDateString()}
-          </p>
-          {plan.goals.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {plan.goals.map((goal, i) => (
-                <span
-                  key={i}
-                  className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full"
+
+          {editing ? (
+            <div className="space-y-3">
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="w-full text-2xl font-bold text-gray-900 border-b border-gray-300 focus:outline-none focus:border-green-500 bg-transparent pb-1"
+              />
+              <div>
+                <label className="text-xs font-medium text-gray-500 mb-1 block">
+                  Goals <span className="text-gray-400 font-normal">(one per line)</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={editGoals}
+                  onChange={(e) => setEditGoals(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={editFeedback}
+                  onChange={(e) => setEditFeedback(e.target.checked)}
+                  className="rounded accent-green-600"
+                />
+                Enable feedback loop
+              </label>
+              <div className="flex gap-2">
+                <button
+                  onClick={saveEdit}
+                  disabled={updatePlan.isPending}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
                 >
-                  {goal}
-                </span>
-              ))}
+                  <Check className="w-3.5 h-3.5" />
+                  {updatePlan.isPending ? "Saving..." : "Save changes"}
+                </button>
+                <button
+                  onClick={() => setEditing(false)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 text-xs rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Cancel
+                </button>
+              </div>
             </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold text-gray-900">{plan.name}</h1>
+                <button
+                  onClick={startEdit}
+                  className="p-1 text-gray-400 hover:text-gray-600 transition-colors rounded"
+                  title="Edit plan"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {new Date(plan.startDate).toLocaleDateString()} –{" "}
+                {new Date(plan.endDate).toLocaleDateString()}
+              </p>
+              {plan.goals.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {plan.goals.map((goal, i) => (
+                    <span
+                      key={i}
+                      className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full"
+                    >
+                      {goal}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          <span
-            className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-              PLAN_STATUS_STYLES[plan.status] ?? "bg-gray-100 text-gray-600"
-            }`}
-          >
-            {plan.status.replace("_", " ")}
-          </span>
-
-          {plan.status === "pending_review" && (
-            <button
-              onClick={() => approve.mutate()}
-              disabled={approve.isPending}
-              className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+        {!editing && (
+          <div className="flex items-center gap-2 shrink-0">
+            <span
+              className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                PLAN_STATUS_STYLES[plan.status] ?? "bg-gray-100 text-gray-600"
+              }`}
             >
-              {approve.isPending ? "Approving..." : "Approve plan"}
-            </button>
-          )}
-          {plan.status === "active" && (
+              {plan.status.replace(/_/g, " ")}
+            </span>
+            {plan.status === "pending_review" && (
+              <button
+                onClick={() => approve.mutate()}
+                disabled={approve.isPending}
+                className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+              >
+                {approve.isPending ? "Approving..." : "Approve plan"}
+              </button>
+            )}
+            {plan.status === "active" && (
+              <button
+                onClick={() => pause.mutate()}
+                disabled={pause.isPending}
+                className="px-3 py-1.5 border border-orange-200 text-orange-600 text-xs font-medium rounded-lg hover:bg-orange-50 disabled:opacity-50 transition-colors"
+              >
+                {pause.isPending ? "Pausing..." : "Pause plan"}
+              </button>
+            )}
+            {plan.status === "paused" && (
+              <button
+                onClick={() => resume.mutate()}
+                disabled={resume.isPending}
+                className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+              >
+                {resume.isPending ? "Resuming..." : "Resume plan"}
+              </button>
+            )}
+            {plan.status === "failed" && (
+              <button
+                onClick={() => retry.mutate()}
+                disabled={retry.isPending}
+                className="px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
+              >
+                {retry.isPending ? "Retrying..." : "Retry generation"}
+              </button>
+            )}
+            {plan.status === "generating" && (
+              <span className="text-xs text-blue-600 animate-pulse">Generating…</span>
+            )}
             <button
-              onClick={() => pause.mutate()}
-              disabled={pause.isPending}
-              className="px-3 py-1.5 border border-red-200 text-red-600 text-xs font-medium rounded-lg hover:bg-red-50 disabled:opacity-50 transition-colors"
-            >
-              {pause.isPending ? "Pausing..." : "Pause plan"}
-            </button>
-          )}
-          {plan.status === "paused" && (
-            <button
-              onClick={() => resume.mutate()}
-              disabled={resume.isPending}
-              className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
-            >
-              {resume.isPending ? "Resuming..." : "Resume plan"}
-            </button>
-          )}
-
-          {/* Delete — available for any status except while generating */}
-          {plan.status !== "generating" && (
-            <button
-              onClick={() => setShowDeleteConfirm(true)}
-              className="p-1.5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition-colors"
+              onClick={() => {
+                if (confirm("Delete this plan and all its posts? This cannot be undone.")) {
+                  deletePlan.mutate();
+                }
+              }}
+              disabled={deletePlan.isPending}
+              className="p-1.5 text-gray-400 hover:text-red-500 transition-colors rounded"
               title="Delete plan"
             >
               <Trash2 className="w-4 h-4" />
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Stats row */}
@@ -315,15 +378,15 @@ export default function PlanDetailPage() {
           <p className="text-xs text-gray-500 mt-0.5">Approved</p>
         </div>
         <div className="p-4 bg-white border border-gray-200 rounded-xl text-center">
-          <p className="text-2xl font-bold text-amber-600">{pendingReviewCount}</p>
+          <p className="text-2xl font-bold text-amber-600">{pendingCount}</p>
           <p className="text-xs text-gray-500 mt-0.5">Pending review</p>
         </div>
-        <div className="p-4 bg-white border border-gray-200 rounded-xl text-center">
-          <p className="text-2xl font-bold text-red-500">{failedCount}</p>
+        <div className={`p-4 bg-white rounded-xl text-center ${failedCount > 0 ? "border border-red-100" : "border border-gray-200"}`}>
+          <p className={`text-2xl font-bold ${failedCount > 0 ? "text-red-500" : "text-gray-300"}`}>{failedCount}</p>
           <p className="text-xs text-gray-500 mt-0.5">Failed</p>
         </div>
-        <div className="p-4 bg-white border border-gray-200 rounded-xl text-center">
-          <p className="text-2xl font-bold text-gray-500">{draftCount}</p>
+        <div className={`p-4 bg-white rounded-xl text-center ${draftCount > 0 ? "border border-gray-300" : "border border-gray-200"}`}>
+          <p className={`text-2xl font-bold ${draftCount > 0 ? "text-gray-500" : "text-gray-300"}`}>{draftCount}</p>
           <p className="text-xs text-gray-500 mt-0.5">Draft</p>
         </div>
       </div>
@@ -343,22 +406,32 @@ export default function PlanDetailPage() {
             {v}
           </button>
         ))}
-        <div className="ml-auto flex items-center gap-4">
-          {draftCount > 0 && (
+        <div className="ml-auto flex items-center gap-3">
+          {draftCount > 0 && ["active", "pending_review"].includes(plan.status) && (
             <button
               onClick={() => generateContent.mutate()}
               disabled={generateContent.isPending}
-              className="text-xs text-green-600 hover:underline disabled:opacity-50"
+              className="text-xs text-gray-500 hover:text-gray-700 hover:underline disabled:opacity-50"
             >
-              {generateContent.isPending
-                ? "Queuing…"
-                : `Generate content for ${draftCount} draft${draftCount !== 1 ? "s" : ""} →`}
+              {generateContent.isPending ? "Generating…" : `Generate content for ${draftCount} draft${draftCount !== 1 ? "s" : ""} →`}
             </button>
           )}
-          {pendingReviewCount > 0 && (
-            <Link href="/dashboard/review" className="text-xs text-amber-600 hover:underline">
-              {pendingReviewCount} post{pendingReviewCount !== 1 ? "s" : ""} need review →
+          {pendingCount > 0 && plan.status === "active" && (
+            <Link
+              href="/dashboard/review"
+              className="text-xs text-amber-600 hover:underline"
+            >
+              {pendingCount} post{pendingCount !== 1 ? "s" : ""} need review →
             </Link>
+          )}
+          {failedCount > 0 && ["active", "pending_review"].includes(plan.status) && (
+            <button
+              onClick={() => retryFailed.mutate()}
+              disabled={retryFailed.isPending}
+              className="text-xs text-red-500 hover:underline disabled:opacity-50"
+            >
+              {retryFailed.isPending ? "Retrying…" : `Retry ${failedCount} failed post${failedCount !== 1 ? "s" : ""} →`}
+            </button>
           )}
         </div>
       </div>
@@ -403,42 +476,43 @@ export default function PlanDetailPage() {
                       {dayPosts.map((post) => (
                         <div
                           key={post.id}
-                          className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs shadow-sm"
+                          className={`flex flex-col bg-white border rounded-lg px-2.5 py-1.5 text-xs shadow-sm ${
+                            post.status === "failed" ? "border-red-200" : "border-gray-200"
+                          }`}
                         >
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                              STATUS_DOT[post.status] ?? "bg-gray-300"
-                            }`}
-                          />
-                          <span className="capitalize font-medium text-gray-700">
-                            {post.platform}
-                          </span>
-                          {!post.socialAccountId && (
+                          <div className="flex items-center gap-1.5">
                             <span
-                              className="text-orange-400"
-                              title="No account linked — connect this platform to enable publishing"
-                            >
-                              ⚠
+                              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                STATUS_DOT[post.status] ?? "bg-gray-300"
+                              }`}
+                            />
+                            <span className="capitalize font-medium text-gray-700">
+                              {post.platform}
                             </span>
+                            <span className="text-gray-400">
+                              {new Date(post.scheduledAt).toLocaleTimeString("en-US", {
+                                hour: "numeric",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                            <span className="text-gray-300">·</span>
+                            <span
+                              className={`${
+                                post.status === "published"
+                                  ? "text-green-600"
+                                  : post.status === "failed"
+                                    ? "text-red-500"
+                                    : "text-gray-500"
+                              }`}
+                            >
+                              {STATUS_LABEL[post.status] ?? post.status}
+                            </span>
+                          </div>
+                          {post.status === "failed" && post.errorMessage && (
+                            <p className="mt-0.5 text-red-400 leading-tight pl-3">
+                              {post.errorMessage}
+                            </p>
                           )}
-                          <span className="text-gray-400">
-                            {new Date(post.scheduledAt).toLocaleTimeString("en-US", {
-                              hour: "numeric",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                          <span className="text-gray-300">·</span>
-                          <span
-                            className={`${
-                              post.status === "published"
-                                ? "text-green-600"
-                                : post.status === "draft"
-                                  ? "text-amber-600"
-                                  : "text-gray-500"
-                            }`}
-                          >
-                            {STATUS_LABEL[post.status] ?? post.status}
-                          </span>
                         </div>
                       ))}
                     </div>
@@ -510,7 +584,7 @@ export default function PlanDetailPage() {
                         </span>
                         {canEdit && isEditableStatus && !isEditing && (
                           <button
-                            onClick={() => startEdit(post)}
+                            onClick={() => startEditPost(post)}
                             className="flex items-center gap-1 px-2 py-0.5 text-xs text-gray-500 border border-gray-200 rounded-md hover:bg-gray-50 hover:text-gray-800 transition-colors"
                             title="Edit post"
                           >
@@ -538,7 +612,7 @@ export default function PlanDetailPage() {
                         />
                         <div className="flex gap-2">
                           <button
-                            onClick={() => saveEdit(post.id)}
+                            onClick={() => saveEditPost(post.id)}
                             disabled={updatePost.isPending}
                             className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50"
                           >
@@ -556,8 +630,14 @@ export default function PlanDetailPage() {
                       </div>
                     ) : (
                       <>
-                        {displayText && (
-                          <p className="text-sm text-gray-700 line-clamp-3">{displayText}</p>
+                        {post.status === "failed" ? (
+                          post.errorMessage && (
+                            <p className="text-sm text-red-500">{post.errorMessage}</p>
+                          )
+                        ) : (
+                          displayText && (
+                            <p className="text-sm text-gray-700 line-clamp-3">{displayText}</p>
+                          )
                         )}
                         {displayHashtags.length > 0 && (
                           <div className="flex flex-wrap gap-1">

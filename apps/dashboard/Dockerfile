@@ -14,10 +14,14 @@ RUN pnpm install --frozen-lockfile
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
+# frontend and apps/dashboard share identical package.json — reuse the same node_modules
 COPY --from=deps /app/apps/dashboard/node_modules ./apps/dashboard/node_modules
+COPY --from=deps /app/apps/dashboard/node_modules ./frontend/node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN pnpm --filter @anthyx/dashboard build
+WORKDIR /app/frontend
+RUN node_modules/.bin/next build
+WORKDIR /app
 
 # ---- runner ----
 FROM base AS runner
@@ -28,12 +32,12 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
-COPY --from=builder /app/apps/dashboard/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/apps/dashboard/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/apps/dashboard/.next/static ./apps/dashboard/.next/static
+COPY --from=builder /app/frontend/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/frontend/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/frontend/.next/static ./frontend/.next/static
 
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 
-CMD ["node", "apps/dashboard/server.js"]
+CMD ["node", "frontend/server.js"]

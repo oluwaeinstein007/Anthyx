@@ -26,7 +26,7 @@ export class ReviewerRejectionError extends Error {
 export async function generateAndReviewPost(
   planItem: GeneratedPlanItem & { id?: string },
   agentId: string,
-  socialAccountId: string,
+  socialAccountId: string | null,
   brandProfileId: string,
   organizationId: string,
 ): Promise<{
@@ -37,12 +37,16 @@ export async function generateAndReviewPost(
   const [agent, brand, account] = await Promise.all([
     db.query.agents.findFirst({ where: eq(agents.id, agentId) }),
     db.query.brandProfiles.findFirst({ where: eq(brandProfiles.id, brandProfileId) }),
-    db.query.socialAccounts.findFirst({ where: eq(socialAccounts.id, socialAccountId) }),
+    socialAccountId
+      ? db.query.socialAccounts.findFirst({ where: eq(socialAccounts.id, socialAccountId) })
+      : Promise.resolve(null),
   ]);
 
   if (!agent) throw new Error(`Agent ${agentId} not found`);
   if (!brand) throw new Error(`Brand ${brandProfileId} not found`);
-  if (!account) throw new Error(`Social account ${socialAccountId} not found`);
+
+  // Platform comes from the linked account when available, otherwise from the plan item
+  const platform = (account?.platform ?? planItem.platform) as Platform;
 
   // Step 1: Copywriter generates the post
   const brandVoice = await retrieveBrandVoiceFromQdrant(brandProfileId, planItem.topic);
@@ -53,7 +57,7 @@ export async function generateAndReviewPost(
     brandName: brand.name,
     brandVoiceRules: brandVoice,
     dietInstructions: agent.dietInstructions ?? "",
-    platform: account.platform as Platform,
+    platform,
     topic: planItem.topic,
     contentType: planItem.contentType,
     hook: planItem.hook,
@@ -71,7 +75,7 @@ export async function generateAndReviewPost(
     const review = await runReviewerAgent({
       postContent: currentContent,
       hashtags: currentHashtags,
-      platform: account.platform as Platform,
+      platform,
       brandRules: brandVoice,
       dietInstructions: agent.dietInstructions ?? "",
     });
@@ -152,11 +156,6 @@ export async function generateContentForPlan(planId: string, organizationId: str
         cta: "",
         suggestVisual: false,
       };
-
-      if (!post.socialAccountId) {
-        // No account yet — leave as draft so it can be processed once an account is connected
-        continue;
-      }
 
       const result = await generateAndReviewPost(
         { ...planItem, id: post.id },

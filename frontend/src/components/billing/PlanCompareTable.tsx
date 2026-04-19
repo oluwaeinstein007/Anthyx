@@ -1,6 +1,7 @@
 "use client";
 
-import { PLAN_TIER_CONFIGS, CREDIT_COSTS } from "@anthyx/config";
+import { CREDIT_COSTS } from "@anthyx/config";
+import { PLAN_TIER_CONFIGS } from "@anthyx/types";
 import type { PlanTier } from "@anthyx/types";
 
 const VISIBLE_TIERS: PlanTier[] = ["sandbox", "starter", "growth", "agency", "scale"];

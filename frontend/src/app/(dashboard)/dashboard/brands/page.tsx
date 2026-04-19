@@ -19,6 +19,7 @@ export default function BrandsPage() {
   const qc = useQueryClient();
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ name: "", industry: "" });
+  const [createError, setCreateError] = useState("");
 
   const { data: brands = [], isLoading } = useQuery<Brand[]>({
     queryKey: ["brands"],
@@ -30,7 +31,11 @@ export default function BrandsPage() {
     onSuccess: () => {
       setCreating(false);
       setForm({ name: "", industry: "" });
+      setCreateError("");
       qc.invalidateQueries({ queryKey: ["brands"] });
+    },
+    onError: (err) => {
+      setCreateError(err instanceof Error ? err.message : "Failed to create brand");
     },
   });
 
@@ -54,11 +59,16 @@ export default function BrandsPage() {
         <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-gray-900">New brand</h2>
-            <button onClick={() => setCreating(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+            <button onClick={() => { setCreating(false); setCreateError(""); }} className="text-gray-400 hover:text-gray-600 transition-colors">
               <X className="w-4 h-4" />
             </button>
           </div>
           <div className="space-y-3">
+            {createError && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
+                {createError}
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1.5">Brand name</label>
               <input
