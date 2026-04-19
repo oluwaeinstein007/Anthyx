@@ -109,6 +109,10 @@ export interface StrategistRunInput {
 export async function runStrategistAgent(input: StrategistRunInput): Promise<GeneratedPlanItem[]> {
   const systemInstruction = await buildSystemPromptWithGuardrails(STRATEGIST_BASE, input.organizationId);
 
+  const platformCount = input.platforms.length;
+  const targetItemCount = 30 * Math.min(platformCount, 2);
+  const platformList = input.platforms.join(", ");
+
   const model = genAI.getGenerativeModel({ model: MODEL, systemInstruction, tools: TOOLS });
   const chat = model.startChat({ history: [] });
 
@@ -116,14 +120,15 @@ export async function runStrategistAgent(input: StrategistRunInput): Promise<Gen
 Brand: ${input.brandName}
 Industry: ${input.industry}
 Goals: ${input.goals.join(", ")}
-Active platforms: ${input.platforms.join(", ")}
+Active platforms: ${platformList}
 Start date: ${input.startDate}
 
 First, retrieve brand context for "${input.brandName}" with brandProfileId "${input.brandProfileId}".
 Then search for current trends in ${input.industry}.
 ${input.feedbackLoopEnabled ? `Also read engagement analytics for brandProfileId "${input.brandProfileId}" to adjust content weighting.` : ""}
 
-Return a JSON array of 30 plan items covering the full 30 days.`;
+Return a JSON array of exactly ${targetItemCount} plan items covering the full 30 days.
+IMPORTANT: Distribute posts evenly across ALL ${platformCount} platforms (${platformList}). Do not concentrate posts on a single platform.`;
 
   let response = await chat.sendMessage(userMessage);
 
@@ -146,7 +151,7 @@ Return a JSON array of 30 plan items covering the full 30 days.`;
 
   let text = response.response.text();
 
-  const JSON_RETRY_PROMPT = "Output ONLY the raw JSON array of 30 plan items. No markdown fences, no explanation. Start with [ and end with ].";
+  const JSON_RETRY_PROMPT = `Output ONLY the raw JSON array of ${targetItemCount} plan items. No markdown fences, no explanation. Start with [ and end with ].`;
 
   let parsed: unknown = null;
   for (let attempt = 0; attempt < 4; attempt++) {

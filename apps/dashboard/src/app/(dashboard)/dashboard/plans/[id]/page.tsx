@@ -114,6 +114,11 @@ export default function PlanDetailPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", id] }),
   });
 
+  const generateContent = useMutation({
+    mutationFn: () => api.post(`/plans/${id}/generate-content`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", id] }),
+  });
+
   const updatePlan = useMutation({
     mutationFn: (body: { name?: string; goals?: string[]; feedbackLoopEnabled?: boolean }) =>
       api.put(`/plans/${id}`, body),
@@ -163,6 +168,7 @@ export default function PlanDetailPage() {
   const approvedCount = plan.posts.filter((p) => ["approved", "scheduled"].includes(p.status)).length;
   const pendingCount = plan.posts.filter((p) => p.status === "pending_review").length;
   const failedCount = plan.posts.filter((p) => p.status === "failed").length;
+  const draftCount = plan.posts.filter((p) => p.status === "draft").length;
 
   return (
     <div className="space-y-6">
@@ -321,7 +327,7 @@ export default function PlanDetailPage() {
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-5 gap-3">
         <div className="p-4 bg-white border border-gray-200 rounded-xl text-center">
           <p className="text-2xl font-bold text-green-600">{publishedCount}</p>
           <p className="text-xs text-gray-500 mt-0.5">Published</p>
@@ -337,6 +343,10 @@ export default function PlanDetailPage() {
         <div className={`p-4 bg-white rounded-xl text-center ${failedCount > 0 ? "border border-red-100" : "border border-gray-200"}`}>
           <p className={`text-2xl font-bold ${failedCount > 0 ? "text-red-500" : "text-gray-300"}`}>{failedCount}</p>
           <p className="text-xs text-gray-500 mt-0.5">Failed</p>
+        </div>
+        <div className={`p-4 bg-white rounded-xl text-center ${draftCount > 0 ? "border border-gray-300" : "border border-gray-200"}`}>
+          <p className={`text-2xl font-bold ${draftCount > 0 ? "text-gray-500" : "text-gray-300"}`}>{draftCount}</p>
+          <p className="text-xs text-gray-500 mt-0.5">Draft</p>
         </div>
       </div>
 
@@ -356,6 +366,15 @@ export default function PlanDetailPage() {
           </button>
         ))}
         <div className="ml-auto flex items-center gap-3">
+          {draftCount > 0 && ["active", "pending_review"].includes(plan.status) && (
+            <button
+              onClick={() => generateContent.mutate()}
+              disabled={generateContent.isPending}
+              className="text-xs text-gray-500 hover:text-gray-700 hover:underline disabled:opacity-50"
+            >
+              {generateContent.isPending ? "Generating…" : `Generate content for ${draftCount} draft${draftCount !== 1 ? "s" : ""} →`}
+            </button>
+          )}
           {pendingCount > 0 && plan.status === "active" && (
             <Link
               href="/dashboard/review"

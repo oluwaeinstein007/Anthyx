@@ -101,22 +101,29 @@ export async function runStrategistAgent(input: StrategistRunInput): Promise<Gen
     input.organizationId,
   );
 
+  // Generate enough items to spread across all selected platforms
+  // (up to 2 posts per day when multiple platforms are selected)
+  const platformCount = input.platforms.length;
+  const targetItemCount = input.durationDays * Math.min(platformCount, 2);
+
   const model = genAI.getGenerativeModel({ model: MODEL, systemInstruction, tools: TOOLS });
   const chat = model.startChat({ history: [] });
 
+  const platformList = input.platforms.join(", ");
   const userMessage = `
 Generate a ${input.durationDays}-day marketing calendar for:
 Brand: ${input.brandName}
 Industry: ${input.industry}
 Goals: ${input.goals.join(", ")}
-Active platforms: ${input.platforms.join(", ")}
+Active platforms: ${platformList}
 Start date: ${input.startDate}
 
 First, retrieve brand context for "${input.brandName}" with brandProfileId "${input.brandProfileId}".
 Then search for current trends in ${input.industry}.
 ${input.feedbackLoopEnabled ? `Also read engagement analytics for brandProfileId "${input.brandProfileId}" to adjust content weighting.` : ""}
 
-Return a JSON array of exactly ${input.durationDays} plan items covering the full ${input.durationDays} days.
+Return a JSON array of exactly ${targetItemCount} plan items covering the full ${input.durationDays} days.
+IMPORTANT: Distribute posts evenly across ALL ${platformCount} platforms (${platformList}). Each platform must appear roughly equally. Do not concentrate posts on a single platform.
 `.trim();
 
   let response = await chat.sendMessage(userMessage);
@@ -140,7 +147,7 @@ Return a JSON array of exactly ${input.durationDays} plan items covering the ful
   let text = response.response.text();
 
   const { extractJsonArray } = await import("./llm-client");
-  const JSON_RETRY_PROMPT = `Output ONLY the raw JSON array of ${input.durationDays} plan items. No markdown fences, no explanation. Start with [ and end with ].`;
+  const JSON_RETRY_PROMPT = `Output ONLY the raw JSON array of ${targetItemCount} plan items. No markdown fences, no explanation. Start with [ and end with ].`;
 
   let parsed: unknown = null;
   for (let attempt = 0; attempt < 4; attempt++) {
