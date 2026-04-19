@@ -209,6 +209,74 @@ The review queue currently shows all `pending_review` posts flat. Agency-tier cu
 
 ---
 
+### Platform-Specific Text Formatting
+
+**Current problem:** The copywriter receives platform rules via `prompt-builder.ts` (character limits, hashtag placement, tone) but the publisher in `social-mcp.ts` does crude string concatenation — it trusts whatever the LLM returned and just slaps hashtags on the end. The two sides don't enforce the same rules, so the LLM output and the final published text can diverge.
+
+Specific failures today:
+
+| Platform | Current behaviour | What should happen |
+|---|---|---|
+| **X** | `content + hashtags joined with spaces, sliced to 280` — silent truncation mid-sentence | Hard-enforce 280 chars, trim hashtags first not content, warn if content alone exceeds limit |
+| **Instagram** | Hashtags appended to caption inline | Hashtags must go in a **first comment**, not in the caption — the LLM is told this but the publisher doesn't enforce it |
+| **LinkedIn** | Hashtags appended with `\n\n` | Inline hashtags are correct for LinkedIn but bold/italic markers (`**text**`) should be stripped — LinkedIn's API ignores markdown and renders it as literal characters |
+| **Telegram** | `parse_mode: Markdown` set | Correct, but the LLM output must use Telegram's specific Markdown subset (e.g. `*bold*` not `**bold**`) — no sanitisation is applied before sending |
+| **Facebook** | Falls to `default` throw — not implemented | Needs plain text, no markdown, hashtags inline, 400 char soft limit enforced |
+| **TikTok** | Falls to `default` throw — not implemented | Caption + 3–5 hashtags, 2200 char limit, hook must appear before the "more" fold (~100 chars) |
+| **Threads** | Not in schema | Same caption rules as Instagram — hashtags in first comment, visual-first framing |
+| **Bluesky** | Not in schema | 300 char limit, hashtags as native facets (not appended text), links as embed cards |
+| **Discord** | Not in schema | Supports full Markdown (bold, italic, code blocks, headers) — format accordingly |
+| **Reddit** | Not in schema | Title + body structure, Markdown body, no inline hashtags — post to specific subreddit |
+| **YouTube** | Not in schema | Description formatting: chapters via timestamps, hashtags in description body, first 100 chars are the visible preview |
+| **WhatsApp** | Not in schema | Bold via `*text*`, italic via `_text_`, no hashtags, links auto-preview |
+
+**The fix: a `formatPostForPlatform` function**
+
+Add a pure formatter that runs between content generation and publishing. It receives the raw copywriter output (`content`, `hashtags`, `mediaUrls`) and returns a `FormattedPost` shaped for each platform's actual API contract:
+
+```typescript
+// apps/api/src/services/posting/formatter.ts
+
+export interface FormattedPost {
+  primaryText: string        // main caption / body / tweet text
+  firstComment?: string      // Instagram / Threads hashtag comment
+  hashtags?: string[]        // platforms that take hashtags as separate fields
+  markupMode?: 'markdown' | 'html' | 'none'
+  segments?: string[]        // for threads / carousels (future)
+  truncated: boolean         // flag if content was cut to fit the limit
+}
+
+export function formatPostForPlatform(
+  platform: Platform,
+  content: string,
+  hashtags: string[],
+): FormattedPost
+```
+
+**Per-platform formatting rules for the formatter:**
+
+- **X** — enforce 280 chars; if over limit, trim content to fit, preserve hashtags (max 2) at the end; set `truncated: true` and log it
+- **Instagram / Threads** — caption is content only (no hashtags); hashtags go in `firstComment` joined by spaces; double line breaks preserved; 2200 char cap on caption
+- **LinkedIn** — strip markdown syntax (asterisks, underscores) from content before sending; append max 3 hashtags inline at end separated by spaces; enforce 3000 char limit
+- **Telegram** — sanitise to Telegram Markdown v1 subset: `*bold*`, `_italic_`, `` `code` ``, `[text](url)`; strip unsupported syntax; no character limit
+- **Facebook** — strip all markdown; hashtags inline at end; soft warn if over 400 chars
+- **TikTok** — ensure hook is within first 100 chars (before "more" fold); 3–5 hashtags appended; 2200 char cap
+- **Bluesky** — enforce 300 char limit including hashtags; hashtags as plain text (facet encoding handled by social-mcp); no markdown
+- **Discord** — pass through standard Markdown (bold `**`, italic `*`, code blocks, headers); no hashtags
+- **Reddit** — split content into `title` (first line, 300 char max) and `body` (remainder, Markdown); no hashtags
+- **YouTube** — first 100 chars become the visible preview snippet; chapters formatted as `00:00 Section name`; hashtags in body at end
+- **WhatsApp** — convert `**bold**` → `*bold*`, `*italic*` → `_italic_`; strip hashtags; 4096 char limit
+- **Slack** — convert Markdown to Slack mrkdwn: `**bold**` → `*bold*`, `` `code` `` unchanged, `[text](url)` → `<url|text>`; no hashtags
+
+**Where it plugs in:**
+
+`executor.ts` calls `publishToplatform` → insert `formatPostForPlatform` before the `publishPost` call so every platform gets correctly shaped text. The copywriter output is never sent raw to an API again.
+
+**Also update `prompt-builder.ts`:**
+Add new platform rules for Threads, Bluesky, Discord, Reddit, YouTube, WhatsApp, and Slack to `PLATFORM_RULES` so the LLM generates content that aligns with what the formatter will enforce.
+
+---
+
 ### TikTok and Facebook are not implemented — social-mcp is not used at all
 
 `publishPost` in [apps/api/src/services/posting/social-mcp.ts](apps/api/src/services/posting/social-mcp.ts) only handles `x`, `instagram`, `linkedin`, and `telegram`. Both `tiktok` and `facebook` fall to the `default` throw (`"Platform X not yet supported"`), meaning any scheduled TikTok or Facebook post will fail at execution time despite being valid in the schema.

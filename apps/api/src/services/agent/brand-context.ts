@@ -15,7 +15,13 @@ export async function retrieveBrandVoiceFromQdrant(
   query: string,
   topK = 8,
 ): Promise<string> {
-  const vector = await embed(query);
+  let vector: number[];
+  try {
+    vector = await embed(query);
+  } catch (err) {
+    console.warn(`[BrandContext] Embedding failed, proceeding without brand voice: ${err}`);
+    return "";
+  }
 
   const results = await qdrant.search(`brand_${brandProfileId}`, {
     vector,

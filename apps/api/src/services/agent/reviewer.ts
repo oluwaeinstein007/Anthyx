@@ -34,16 +34,21 @@ export interface ReviewerRunInput {
 export async function runReviewerAgent(input: ReviewerRunInput): Promise<ReviewerOutput> {
   const platformConstraints = getPlatformConstraints(input.platform);
 
+  const instagramHashtagNote =
+    input.platform === "instagram"
+      ? "\nNOTE: The HASHTAGS field below is stored separately and will be auto-posted as the first comment — do NOT flag hashtags for being in the caption. Only flag if #tags appear inside the POST CONTENT text itself."
+      : "";
+
   const userMessage = `
 Review this post:
 
 POST CONTENT:
 "${input.postContent}"
 
-HASHTAGS: ${input.hashtags.join(", ")}
+HASHTAGS (separate field${input.platform === "instagram" ? ", posted as first comment" : ""}): ${input.hashtags.join(", ")}
 
 PLATFORM RULES:
-${platformConstraints}
+${platformConstraints}${instagramHashtagNote}
 
 BRAND RULES:
 ${input.brandRules}

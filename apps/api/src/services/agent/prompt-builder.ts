@@ -3,7 +3,7 @@ import type { Platform } from "@anthyx/types";
 const PLATFORM_RULES: Record<Platform, string> = {
   x: "Hard limit: 280 characters including spaces. 1–2 hashtags max. Hook must land in first 8 words. Be punchy and direct.",
   instagram:
-    "Caption up to 2,200 characters. Visual-first framing. Save hashtags (20–30) for first comment, not caption. Use line breaks for readability.",
+    "Caption up to 2,200 characters. Visual-first framing. Use \\n\\n between paragraphs for readability — do NOT write walls of text. CRITICAL: Do NOT include any #hashtags in the caption text. Put hashtags ONLY in the 'hashtags' JSON field — the system posts them as a first comment automatically.",
   linkedin:
     "Professional register. Thought leadership angle. 1,300 character soft limit for full display (content after truncates). Max 3 hashtags inline. Start with a hook, end with a question or CTA.",
   telegram:

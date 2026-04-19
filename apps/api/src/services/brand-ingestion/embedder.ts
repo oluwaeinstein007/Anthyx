@@ -76,12 +76,23 @@ export async function embedAndStore(
   }
 }
 
-export async function embed(text: string): Promise<number[]> {
+export async function embed(text: string, retries = 3): Promise<number[]> {
   const embeddingModel = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
-  const result = await embeddingModel.embedContent({
-    content: { role: "user", parts: [{ text }] },
-  });
-  return result.embedding.values;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const result = await embeddingModel.embedContent({
+        content: { role: "user", parts: [{ text }] },
+      });
+      return result.embedding.values;
+    } catch (err) {
+      lastError = err;
+      if (attempt < retries - 1) {
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt)); // 1s, 2s backoff
+      }
+    }
+  }
+  throw lastError;
 }
 
 export async function ingestBrandDocument(
