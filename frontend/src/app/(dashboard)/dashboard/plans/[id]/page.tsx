@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
 import { Pencil, X, Check, Trash2 } from "lucide-react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 interface ScheduledPost {
   id: string;
@@ -87,6 +88,7 @@ export default function PlanDetailPage() {
   const [editName, setEditName] = useState("");
   const [editGoals, setEditGoals] = useState("");
   const [editFeedback, setEditFeedback] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Per-post edit state
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
@@ -368,11 +370,7 @@ export default function PlanDetailPage() {
               <span className="text-xs text-blue-600 animate-pulse">Generating…</span>
             )}
             <button
-              onClick={() => {
-                if (confirm("Delete this plan and all its posts? This cannot be undone.")) {
-                  deletePlan.mutate();
-                }
-              }}
+              onClick={() => setConfirmDelete(true)}
               disabled={deletePlan.isPending}
               className="p-1.5 text-gray-400 hover:text-red-500 transition-colors rounded"
               title="Delete plan"
@@ -679,6 +677,17 @@ export default function PlanDetailPage() {
               })
           )}
         </div>
+      )}
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Delete plan"
+          description="This will permanently delete the plan and all its scheduled posts. This cannot be undone."
+          confirmLabel="Delete plan"
+          isPending={deletePlan.isPending}
+          onConfirm={() => deletePlan.mutate()}
+          onCancel={() => setConfirmDelete(false)}
+        />
       )}
     </div>
   );

@@ -1,9 +1,12 @@
 "use client";
 
-import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
+import { Pencil, Check, X, Trash2 } from "lucide-react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 interface BrandContext {
   brandStatements?: string[];
@@ -38,6 +41,13 @@ interface BrandProfile {
 
 export default function BrandDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editIndustry, setEditIndustry] = useState("");
+  const [editError, setEditError] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const { data: brand, isLoading } = useQuery<BrandProfile>({
     queryKey: ["brand", id],
@@ -54,6 +64,43 @@ export default function BrandDetailPage() {
       return hasData ? false : 5000;
     },
   });
+
+  const updateBrand = useMutation({
+    mutationFn: (body: { name?: string; industry?: string }) =>
+      api.put(`/brands/${id}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["brand", id] });
+      qc.invalidateQueries({ queryKey: ["brands"] });
+      setEditing(false);
+      setEditError("");
+    },
+    onError: (err) => {
+      setEditError(err instanceof Error ? err.message : "Failed to update brand");
+    },
+  });
+
+  const deleteBrand = useMutation({
+    mutationFn: () => api.delete(`/brands/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["brands"] });
+      router.push("/dashboard/brands");
+    },
+  });
+
+  const startEdit = () => {
+    if (!brand) return;
+    setEditName(brand.name);
+    setEditIndustry(brand.industry ?? "");
+    setEditError("");
+    setEditing(true);
+  };
+
+  const saveEdit = () => {
+    updateBrand.mutate({
+      name: editName.trim() || undefined,
+      industry: editIndustry.trim() || undefined,
+    });
+  };
 
   if (isLoading)
     return <div className="text-sm text-gray-500 animate-pulse">Loading brand...</div>;
@@ -86,18 +133,82 @@ export default function BrandDetailPage() {
           ← Brands
         </Link>
         <div className="flex items-start justify-between mt-2">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{brand.name}</h1>
-            {brand.industry && (
-              <p className="text-sm text-gray-500 mt-0.5">{brand.industry}</p>
+          <div className="flex-1 min-w-0 pr-4">
+            {editing ? (
+              <div className="space-y-3">
+                {editError && (
+                  <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs">
+                    {editError}
+                  </div>
+                )}
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full text-2xl font-bold text-gray-900 border-b border-gray-300 focus:outline-none focus:border-green-500 bg-transparent pb-1"
+                  placeholder="Brand name"
+                />
+                <input
+                  type="text"
+                  value={editIndustry}
+                  onChange={(e) => setEditIndustry(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                  placeholder="Industry (optional)"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={saveEdit}
+                    disabled={!editName.trim() || updateBrand.isPending}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    {updateBrand.isPending ? "Saving..." : "Save changes"}
+                  </button>
+                  <button
+                    onClick={() => setEditing(false)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 text-xs rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-2xl font-bold text-gray-900">{brand.name}</h1>
+                  <button
+                    onClick={startEdit}
+                    className="p-1 text-gray-400 hover:text-gray-600 transition-colors rounded"
+                    title="Edit brand"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                </div>
+                {brand.industry && (
+                  <p className="text-sm text-gray-500 mt-0.5">{brand.industry}</p>
+                )}
+              </>
             )}
           </div>
-          <Link
-            href={`/dashboard/brands/${id}/ingest`}
-            className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
-          >
-            Ingest document
-          </Link>
+          {!editing && (
+            <div className="flex items-center gap-2 shrink-0">
+              <Link
+                href={`/dashboard/brands/${id}/ingest`}
+                className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
+              >
+                Ingest document
+              </Link>
+              <button
+                onClick={() => setConfirmDelete(true)}
+                disabled={deleteBrand.isPending}
+                className="p-2 text-gray-400 hover:text-red-500 transition-colors rounded-lg"
+                title="Delete brand"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -322,6 +433,17 @@ export default function BrandDetailPage() {
         Brand created {new Date(brand.createdAt).toLocaleDateString()}. Ingest additional
         documents to improve voice fidelity.
       </p>
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Delete brand"
+          description="This will permanently delete the brand and all its AI memory. This cannot be undone."
+          confirmLabel="Delete brand"
+          isPending={deleteBrand.isPending}
+          onConfirm={() => deleteBrand.mutate()}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      )}
     </div>
   );
 }
