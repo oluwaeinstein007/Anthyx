@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { User, Lock, Check } from "lucide-react";
@@ -25,12 +25,17 @@ export default function SettingsPage() {
   const [profileSuccess, setProfileSuccess] = useState(false);
   const [profileError, setProfileError] = useState("");
 
+  useEffect(() => {
+    if (me?.name && !name) setName(me.name);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.name]);
+
   const [passwords, setPasswords] = useState({ current: "", next: "", confirm: "" });
   const [passwordSuccess, setPasswordSuccess] = useState(false);
   const [passwordError, setPasswordError] = useState("");
 
   const updateProfile = useMutation({
-    mutationFn: () => api.put("/auth/me", { name: name || me?.name }),
+    mutationFn: () => api.put("/auth/me", { name: name.trim() }),
     onSuccess: () => {
       setProfileSuccess(true);
       setProfileError("");
@@ -102,7 +107,7 @@ export default function SettingsPage() {
           <label className="block text-xs font-medium text-gray-600 mb-1.5">Display name</label>
           <input
             className={INPUT}
-            placeholder={me?.name ?? "Your name"}
+            placeholder="Your display name"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
@@ -120,7 +125,7 @@ export default function SettingsPage() {
 
         <button
           onClick={() => updateProfile.mutate()}
-          disabled={updateProfile.isPending || (!name && !me?.name)}
+          disabled={updateProfile.isPending || !name.trim()}
           className="px-5 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white text-sm font-medium rounded-xl transition-colors"
         >
           {updateProfile.isPending ? "Saving…" : "Save changes"}

@@ -113,6 +113,7 @@ export const brandProfiles = pgTable("brand_profiles", {
   typography: jsonb("typography"),
   qdrantCollectionId: text("qdrant_collection_id").unique(),
   sourceFiles: jsonb("source_files"),
+  brandContext: jsonb("brand_context"),
   ingestStatus: text("ingest_status").default("idle"), // 'idle' | 'processing' | 'done' | 'failed'
   bannerBearTemplateUid: text("bannerbear_template_uid"),
   logoUrl: text("logo_url"),

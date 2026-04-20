@@ -9,7 +9,7 @@ Return ONLY valid JSON — no prose, no markdown fences.
 const EXTRACTION_USER_TEMPLATE = (doc: string) => `
 Analyze the following brand document and extract structured data in this exact JSON format:
 {
-  "industry": "string",
+  "industry": "string — the industry or vertical this brand operates in",
   "voiceTraits": {
     "professional": boolean,
     "witty": boolean,
@@ -18,18 +18,27 @@ Analyze the following brand document and extract structured data in this exact J
     "authoritative": boolean,
     "casual": boolean
   },
-  "toneDescriptors": ["string"],
+  "toneDescriptors": ["adjective descriptors of the brand tone, e.g. 'bold', 'warm', 'trustworthy'"],
   "primaryColors": ["#hexcode"],
   "secondaryColors": ["#hexcode"],
   "typography": {
     "primary": "font name or null",
     "secondary": "font name or null"
   },
-  "brandStatements": ["key brand messages, max 5"],
-  "audienceNotes": ["target audience descriptors, max 3"]
+  "brandStatements": ["key brand messages or taglines, max 5"],
+  "audienceNotes": ["target audience descriptors, max 3, e.g. 'busy professionals aged 30-45'"],
+  "productsServices": ["list of specific products or services the brand offers, max 10 — be specific, e.g. 'email marketing software', 'brand strategy consulting'"],
+  "valueProposition": "one sentence describing what makes this brand uniquely valuable to customers, or null if not determinable",
+  "targetMarket": "a concise description of the primary target market/customer segment, or null if not determinable",
+  "contentPillars": ["3–6 content themes or topic categories this brand should consistently post about, e.g. 'industry tips', 'behind the scenes', 'customer stories'"],
+  "competitors": ["known competitor brand names if mentioned, max 5, empty array if none found"]
 }
 
-If a field cannot be determined, use sensible defaults (empty arrays, false booleans, null strings).
+Rules:
+- If a field cannot be determined from the document, use sensible defaults (empty arrays, false booleans, null strings).
+- For productsServices, be specific — list actual product/service names, not categories.
+- For contentPillars, infer from the brand's audience, industry, and voice even if not explicitly stated.
+- For hex colors, only include actual hex codes found in the document. Use empty arrays if none.
 
 Document:
 ${doc}
@@ -43,7 +52,7 @@ export async function extractBrandData(documentText: string): Promise<BrandExtra
     userMessage: EXTRACTION_USER_TEMPLATE(truncated),
     geminiModel: process.env["GEMINI_EXTRACTION_MODEL"] ?? GEMINI_FLASH,
     claudeModel: CLAUDE_HAIKU,
-    maxTokens: 1024,
+    maxTokens: 1500,
   });
 
   return BrandExtractionSchema.parse(extractJsonObject(text));

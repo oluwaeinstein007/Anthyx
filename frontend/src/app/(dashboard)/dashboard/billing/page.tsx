@@ -1,9 +1,12 @@
 "use client";
 
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
-import { CreditCard, ArrowRight, AlertTriangle, Clock, TrendingUp } from "lucide-react";
+import {
+  CreditCard, ArrowRight, AlertTriangle, Clock,
+  TrendingUp, Sparkles, Check,
+} from "lucide-react";
 
 interface Subscription {
   tier: string;
@@ -43,13 +46,52 @@ const TIER_PRICES: Record<string, string> = {
   scale: "$999/mo",
 };
 
+const PLANS = [
+  {
+    tier: "starter",
+    label: "Starter",
+    price: "$49",
+    interval: "month",
+    features: ["1 brand", "3 social accounts", "150 posts/mo", "Email support"],
+  },
+  {
+    tier: "growth",
+    label: "Growth",
+    price: "$149",
+    interval: "month",
+    features: ["3 brands", "10 social accounts", "500 posts/mo", "Feedback loop", "Priority support"],
+    highlight: true,
+  },
+  {
+    tier: "agency",
+    label: "Agency",
+    price: "$399",
+    interval: "month",
+    features: ["10 brands", "Unlimited accounts", "Unlimited posts", "CSV reports", "White-label", "Dedicated support"],
+  },
+];
+
 export default function BillingPage() {
-  const { data, isLoading } = useQuery<BillingData>({
+  const qc = useQueryClient();
+
+  const { data, isLoading, error } = useQuery<BillingData>({
     queryKey: ["billing"],
     queryFn: () => api.get<BillingData>("/billing/subscription"),
+    retry: false,
   });
 
-  const cancel = useMutation({ mutationFn: () => api.post("/billing/cancel") });
+  const cancel = useMutation({
+    mutationFn: () => api.post("/billing/cancel"),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["billing"] }),
+  });
+
+  const subscribe = useMutation({
+    mutationFn: ({ tier, interval }: { tier: string; interval: string }) =>
+      api.post<{ checkoutUrl: string }>("/billing/subscribe", { tier, interval }),
+    onSuccess: (res) => {
+      if (res.checkoutUrl) window.location.href = res.checkoutUrl;
+    },
+  });
 
   if (isLoading) {
     return (
@@ -60,7 +102,68 @@ export default function BillingPage() {
       </div>
     );
   }
-  if (!data) return null;
+
+  const noSubscription = !!error || !data;
+
+  if (noSubscription) {
+    return (
+      <div className="space-y-8 max-w-4xl">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Billing</h1>
+          <p className="text-sm text-gray-500 mt-1">Choose a plan to unlock your full content engine.</p>
+        </div>
+
+        <div className="grid md:grid-cols-3 gap-4">
+          {PLANS.map((plan) => (
+            <div
+              key={plan.tier}
+              className={`bg-white rounded-2xl p-6 border flex flex-col gap-5 ${
+                plan.highlight
+                  ? "border-green-400 shadow-lg shadow-green-50 ring-2 ring-green-400 ring-opacity-30"
+                  : "border-gray-200"
+              }`}
+            >
+              {plan.highlight && (
+                <span className="self-start text-xs font-semibold bg-green-600 text-white px-2.5 py-0.5 rounded-full">
+                  Most popular
+                </span>
+              )}
+              <div>
+                <p className="text-xs text-gray-400 mb-1">{plan.label}</p>
+                <div className="flex items-end gap-1">
+                  <span className="text-3xl font-bold text-gray-900">{plan.price}</span>
+                  <span className="text-sm text-gray-400 mb-1">/{plan.interval}</span>
+                </div>
+              </div>
+              <ul className="space-y-2 flex-1">
+                {plan.features.map((f) => (
+                  <li key={f} className="flex items-center gap-2 text-sm text-gray-600">
+                    <Check className="w-4 h-4 text-green-500 shrink-0" />
+                    {f}
+                  </li>
+                ))}
+              </ul>
+              <button
+                onClick={() => subscribe.mutate({ tier: plan.tier, interval: "monthly" })}
+                disabled={subscribe.isPending}
+                className={`w-full py-2.5 text-sm font-medium rounded-xl transition-colors ${
+                  plan.highlight
+                    ? "bg-green-600 hover:bg-green-700 text-white"
+                    : "border border-gray-200 text-gray-700 hover:bg-gray-50"
+                }`}
+              >
+                {subscribe.isPending ? "Redirecting…" : "Get started"}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <p className="text-xs text-center text-gray-400">
+          All plans include a 14-day free trial. No credit card required to start.
+        </p>
+      </div>
+    );
+  }
 
   const { subscription: sub, usage } = data;
   const isTrial = sub.status === "trialing" && sub.trialEndsAt && new Date(sub.trialEndsAt) > new Date();
@@ -119,7 +222,7 @@ export default function BillingPage() {
             href="/dashboard/billing/upgrade"
             className="inline-flex items-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-xl transition-colors"
           >
-            Upgrade plan <ArrowRight className="w-4 h-4" />
+            <Sparkles className="w-4 h-4" /> Upgrade plan <ArrowRight className="w-4 h-4" />
           </Link>
         </div>
       </div>

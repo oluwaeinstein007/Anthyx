@@ -271,4 +271,36 @@ export async function ingestBrandDocument(
       brandProfileId,
     });
   }
+
+  // 7. Embed products/services
+  if (extraction.productsServices && extraction.productsServices.length > 0) {
+    await embedAndStore(
+      extraction.productsServices.map((p) => `Product or service offered: ${p}`),
+      { type: "brand_statement", source: "extracted", organizationId, brandProfileId },
+    );
+  }
+
+  // 8. Embed value proposition
+  if (extraction.valueProposition) {
+    await embedAndStore(
+      [`Value proposition: ${extraction.valueProposition}`],
+      { type: "brand_statement", source: "extracted", organizationId, brandProfileId },
+    );
+  }
+
+  // 9. Embed target market
+  if (extraction.targetMarket) {
+    await embedAndStore(
+      [`Target market: ${extraction.targetMarket}`],
+      { type: "audience_note", source: "extracted", organizationId, brandProfileId },
+    );
+  }
+
+  // 10. Embed content pillars
+  if (extraction.contentPillars && extraction.contentPillars.length > 0) {
+    await embedAndStore(
+      extraction.contentPillars.map((p) => `Content pillar: ${p}`),
+      { type: "brand_statement", source: "extracted", organizationId, brandProfileId },
+    );
+  }
 }

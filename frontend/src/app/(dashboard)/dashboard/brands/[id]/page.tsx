@@ -5,6 +5,16 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
 
+interface BrandContext {
+  brandStatements?: string[];
+  audienceNotes?: string[];
+  productsServices?: string[];
+  valueProposition?: string | null;
+  targetMarket?: string | null;
+  contentPillars?: string[];
+  competitors?: string[];
+}
+
 interface BrandProfile {
   id: string;
   name: string;
@@ -22,6 +32,7 @@ interface BrandProfile {
   primaryColors: string[] | null;
   secondaryColors: string[] | null;
   typography: { primary: string | null; secondary: string | null } | null;
+  brandContext: BrandContext | null;
   createdAt: string;
 }
 
@@ -213,6 +224,84 @@ export default function BrandDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Products & Services */}
+      {brand.brandContext?.productsServices && brand.brandContext.productsServices.length > 0 && (
+        <div className="p-5 bg-white border border-gray-200 rounded-xl space-y-3">
+          <h2 className="text-sm font-semibold text-gray-900">Products & services</h2>
+          <div className="flex flex-wrap gap-1.5">
+            {brand.brandContext.productsServices.map((item) => (
+              <span key={item} className="text-xs bg-green-50 text-green-700 px-2.5 py-1 rounded-full">
+                {item}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Value proposition & target market */}
+      {(brand.brandContext?.valueProposition || brand.brandContext?.targetMarket) && (
+        <div className="p-5 bg-white border border-gray-200 rounded-xl space-y-3">
+          <h2 className="text-sm font-semibold text-gray-900">Positioning</h2>
+          {brand.brandContext.valueProposition && (
+            <div>
+              <p className="text-xs text-gray-400 mb-1">Value proposition</p>
+              <p className="text-sm text-gray-700">{brand.brandContext.valueProposition}</p>
+            </div>
+          )}
+          {brand.brandContext.targetMarket && (
+            <div>
+              <p className="text-xs text-gray-400 mb-1">Target market</p>
+              <p className="text-sm text-gray-700">{brand.brandContext.targetMarket}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Content pillars */}
+      {brand.brandContext?.contentPillars && brand.brandContext.contentPillars.length > 0 && (
+        <div className="p-5 bg-white border border-gray-200 rounded-xl space-y-3">
+          <h2 className="text-sm font-semibold text-gray-900">Content pillars</h2>
+          <div className="flex flex-wrap gap-1.5">
+            {brand.brandContext.contentPillars.map((pillar) => (
+              <span key={pillar} className="text-xs bg-amber-50 text-amber-700 px-2.5 py-1 rounded-full">
+                {pillar}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Audience & brand statements */}
+      {(brand.brandContext?.audienceNotes?.length || brand.brandContext?.brandStatements?.length) ? (
+        <div className="p-5 bg-white border border-gray-200 rounded-xl space-y-4">
+          <h2 className="text-sm font-semibold text-gray-900">Brand knowledge</h2>
+          {brand.brandContext?.audienceNotes && brand.brandContext.audienceNotes.length > 0 && (
+            <div>
+              <p className="text-xs text-gray-400 mb-1.5">Audience notes</p>
+              <ul className="space-y-1">
+                {brand.brandContext.audienceNotes.map((note) => (
+                  <li key={note} className="text-sm text-gray-600 flex gap-2">
+                    <span className="text-gray-300 shrink-0">·</span>{note}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {brand.brandContext?.brandStatements && brand.brandContext.brandStatements.length > 0 && (
+            <div>
+              <p className="text-xs text-gray-400 mb-1.5">Key messages</p>
+              <ul className="space-y-1">
+                {brand.brandContext.brandStatements.map((s) => (
+                  <li key={s} className="text-sm text-gray-600 flex gap-2">
+                    <span className="text-gray-300 shrink-0">·</span>{s}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      ) : null}
 
       {/* If no extracted data yet */}
       {!hasData && (

@@ -10,7 +10,7 @@ const router = Router();
 const CreateCampaignSchema = z.object({
   name: z.string().min(1).max(200),
   goals: z.array(z.string()).optional(),
-  budgetCapCents: z.number().int().positive().optional(),
+  budgetCapCents: z.number().int().positive().nullable().optional(),
 });
 
 const UpdateCampaignSchema = CreateCampaignSchema.partial();

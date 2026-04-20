@@ -65,6 +65,9 @@ importers:
       express:
         specifier: ^4.18.0
         version: 4.22.1
+      express-async-errors:
+        specifier: ^3.1.1
+        version: 3.1.1(express@4.22.1)
       https-proxy-agent:
         specifier: ^7.0.0
         version: 7.0.6
@@ -2667,6 +2670,11 @@ packages:
   execa@9.6.1:
     resolution: {integrity: sha512-9Be3ZoN4LmYR90tUoVu2te2BsbzHfhJyfEiAVfz7N5/zv+jduIfLrV2xdQXOHbaD6KgpGdO9PRPM1Y4Q9QkPkA==}
     engines: {node: ^18.19.0 || >=20.5.0}
+
+  express-async-errors@3.1.1:
+    resolution: {integrity: sha512-h6aK1da4tpqWSbyCa3FxB/V6Ehd4EEB15zyQq9qe75OZBp0krinNKuH4rAY+S/U/2I36vdLAUFSjQJ+TFmODng==}
+    peerDependencies:
+      express: ^4.16.2
 
   express-rate-limit@8.3.2:
     resolution: {integrity: sha512-77VmFeJkO0/rvimEDuUC5H30oqUC4EyOhyGccfqoLebB0oiEYfM7nwPrsDsBL1gsTpwfzX8SFy2MT3TDyRq+bg==}
@@ -6400,6 +6408,10 @@ snapshots:
       signal-exit: 4.1.0
       strip-final-newline: 4.0.0
       yoctocolors: 2.1.2
+
+  express-async-errors@3.1.1(express@4.22.1):
+    dependencies:
+      express: 4.22.1
 
   express-rate-limit@8.3.2(express@5.2.1):
     dependencies:

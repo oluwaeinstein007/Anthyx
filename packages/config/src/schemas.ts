@@ -34,6 +34,11 @@ export const BrandExtractionSchema = z.object({
   }),
   brandStatements: z.array(z.string()).max(5),
   audienceNotes: z.array(z.string()).max(3),
+  productsServices: z.array(z.string()).max(10).optional().default([]),
+  valueProposition: z.string().nullable().optional().default(null),
+  targetMarket: z.string().nullable().optional().default(null),
+  contentPillars: z.array(z.string()).max(6).optional().default([]),
+  competitors: z.array(z.string()).max(5).optional().default([]),
 });
 
 export type BrandExtraction = z.infer<typeof BrandExtractionSchema>;

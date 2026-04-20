@@ -1,7 +1,11 @@
 import OpenAI from "openai";
 import { uploadToCDN } from "./cdn";
 
-const openai = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] });
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!_openai) _openai = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] });
+  return _openai;
+}
 
 export async function generateAIAsset(params: {
   prompt: string;
@@ -13,7 +17,7 @@ export async function generateAIAsset(params: {
 
   const fullPrompt = `${params.prompt}. Primary brand color: ${primaryColor}, accent: ${accentColor}. Professional digital marketing visual. Clean, modern aesthetic. No text overlay.`;
 
-  const response = await openai.images.generate({
+  const response = await getOpenAI().images.generate({
     model: process.env["DALLE_MODEL"] ?? "dall-e-3",
     prompt: fullPrompt,
     size: params.aspectRatio === "16:9" ? "1792x1024" : "1024x1024",

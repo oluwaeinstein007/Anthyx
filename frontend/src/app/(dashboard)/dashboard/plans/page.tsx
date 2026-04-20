@@ -4,7 +4,7 @@ import { useState, useRef, KeyboardEvent } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
-import { Plus, Calendar, ArrowRight, X, Sparkles } from "lucide-react";
+import { Plus, Calendar, ArrowRight, X, Sparkles, AlertCircle, CheckCircle2 } from "lucide-react";
 
 const SUGGESTED_GOALS = [
   "Increase brand awareness",
@@ -55,6 +55,8 @@ export default function PlansPage() {
   });
   const [goalInput, setGoalInput] = useState("");
   const goalInputRef = useRef<HTMLInputElement>(null);
+  const [generateError, setGenerateError] = useState("");
+  const [generateSuccess, setGenerateSuccess] = useState(false);
 
   const { data: plans = [], isLoading } = useQuery<Plan[]>({
     queryKey: ["plans"],
@@ -71,11 +73,20 @@ export default function PlansPage() {
         agentId: form.agentId,
         platforms: form.platforms,
         goals: form.goals,
-        startDate: form.startDate,
+        startDate: new Date(form.startDate).toISOString(),
         durationDays: form.durationDays,
         feedbackLoopEnabled: form.feedbackLoopEnabled,
       }),
-    onSuccess: () => { setGenerating(false); qc.invalidateQueries({ queryKey: ["plans"] }); },
+    onSuccess: () => {
+      setGenerating(false);
+      setGenerateError("");
+      setGenerateSuccess(true);
+      qc.invalidateQueries({ queryKey: ["plans"] });
+      setTimeout(() => setGenerateSuccess(false), 5000);
+    },
+    onError: (err) => {
+      setGenerateError(err instanceof Error ? err.message : "Failed to generate plan. Please try again.");
+    },
   });
 
   const filteredAgents = agents.filter((a) => !form.brandProfileId || a.brandProfileId === form.brandProfileId);
@@ -132,11 +143,20 @@ export default function PlansPage() {
                 <p className="text-xs text-gray-400">AI will generate a full content calendar</p>
               </div>
             </div>
-            <button onClick={() => setGenerating(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+            <button onClick={() => { setGenerating(false); setGenerateError(""); }} className="text-gray-400 hover:text-gray-600 transition-colors">
               <X className="w-4 h-4" />
             </button>
           </div>
           <div className="p-6 space-y-5">
+            {generateError && (
+              <div className="flex items-start gap-2.5 p-3.5 bg-red-50 border border-red-200 rounded-xl">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-red-800">Generation failed</p>
+                  <p className="text-xs text-red-600 mt-0.5">{generateError}</p>
+                </div>
+              </div>
+            )}
             <div className="grid md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">Brand</label>
@@ -267,19 +287,41 @@ export default function PlansPage() {
               </label>
             </div>
 
+            {!canGenerate && (
+              <p className="text-xs text-amber-600">
+                Required:{" "}
+                {[
+                  !form.brandProfileId && "brand",
+                  !form.agentId && "agent",
+                  !form.platforms.length && "at least one platform",
+                  !form.goals.length && "at least one goal",
+                ].filter(Boolean).join(", ")}
+              </p>
+            )}
+
             <div className="flex gap-2 pt-1">
               <button
-                onClick={() => generate.mutate()}
+                onClick={() => { setGenerateError(""); generate.mutate(); }}
                 disabled={!canGenerate || generate.isPending}
-                className="flex items-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white text-sm font-medium rounded-xl transition-colors"
+                className="flex items-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white text-sm font-medium rounded-xl transition-colors disabled:cursor-not-allowed"
               >
                 <Sparkles className="w-4 h-4" />
                 {generate.isPending ? "Generating…" : `Generate ${form.durationDays}-day plan`}
               </button>
-              <button onClick={() => setGenerating(false)} className="px-5 py-2.5 border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 rounded-xl transition-colors">
+              <button onClick={() => { setGenerating(false); setGenerateError(""); }} className="px-5 py-2.5 border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 rounded-xl transition-colors">
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {generateSuccess && (
+        <div className="flex items-start gap-3 p-4 bg-green-50 border border-green-200 rounded-2xl">
+          <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-green-800">Plan generation started</p>
+            <p className="text-xs text-green-600 mt-0.5">Your content calendar is being generated. This may take a minute — the list updates automatically every 10 seconds.</p>
           </div>
         </div>
       )}
