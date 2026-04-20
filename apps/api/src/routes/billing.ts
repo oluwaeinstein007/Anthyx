@@ -32,9 +32,30 @@ router.get("/usage", auth, async (req, res) => {
 
 // POST /billing/subscribe  — body: { tier, interval, provider? }
 router.post("/subscribe", auth, validate(SubscribeSchema), async (req, res) => {
-  const { tier, interval, provider = "stripe" } = req.body as { tier: string; interval: string; provider?: string };
+  const { tier, interval, provider = "paystack" } = req.body as { tier: string; interval: string; provider?: string };
 
-  if (provider === "paystack") {
+  if (provider === "stripe") {
+    const priceId = process.env[`STRIPE_PRICE_${tier.toUpperCase()}_${interval.toUpperCase()}`];
+    if (!priceId) return res.status(400).json({ error: `No Stripe price configured for ${tier} ${interval}` });
+    const { checkoutUrl } = await createSubscription({ organizationId: req.user.orgId, email: req.user.email, priceId });
+    return res.json({ checkoutUrl, provider: "stripe" });
+  }
+
+  const planCode = process.env[`PAYSTACK_PLAN_${tier.toUpperCase()}_${interval.toUpperCase()}`];
+  if (!planCode) return res.status(400).json({ error: `No Paystack plan configured for ${tier} ${interval}` });
+  const { checkoutUrl } = await createPaystackSubscription({ organizationId: req.user.orgId, email: req.user.email, planCode });
+  return res.json({ checkoutUrl, provider: "paystack" });
+});
+
+// POST /billing/upgrade
+router.post("/upgrade", auth, validate(SubscribeSchema), async (req, res) => {
+  const { tier, interval, provider = "paystack" } = req.body as { tier: string; interval: string; provider?: string };
+
+  const sub = await db.query.subscriptions.findFirst({
+    where: eq(subscriptions.organizationId, req.user.orgId),
+  });
+
+  if (provider === "paystack" || sub?.billingProvider === "paystack") {
     const planCode = process.env[`PAYSTACK_PLAN_${tier.toUpperCase()}_${interval.toUpperCase()}`];
     if (!planCode) return res.status(400).json({ error: `No Paystack plan configured for ${tier} ${interval}` });
     const { checkoutUrl } = await createPaystackSubscription({ organizationId: req.user.orgId, email: req.user.email, planCode });
@@ -42,24 +63,9 @@ router.post("/subscribe", auth, validate(SubscribeSchema), async (req, res) => {
   }
 
   const priceId = process.env[`STRIPE_PRICE_${tier.toUpperCase()}_${interval.toUpperCase()}`];
-  if (!priceId) return res.status(400).json({ error: `No price configured for ${tier} ${interval}` });
-  const { checkoutUrl } = await createSubscription({ organizationId: req.user.orgId, email: req.user.email, priceId });
-  return res.json({ checkoutUrl, provider: "stripe" });
-});
-
-// POST /billing/upgrade
-router.post("/upgrade", auth, validate(SubscribeSchema), async (req, res) => {
-  const { tier, interval } = req.body;
-  const envKey = `STRIPE_PRICE_${tier.toUpperCase()}_${interval.toUpperCase()}`;
-  const priceId = process.env[envKey];
-  if (!priceId) return res.status(400).json({ error: `No price configured for ${tier} ${interval}` });
-
-  const sub = await db.query.subscriptions.findFirst({
-    where: eq(subscriptions.organizationId, req.user.orgId),
-  });
+  if (!priceId) return res.status(400).json({ error: `No Stripe price configured for ${tier} ${interval}` });
 
   if (sub?.stripeSubscriptionId) {
-    // Update existing subscription mid-period
     const stripeSub = await stripe.subscriptions.retrieve(sub.stripeSubscriptionId);
     await stripe.subscriptions.update(sub.stripeSubscriptionId, {
       items: [{ id: stripeSub.items.data[0]!.id, price: priceId }],
@@ -68,25 +74,27 @@ router.post("/upgrade", auth, validate(SubscribeSchema), async (req, res) => {
     return res.json({ upgraded: true });
   }
 
-  // No existing — create new checkout
-  const { checkoutUrl } = await createSubscription({
-    organizationId: req.user.orgId,
-    email: req.user.email,
-    priceId,
-  });
+  const { checkoutUrl } = await createSubscription({ organizationId: req.user.orgId, email: req.user.email, priceId });
   return res.json({ checkoutUrl });
 });
 
 // POST /billing/downgrade
 router.post("/downgrade", auth, validate(SubscribeSchema), async (req, res) => {
-  const { tier, interval } = req.body;
-  const envKey = `STRIPE_PRICE_${tier.toUpperCase()}_${interval.toUpperCase()}`;
-  const priceId = process.env[envKey];
-  if (!priceId) return res.status(400).json({ error: `No price configured` });
+  const { tier, interval, provider = "paystack" } = req.body as { tier: string; interval: string; provider?: string };
 
   const sub = await db.query.subscriptions.findFirst({
     where: eq(subscriptions.organizationId, req.user.orgId),
   });
+
+  if (provider === "paystack" || sub?.billingProvider === "paystack") {
+    const planCode = process.env[`PAYSTACK_PLAN_${tier.toUpperCase()}_${interval.toUpperCase()}`];
+    if (!planCode) return res.status(400).json({ error: `No Paystack plan configured for ${tier} ${interval}` });
+    const { checkoutUrl } = await createPaystackSubscription({ organizationId: req.user.orgId, email: req.user.email, planCode });
+    return res.json({ checkoutUrl, provider: "paystack" });
+  }
+
+  const priceId = process.env[`STRIPE_PRICE_${tier.toUpperCase()}_${interval.toUpperCase()}`];
+  if (!priceId) return res.status(400).json({ error: `No Stripe price configured` });
 
   if (sub?.stripeSubscriptionId) {
     const stripeSub = await stripe.subscriptions.retrieve(sub.stripeSubscriptionId);

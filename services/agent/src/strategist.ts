@@ -105,6 +105,7 @@ export interface StrategistRunInput {
   startDate: string;
   durationDays?: number;
   feedbackLoopEnabled?: boolean;
+  postsPerPlatformPerDay?: number;
 }
 
 export async function runStrategistAgent(input: StrategistRunInput): Promise<GeneratedPlanItem[]> {
@@ -112,7 +113,8 @@ export async function runStrategistAgent(input: StrategistRunInput): Promise<Gen
 
   const platformCount = input.platforms.length;
   const durationDays = (input as StrategistRunInput & { durationDays?: number }).durationDays ?? 30;
-  const targetItemCount = durationDays * platformCount;
+  const postsPerPlatformPerDay = input.postsPerPlatformPerDay ?? 1;
+  const targetItemCount = durationDays * platformCount * postsPerPlatformPerDay;
   const platformList = input.platforms.join(", ");
 
   // Phase 1: Tool-calling model to gather research context.
@@ -179,9 +181,9 @@ Duration: ${durationDays} days
 Total items: ${targetItemCount} (exactly 1 post per platform per day)
 
 CRITICAL DISTRIBUTION RULES:
-- EVERY single day from day 1 to day ${durationDays} MUST have exactly ${platformCount} posts (one per platform)
-- Do NOT skip any day — no day should have zero posts
-- Spread posts evenly: each day gets one post for each of: ${platformList}
+- EVERY single day from day 1 to day ${durationDays} MUST have posts — no day should have zero posts
+- Each day must have exactly ${postsPerPlatformPerDay} post(s) per platform (${platformCount} platforms × ${postsPerPlatformPerDay} = ${platformCount * postsPerPlatformPerDay} posts per day)
+- Spread posts evenly across ALL days: ${platformList}
 - Platforms may not have social accounts linked yet — generate posts for ALL of them anyway
 Each item must have: { date (ISO 8601), platform, contentType, topic, hook, cta, suggestVisual (boolean), notes? }
 contentType must be exactly one of: educational | promotional | engagement | trending | user_generated`;

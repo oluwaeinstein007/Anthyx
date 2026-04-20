@@ -139,6 +139,7 @@ export const GeneratePlanSchema = z.object({
   durationDays: z.number().int().min(7).max(90).optional().default(30),
   feedbackLoopEnabled: z.boolean().optional().default(false),
   postsPerPlatformPerDay: z.number().int().min(1).max(3).optional().default(1),
+  targetLocale: z.string().optional(),
 });
 
 export const ApprovePostSchema = z.object({
@@ -181,7 +182,7 @@ export const AddBlackoutSchema = z.object({
 export const SubscribeSchema = z.object({
   tier: z.enum(["starter", "growth", "agency", "scale"]),
   interval: z.enum(["monthly", "annual"]),
-  provider: z.enum(["stripe", "paystack"]).optional().default("stripe"),
+  provider: z.enum(["stripe", "paystack"]).optional().default("paystack"),
 });
 
 export const UpdateOverageCapSchema = z.object({

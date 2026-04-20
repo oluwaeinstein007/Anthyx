@@ -52,6 +52,8 @@ export default function PlansPage() {
     startDate: new Date().toISOString().split("T")[0] ?? "",
     durationDays: 30,
     feedbackLoopEnabled: false,
+    postsPerPlatformPerDay: 1,
+    targetLocale: "",
   });
   const [goalInput, setGoalInput] = useState("");
   const goalInputRef = useRef<HTMLInputElement>(null);
@@ -76,6 +78,8 @@ export default function PlansPage() {
         startDate: new Date(form.startDate).toISOString(),
         durationDays: form.durationDays,
         feedbackLoopEnabled: form.feedbackLoopEnabled,
+        postsPerPlatformPerDay: form.postsPerPlatformPerDay,
+        ...(form.targetLocale ? { targetLocale: form.targetLocale } : {}),
       }),
     onSuccess: () => {
       setGenerating(false);
@@ -253,7 +257,7 @@ export default function PlansPage() {
               )}
             </div>
 
-            <div className="grid md:grid-cols-3 gap-4 items-end">
+            <div className="grid md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">Start date</label>
                 <input
@@ -276,6 +280,35 @@ export default function PlansPage() {
                   className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                 />
               </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4 items-end">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                  Posts per platform per day <span className="text-gray-400 font-normal">(1–3)</span>
+                </label>
+                <div className="flex gap-2">
+                  {[1, 2, 3].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setForm({ ...form, postsPerPlatformPerDay: n })}
+                      className={`flex-1 py-2.5 text-sm font-medium rounded-xl border transition-colors ${
+                        form.postsPerPlatformPerDay === n
+                          ? "bg-green-600 text-white border-green-600"
+                          : "border-gray-200 text-gray-600 hover:border-green-300 hover:text-green-700"
+                      }`}
+                    >
+                      {n}×
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-400 mt-1">
+                  {form.platforms.length > 0
+                    ? `${form.platforms.length} platform${form.platforms.length > 1 ? "s" : ""} × ${form.postsPerPlatformPerDay} = ${form.platforms.length * form.postsPerPlatformPerDay} posts/day`
+                    : "Select platforms to see total"}
+                </p>
+              </div>
               <label className="flex items-center gap-2.5 cursor-pointer p-3 rounded-xl border border-gray-200 hover:bg-gray-50 transition-colors">
                 <input
                   type="checkbox"
@@ -285,6 +318,39 @@ export default function PlansPage() {
                 />
                 <span className="text-sm text-gray-700">Enable feedback loop</span>
               </label>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                Content language <span className="text-gray-400 font-normal">(optional — defaults to English)</span>
+              </label>
+              <select
+                value={form.targetLocale}
+                onChange={(e) => setForm({ ...form, targetLocale: e.target.value })}
+                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+              >
+                <option value="">English (default)</option>
+                <option value="es-ES">Spanish (Spain)</option>
+                <option value="es-MX">Spanish (Mexico)</option>
+                <option value="fr-FR">French</option>
+                <option value="de-DE">German</option>
+                <option value="pt-BR">Portuguese (Brazil)</option>
+                <option value="pt-PT">Portuguese (Portugal)</option>
+                <option value="it-IT">Italian</option>
+                <option value="nl-NL">Dutch</option>
+                <option value="ar-SA">Arabic</option>
+                <option value="zh-CN">Chinese (Simplified)</option>
+                <option value="ja-JP">Japanese</option>
+                <option value="ko-KR">Korean</option>
+                <option value="hi-IN">Hindi</option>
+                <option value="tr-TR">Turkish</option>
+                <option value="pl-PL">Polish</option>
+                <option value="ru-RU">Russian</option>
+                <option value="sw-KE">Swahili</option>
+                <option value="yo-NG">Yoruba</option>
+                <option value="ha-NG">Hausa</option>
+                <option value="ig-NG">Igbo</option>
+              </select>
             </div>
 
             {!canGenerate && (

@@ -13,7 +13,7 @@ const router = Router();
 // POST /plans/generate
 router.post("/generate", auth, validate(GeneratePlanSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { brandProfileId, agentId, platforms, goals, startDate, feedbackLoopEnabled, durationDays = 30, postsPerPlatformPerDay = 1 } = req.body;
+    const { brandProfileId, agentId, platforms, goals, startDate, feedbackLoopEnabled, durationDays = 30, postsPerPlatformPerDay = 1, targetLocale } = req.body;
 
     const brand = await db.query.brandProfiles.findFirst({
       where: and(
@@ -76,6 +76,8 @@ router.post("/generate", auth, validate(GeneratePlanSchema), async (req: Request
       socialAccountIds,
       durationDays,
       feedbackLoopEnabled: feedbackLoopEnabled ?? false,
+      postsPerPlatformPerDay,
+      targetLocale,
     });
 
     return res.status(202).json({ plan, message: "Plan generation queued" });
@@ -107,11 +109,24 @@ router.get("/:id", auth, async (req: Request, res: Response, next: NextFunction)
     });
     if (!plan) return res.status(404).json({ error: "Not found" });
 
-    const posts = await db.query.scheduledPosts.findMany({
-      where: eq(scheduledPosts.planId, plan.id),
-    });
+    const [posts, linkedAccounts] = await Promise.all([
+      db.query.scheduledPosts.findMany({ where: eq(scheduledPosts.planId, plan.id) }),
+      db.query.socialAccounts.findMany({
+        where: and(
+          eq(socialAccounts.organizationId, req.user.orgId),
+          eq(socialAccounts.isActive, true),
+        ),
+        columns: { platform: true },
+      }),
+    ]);
 
-    return res.json({ ...plan, posts });
+    const linkedPlatforms = new Set(linkedAccounts.map((a) => a.platform));
+    const postsWithLinkStatus = posts.map((p) => ({
+      ...p,
+      socialAccountId: linkedPlatforms.has(p.platform) ? (p.socialAccountId ?? "linked") : null,
+    }));
+
+    return res.json({ ...plan, posts: postsWithLinkStatus });
   } catch (err) {
     next(err);
   }

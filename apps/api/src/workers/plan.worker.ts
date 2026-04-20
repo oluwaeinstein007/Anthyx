@@ -22,6 +22,8 @@ const worker = new Worker<PlanJobData>(
       socialAccountIds,
       durationDays,
       feedbackLoopEnabled,
+      postsPerPlatformPerDay,
+      targetLocale,
     } = job.data;
 
     console.log(`[PlanWorker] Generating plan ${planId}`);
@@ -43,6 +45,8 @@ const worker = new Worker<PlanJobData>(
       startDate: plan.startDate.toISOString(),
       durationDays: durationDays ?? 30,
       feedbackLoopEnabled,
+      postsPerPlatformPerDay: postsPerPlatformPerDay ?? 1,
+      targetLocale,
     });
 
     if (planItems.length === 0) {
@@ -52,7 +56,7 @@ const worker = new Worker<PlanJobData>(
     // Create ScheduledPost rows (status: 'draft') for each plan item
     for (const item of planItems) {
       const accountIndex = platforms.indexOf(item.platform);
-      const socialAccountId = socialAccountIds[accountIndex] ?? socialAccountIds[0] ?? null;
+      const socialAccountId = accountIndex >= 0 ? (socialAccountIds[accountIndex] ?? null) : null;
 
       await db.insert(scheduledPosts).values({
         planId,

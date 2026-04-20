@@ -54,6 +54,7 @@ export interface PlanJobData {
   durationDays: number;
   feedbackLoopEnabled?: boolean;
   postsPerPlatformPerDay?: number;
+  targetLocale?: string;
 }
 
 export async function queuePlanGeneration(data: PlanJobData): Promise<void> {

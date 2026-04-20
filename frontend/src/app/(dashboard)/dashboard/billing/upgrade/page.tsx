@@ -16,7 +16,7 @@ function UpgradePageInner() {
 
   const subscribe = useMutation({
     mutationFn: ({ tier, interval }: { tier: string; interval: string }) =>
-      api.post<{ checkoutUrl: string }>("/billing/subscribe", { tier, interval }),
+      api.post<{ checkoutUrl: string }>("/billing/subscribe", { tier, interval, provider: "paystack" }),
     onSuccess: (data) => { window.location.href = data.checkoutUrl; },
   });
 
