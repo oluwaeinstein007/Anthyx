@@ -139,44 +139,36 @@ export async function runStrategistAgent(input: StrategistRunInput): Promise<Gen
     input.organizationId,
   );
 
-  // Generate enough items to spread across all selected platforms
-  // (up to 2 posts per day when multiple platforms are selected)
   const platformCount = input.platforms.length;
   const targetItemCount = input.durationDays * Math.min(platformCount, 2);
-
-  const model = genAI.getGenerativeModel({
-    model: MODEL,
-    systemInstruction,
-    tools: TOOLS,
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: PLAN_ITEM_RESPONSE_SCHEMA,
-    },
-  });
-  const chat = model.startChat({ history: [] });
-
   const platformList = input.platforms.join(", ");
+
+  // Phase 1: Tool-calling model to gather research context.
+  // Gemini does not allow tools + responseMimeType together, so JSON output
+  // is kept entirely out of this phase.
+  const researchModel = genAI.getGenerativeModel({ model: MODEL, systemInstruction, tools: TOOLS });
+  const chat = researchModel.startChat({ history: [] });
+
   const localeInstruction = input.targetLocale
     ? `\nLanguage / Locale: Generate ALL post content (topic, hook, cta, notes) in the locale "${input.targetLocale}". Do not fall back to English unless the locale is "en-*".`
     : "";
-  const userMessage = `
-Generate a ${input.durationDays}-day marketing calendar for:
+
+  const researchMessage = `Research task for a ${input.durationDays}-day marketing plan:
 Brand: ${input.brandName}
 Industry: ${input.industry}
 Goals: ${input.goals.join(", ")}
 Target platforms: ${platformList}${localeInstruction}
-NOTE: These platforms may not have social accounts linked yet — generate posts for ALL of them anyway. Account linking happens independently after plan creation.
 Start date: ${input.startDate}
 
-First, retrieve brand context for "${input.brandName}" with brandProfileId "${input.brandProfileId}".
-Then search for current trends in ${input.industry}.
-${input.feedbackLoopEnabled ? `Also read engagement analytics for brandProfileId "${input.brandProfileId}" to adjust content weighting.` : ""}
-${input.competitors?.length ? `Run competitor_analysis for competitors [${input.competitors.join(", ")}] in ${input.industry} on [${input.platforms.join(", ")}] — use the differentiation opportunities to make content stand out.` : ""}
-Return a JSON array of exactly ${targetItemCount} plan items covering the full ${input.durationDays} days.
-IMPORTANT: Distribute posts evenly across ALL ${platformCount} platforms (${platformList}). Each platform must appear roughly equally. Do not concentrate posts on a single platform.
-`.trim();
+Please do the following using your tools:
+1. Retrieve brand context for "${input.brandName}" (brandProfileId: "${input.brandProfileId}").
+2. Search for current trends in ${input.industry}.
+${input.feedbackLoopEnabled ? `3. Read engagement analytics for brandProfileId "${input.brandProfileId}" to identify top-performing content types.` : ""}
+${input.competitors?.length ? `4. Run competitor_analysis for competitors [${input.competitors.join(", ")}] in ${input.industry} on [${input.platforms.join(", ")}].` : ""}
 
-  let response = await chat.sendMessage(userMessage);
+Summarise all findings in plain text. Do NOT output the marketing calendar yet.`;
+
+  let response = await chat.sendMessage(researchMessage);
 
   while (true) {
     const calls = response.response.functionCalls();
@@ -194,9 +186,38 @@ IMPORTANT: Distribute posts evenly across ALL ${platformCount} platforms (${plat
     response = await chat.sendMessage(toolResults);
   }
 
-  // With responseMimeType: "application/json" + responseSchema, Gemini guarantees
-  // valid structured JSON — no retry loop needed.
-  const text = response.response.text();
+  const researchSummary = response.response.text();
+
+  // Phase 2: Formatter model — no tools, uses structured output to produce JSON.
+  const formatterModel = genAI.getGenerativeModel({
+    model: MODEL,
+    systemInstruction,
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: PLAN_ITEM_RESPONSE_SCHEMA,
+    },
+  });
+
+  const formatPrompt = `You are given research context for a ${input.durationDays}-day marketing plan. Output ONLY a valid JSON array of exactly ${targetItemCount} plan items. No markdown, no explanation.
+
+RESEARCH CONTEXT:
+${researchSummary}
+
+PLAN REQUIREMENTS:
+Brand: ${input.brandName}
+Industry: ${input.industry}
+Goals: ${input.goals.join(", ")}
+Platforms: ${platformList} (distribute evenly across ALL ${platformCount} platforms)${localeInstruction}
+Start date: ${input.startDate}
+Duration: ${input.durationDays} days
+Total items: ${targetItemCount}
+
+NOTE: These platforms may not have social accounts linked yet — generate posts for ALL of them anyway.
+Each item must have: { date (ISO 8601), platform, contentType, topic, hook, cta, suggestVisual (boolean), notes? }
+contentType must be exactly one of: educational | promotional | engagement | trending | user_generated`;
+
+  const formatResult = await formatterModel.generateContent(formatPrompt);
+  const text = formatResult.response.text();
   const parsed: unknown = JSON.parse(text);
 
   if (!Array.isArray(parsed) || parsed.length === 0) {

@@ -157,10 +157,11 @@ Summarise all findings in plain text. Do NOT output the marketing calendar yet.`
   const researchSummary = response.response.text();
 
   // Phase 2: Formatter model — no tools, uses gathered research to produce JSON.
+  // responseMimeType is intentionally omitted: gemini-2.5-flash-lite rejects it
+  // even without tools. The prompt + retry loop below handle JSON extraction.
   const formatterModel = genAI.getGenerativeModel({
     model: MODEL,
     systemInstruction,
-    generationConfig: { responseMimeType: "application/json" },
   });
 
   const formatPrompt = `You are given research context for a ${durationDays}-day marketing plan. Output ONLY a valid JSON array of exactly ${targetItemCount} plan items. No markdown, no explanation.
