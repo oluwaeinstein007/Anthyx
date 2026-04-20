@@ -7,11 +7,13 @@ COPY services/ingestor/package.json ./services/ingestor/
 COPY packages/types/package.json ./packages/types/
 COPY packages/config/package.json ./packages/config/
 COPY packages/queue-contracts/package.json ./packages/queue-contracts/
-RUN pnpm install --frozen-lockfile --prod
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --prod
 
 FROM base AS builder
 ENV CI=true
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 COPY tsconfig.base.json ./
 COPY packages/ ./packages/
 COPY services/ingestor/src/ ./services/ingestor/src/

@@ -1,0 +1,12 @@
+**/.git
+**/.gitignore
+**/.env*
+**/.next
+**/node_modules
+**/dist
+**/build
+**/*.log
+**/.DS_Store
+**/coverage
+**/.turbo
+**/tsconfig.tsbuildinfo

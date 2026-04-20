@@ -91,7 +91,12 @@ router.get("/:id/analytics", auth, async (req, res) => {
 
   const planIds = plans.map((p) => p.id);
   if (planIds.length === 0) {
-    return res.json({ campaign, plans: [], totals: { posts: 0, published: 0, failed: 0, totalLikes: 0, totalImpressions: 0 } });
+    return res.json({
+      campaign,
+      plans: [],
+      totals: { posts: 0, published: 0, failed: 0, vetoed: 0, totalLikes: 0, totalReposts: 0, totalComments: 0, totalImpressions: 0, avgEngagementRate: 0 },
+      byPlatform: {},
+    });
   }
 
   // Aggregate post stats across all plans in this campaign

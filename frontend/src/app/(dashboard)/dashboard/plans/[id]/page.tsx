@@ -93,10 +93,11 @@ export default function PlanDetailPage() {
   const [editText, setEditText] = useState("");
   const [editHashtags, setEditHashtags] = useState("");
 
-  const { data: plan, isLoading } = useQuery<MarketingPlan>({
+  const { data: plan, isLoading, isError, error } = useQuery<MarketingPlan>({
     queryKey: ["plan", id],
     queryFn: () => api.get<MarketingPlan>(`/plans/${id}`),
     refetchInterval: 15_000,
+    retry: 1,
   });
 
   const approve = useMutation({
@@ -193,7 +194,22 @@ export default function PlanDetailPage() {
 
   if (isLoading)
     return <div className="text-sm text-gray-500 animate-pulse">Loading plan...</div>;
-  if (!plan) return <div className="text-sm text-gray-500">Plan not found.</div>;
+  if (isError)
+    return (
+      <div className="space-y-2">
+        <Link href="/dashboard/plans" className="text-sm text-gray-400 hover:text-gray-600">← Plans</Link>
+        <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+          {error instanceof Error ? error.message : "Failed to load plan."}
+        </div>
+      </div>
+    );
+  if (!plan)
+    return (
+      <div className="space-y-2">
+        <Link href="/dashboard/plans" className="text-sm text-gray-400 hover:text-gray-600">← Plans</Link>
+        <p className="text-sm text-gray-500">Plan not found.</p>
+      </div>
+    );
 
   const days = getDaysInRange(plan.startDate, plan.endDate);
   const postsByDay: Record<string, ScheduledPost[]> = {};

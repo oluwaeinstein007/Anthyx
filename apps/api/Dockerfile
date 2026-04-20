@@ -8,12 +8,14 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json ./apps/api/
 COPY packages/types/package.json ./packages/types/
 COPY packages/config/package.json ./packages/config/
-RUN pnpm install --frozen-lockfile --prod
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --prod
 
 # ---- build ----
 FROM base AS builder
 ENV CI=true
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 COPY tsconfig.base.json ./
 COPY config.ts ./
 COPY packages/ ./packages/

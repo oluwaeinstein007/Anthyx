@@ -8,7 +8,8 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/dashboard/package.json ./apps/dashboard/
 COPY packages/types/package.json ./packages/types/
 COPY packages/config/package.json ./packages/config/
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 
 # ---- build ----
 FROM base AS builder

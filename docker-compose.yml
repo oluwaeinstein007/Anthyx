@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ── Shared environment injected into all app services ─────────────────────────
 x-app-env: &app-env
   DATABASE_URL: postgresql://anthyx:password@postgres:5432/anthyx
@@ -18,6 +16,7 @@ services:
 
   # ── Core API ─────────────────────────────────────────────────────────────────
   api:
+    image: anthyx-api
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -34,9 +33,7 @@ services:
   # These run inside the api image. Once services/agent is stable you can
   # remove this container and rely solely on the agent service below.
   worker:
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
+    image: anthyx-api
     command: node dist/workers/index.js
     environment:
       <<: *app-env

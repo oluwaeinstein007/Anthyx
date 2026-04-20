@@ -103,6 +103,7 @@ export interface StrategistRunInput {
   goals: string[];
   platforms: string[];
   startDate: string;
+  durationDays?: number;
   feedbackLoopEnabled?: boolean;
 }
 
@@ -110,30 +111,33 @@ export async function runStrategistAgent(input: StrategistRunInput): Promise<Gen
   const systemInstruction = await buildSystemPromptWithGuardrails(STRATEGIST_BASE, input.organizationId);
 
   const platformCount = input.platforms.length;
-  const targetItemCount = 30 * Math.min(platformCount, 2);
+  const durationDays = (input as StrategistRunInput & { durationDays?: number }).durationDays ?? 30;
+  const targetItemCount = durationDays * Math.min(platformCount, 2);
   const platformList = input.platforms.join(", ");
 
-  const model = genAI.getGenerativeModel({ model: MODEL, systemInstruction, tools: TOOLS });
-  const chat = model.startChat({ history: [] });
+  // Phase 1: Tool-calling model to gather research context.
+  // Gemini 2.5+ does not allow tools + responseMimeType together, so we keep
+  // JSON output entirely out of this phase.
+  const researchModel = genAI.getGenerativeModel({ model: MODEL, systemInstruction, tools: TOOLS });
+  const chat = researchModel.startChat({ history: [] });
 
-  const userMessage = `Generate a 30-day marketing calendar for:
+  const researchMessage = `Research task for a ${durationDays}-day marketing plan:
 Brand: ${input.brandName}
 Industry: ${input.industry}
 Goals: ${input.goals.join(", ")}
 Target platforms: ${platformList}
-NOTE: These platforms may not have social accounts linked yet — generate posts for ALL of them anyway. Account linking happens independently after plan creation.
 Start date: ${input.startDate}
 
-First, retrieve brand context for "${input.brandName}" with brandProfileId "${input.brandProfileId}".
-Then search for current trends in ${input.industry}.
-${input.feedbackLoopEnabled ? `Also read engagement analytics for brandProfileId "${input.brandProfileId}" to adjust content weighting.` : ""}
+Please do the following using your tools:
+1. Retrieve brand context for "${input.brandName}" (brandProfileId: "${input.brandProfileId}").
+2. Search for current trends in ${input.industry}.
+${input.feedbackLoopEnabled ? `3. Read engagement analytics for brandProfileId "${input.brandProfileId}" to identify top-performing content types.` : ""}
 
-Return a JSON array of exactly ${targetItemCount} plan items covering the full 30 days.
-IMPORTANT: Distribute posts evenly across ALL ${platformCount} platforms (${platformList}). Do not concentrate posts on a single platform.`;
+Summarise all findings in plain text. Do NOT output the marketing calendar yet.`;
 
-  let response = await chat.sendMessage(userMessage);
+  let response = await chat.sendMessage(researchMessage);
 
-  // Agentic tool loop
+  // Tool execution loop
   while (true) {
     const calls = response.response.functionCalls();
     if (!calls || calls.length === 0) break;
@@ -150,12 +154,37 @@ IMPORTANT: Distribute posts evenly across ALL ${platformCount} platforms (${plat
     response = await chat.sendMessage(toolResults);
   }
 
-  let text = response.response.text();
+  const researchSummary = response.response.text();
 
-  const JSON_RETRY_PROMPT = `Output ONLY the raw JSON array of ${targetItemCount} plan items. No markdown fences, no explanation. Start with [ and end with ].`;
+  // Phase 2: Formatter model — no tools, uses gathered research to produce JSON.
+  const formatterModel = genAI.getGenerativeModel({
+    model: MODEL,
+    systemInstruction,
+    generationConfig: { responseMimeType: "application/json" },
+  });
+
+  const formatPrompt = `You are given research context for a ${durationDays}-day marketing plan. Output ONLY a valid JSON array of exactly ${targetItemCount} plan items. No markdown, no explanation.
+
+RESEARCH CONTEXT:
+${researchSummary}
+
+PLAN REQUIREMENTS:
+Brand: ${input.brandName}
+Industry: ${input.industry}
+Goals: ${input.goals.join(", ")}
+Platforms: ${platformList} (distribute evenly across ALL ${platformCount} platforms)
+Start date: ${input.startDate}
+Duration: ${durationDays} days
+Total items: ${targetItemCount}
+
+Each item must have: { date (ISO 8601), platform, contentType, topic, hook, cta, suggestVisual (boolean), notes? }
+contentType must be exactly one of: educational | promotional | engagement | trending | user_generated`;
+
+  const formatResult = await formatterModel.generateContent(formatPrompt);
+  let text = formatResult.response.text();
 
   let parsed: unknown = null;
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     const match = text.match(/\[[\s\S]*\]/);
     if (match) {
       try {
@@ -168,9 +197,11 @@ IMPORTANT: Distribute posts evenly across ALL ${platformCount} platforms (${plat
         // not valid JSON yet
       }
     }
-    if (attempt < 3) {
-      response = await chat.sendMessage(JSON_RETRY_PROMPT);
-      text = response.response.text();
+    if (attempt < 2) {
+      const retry = await formatterModel.generateContent(
+        `${formatPrompt}\n\nIMPORTANT: Start your response with [ and end with ]. Raw JSON array only.`,
+      );
+      text = retry.response.text();
     }
   }
 

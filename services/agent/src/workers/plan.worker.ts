@@ -16,13 +16,14 @@ interface PlanJobData {
   platforms: string[];
   agentId: string;
   socialAccountIds: string[];
+  durationDays?: number;
   feedbackLoopEnabled?: boolean;
 }
 
 const worker = new Worker<PlanJobData>(
   "anthyx-plan-generation",
   async (job: Job<PlanJobData>) => {
-    const { planId, organizationId, brandProfileId, brandName, industry, goals, platforms, agentId, socialAccountIds, feedbackLoopEnabled } = job.data;
+    const { planId, organizationId, brandProfileId, brandName, industry, goals, platforms, agentId, socialAccountIds, durationDays, feedbackLoopEnabled } = job.data;
 
     console.log(`[PlanWorker] Generating plan ${planId}`);
 
@@ -37,6 +38,7 @@ const worker = new Worker<PlanJobData>(
       goals,
       platforms,
       startDate: plan.startDate.toISOString(),
+      durationDays,
       feedbackLoopEnabled,
     });
 
