@@ -138,6 +138,7 @@ export const GeneratePlanSchema = z.object({
   startDate: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}/)),
   durationDays: z.number().int().min(7).max(90).optional().default(30),
   feedbackLoopEnabled: z.boolean().optional().default(false),
+  postsPerPlatformPerDay: z.number().int().min(1).max(3).optional().default(1),
 });
 
 export const ApprovePostSchema = z.object({

@@ -505,6 +505,14 @@ export default function PlanDetailPage() {
                             <span className="capitalize font-medium text-gray-700">
                               {post.platform}
                             </span>
+                            {!post.socialAccountId && (
+                              <span
+                                className="text-orange-500 text-xs font-medium"
+                                title="Connect this platform in Accounts to enable publishing"
+                              >
+                                ⚠
+                              </span>
+                            )}
                             <span className="text-gray-400">
                               {new Date(post.scheduledAt).toLocaleTimeString("en-US", {
                                 hour: "numeric",

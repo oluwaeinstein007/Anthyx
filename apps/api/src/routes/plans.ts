@@ -13,7 +13,7 @@ const router = Router();
 // POST /plans/generate
 router.post("/generate", auth, validate(GeneratePlanSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { brandProfileId, agentId, platforms, goals, startDate, feedbackLoopEnabled, durationDays = 30 } = req.body;
+    const { brandProfileId, agentId, platforms, goals, startDate, feedbackLoopEnabled, durationDays = 30, postsPerPlatformPerDay = 1 } = req.body;
 
     const brand = await db.query.brandProfiles.findFirst({
       where: and(

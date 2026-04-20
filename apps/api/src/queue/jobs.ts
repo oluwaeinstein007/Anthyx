@@ -53,6 +53,7 @@ export interface PlanJobData {
   socialAccountIds: (string | null)[];
   durationDays: number;
   feedbackLoopEnabled?: boolean;
+  postsPerPlatformPerDay?: number;
 }
 
 export async function queuePlanGeneration(data: PlanJobData): Promise<void> {

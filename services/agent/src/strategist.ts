@@ -112,7 +112,7 @@ export async function runStrategistAgent(input: StrategistRunInput): Promise<Gen
 
   const platformCount = input.platforms.length;
   const durationDays = (input as StrategistRunInput & { durationDays?: number }).durationDays ?? 30;
-  const targetItemCount = durationDays * Math.min(platformCount, 2);
+  const targetItemCount = durationDays * platformCount;
   const platformList = input.platforms.join(", ");
 
   // Phase 1: Tool-calling model to gather research context.
@@ -176,8 +176,13 @@ Goals: ${input.goals.join(", ")}
 Platforms: ${platformList} (distribute evenly across ALL ${platformCount} platforms)
 Start date: ${input.startDate}
 Duration: ${durationDays} days
-Total items: ${targetItemCount}
+Total items: ${targetItemCount} (exactly 1 post per platform per day)
 
+CRITICAL DISTRIBUTION RULES:
+- EVERY single day from day 1 to day ${durationDays} MUST have exactly ${platformCount} posts (one per platform)
+- Do NOT skip any day — no day should have zero posts
+- Spread posts evenly: each day gets one post for each of: ${platformList}
+- Platforms may not have social accounts linked yet — generate posts for ALL of them anyway
 Each item must have: { date (ISO 8601), platform, contentType, topic, hook, cta, suggestVisual (boolean), notes? }
 contentType must be exactly one of: educational | promotional | engagement | trending | user_generated`;
 
