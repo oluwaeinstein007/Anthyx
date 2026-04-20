@@ -22,6 +22,9 @@
       ],
       "@anthyx/types": [
         "../packages/types/src"
+      ],
+      "@anthyx/config": [
+        "../packages/config/src"
       ]
     },
     "allowJs": true,

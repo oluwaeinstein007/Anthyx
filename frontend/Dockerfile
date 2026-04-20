@@ -20,6 +20,8 @@ COPY --from=deps /app/packages/config/node_modules ./packages/config/node_module
 COPY --from=deps /app/packages/types/node_modules ./packages/types/node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+RUN pnpm --filter @anthyx/types build
+RUN pnpm --filter @anthyx/config build
 WORKDIR /app/frontend
 RUN pnpm build
 WORKDIR /app
