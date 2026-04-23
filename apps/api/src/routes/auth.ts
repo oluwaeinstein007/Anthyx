@@ -1,11 +1,36 @@
 import { Router } from "express";
 import { eq } from "drizzle-orm";
 import bcrypt from "bcryptjs";
+import { randomBytes } from "crypto";
 import { db } from "../db/client";
 import { users, organizations, subscriptions } from "../db/schema";
 import { issueToken } from "../middleware/auth";
+import { redisConnection } from "../queue/client";
 import { z } from "zod";
 import { productConfig } from "@anthyx/config";
+
+const RESET_TTL = 3600; // 1 hour
+
+async function sendPasswordResetEmail(email: string, resetUrl: string) {
+  const apiKey = process.env["RESEND_API_KEY"];
+  const from = process.env["EMAIL_FROM"] ?? "noreply@anthyx.ai";
+
+  if (!apiKey || apiKey.startsWith("re_...")) {
+    console.log(`[AUTH] Password reset link for ${email}: ${resetUrl}`);
+    return;
+  }
+
+  await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from,
+      to: email,
+      subject: "Reset your Anthyx password",
+      html: `<p>Click the link below to reset your password. It expires in 1 hour.</p><p><a href="${resetUrl}">${resetUrl}</a></p>`,
+    }),
+  });
+}
 
 const router = Router();
 
@@ -183,6 +208,44 @@ router.get("/me", async (req, res) => {
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
   }
+});
+
+// POST /auth/forgot-password
+router.post("/forgot-password", async (req, res) => {
+  const parsed = z.object({ email: z.string().email() }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Valid email required" });
+
+  const { email } = parsed.data;
+  const user = await db.query.users.findFirst({ where: eq(users.email, email) });
+
+  // Always respond OK so we don't leak whether an email exists
+  if (user) {
+    const token = randomBytes(32).toString("hex");
+    await redisConnection.set(`pwd_reset:${token}`, user.id, "EX", RESET_TTL);
+    const dashboardUrl = process.env["DASHBOARD_URL"] ?? "http://localhost:3000";
+    await sendPasswordResetEmail(email, `${dashboardUrl}/reset-password?token=${token}`);
+  }
+
+  return res.json({ ok: true });
+});
+
+// POST /auth/reset-password
+router.post("/reset-password", async (req, res) => {
+  const parsed = z.object({
+    token: z.string().min(1),
+    newPassword: z.string().min(8),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Validation failed" });
+
+  const { token, newPassword } = parsed.data;
+  const userId = await redisConnection.get(`pwd_reset:${token}`);
+  if (!userId) return res.status(400).json({ error: "Invalid or expired reset link" });
+
+  const newHash = await bcrypt.hash(newPassword, 12);
+  await db.update(users).set({ passwordHash: newHash }).where(eq(users.id, userId));
+  await redisConnection.del(`pwd_reset:${token}`);
+
+  return res.json({ ok: true });
 });
 
 export { router as authRouter };

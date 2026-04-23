@@ -40,11 +40,16 @@ function loadPlanMap() {
   };
   for (const [envKey, tier] of Object.entries(envMap)) {
     const code = process.env[envKey];
-    if (code) PLAN_CODE_TO_TIER[code] = tier;
+    // Only register fully-formed plan codes (Paystack codes are PLN_ + 16 chars)
+    if (code && code.length > 8) PLAN_CODE_TO_TIER[code] = tier;
   }
 }
 
 loadPlanMap();
+
+export function isValidPlanCode(code: string | undefined): code is string {
+  return typeof code === "string" && code.length > 8;
+}
 
 // ── Checkout ──────────────────────────────────────────────────────────────────
 

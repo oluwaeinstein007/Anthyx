@@ -6,7 +6,7 @@ import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { SubscribeSchema, UpdateOverageCapSchema } from "@anthyx/config";
 import { stripe, createSubscription, handleStripeWebhook } from "../services/billing/stripe";
-import { createPaystackSubscription, handlePaystackWebhook, cancelPaystackSubscription } from "../services/billing/paystack";
+import { createPaystackSubscription, handlePaystackWebhook, cancelPaystackSubscription, isValidPlanCode } from "../services/billing/paystack";
 import { getCurrentUsage } from "../services/billing/usage-tracker";
 import { PLAN_TIER_CONFIGS } from "@anthyx/types";
 import { productConfig } from "@anthyx/config";
@@ -42,7 +42,7 @@ router.post("/subscribe", auth, validate(SubscribeSchema), async (req, res) => {
   }
 
   const planCode = process.env[`PAYSTACK_PLAN_${tier.toUpperCase()}_${interval.toUpperCase()}`];
-  if (!planCode) return res.status(400).json({ error: `No Paystack plan configured for ${tier} ${interval}` });
+  if (!isValidPlanCode(planCode)) return res.status(400).json({ error: `No Paystack plan configured for ${tier} ${interval}` });
   const { checkoutUrl } = await createPaystackSubscription({ organizationId: req.user.orgId, email: req.user.email, planCode });
   return res.json({ checkoutUrl, provider: "paystack" });
 });
