@@ -269,9 +269,11 @@ These TypeScript interfaces are shared between services (enforced via Zod at con
 export interface IngestBrandPayload {
   brandId: string;
   organizationId: string;
-  sourceType: "pdf" | "url" | "markdown";
-  filePath?: string;  // temp path for PDF/markdown
+  sourceType: "pdf" | "url" | "markdown" | "plaintext";
+  filePath?: string;    // temp path for PDF/markdown
   url?: string;
+  rawText?: string;     // pre-fetched text (skips parser for plaintext)
+  sourceName?: string;  // display name for the source document
 }
 
 // packages/queue-contracts/src/agent.ts
@@ -491,38 +493,48 @@ This is a direct extraction of `apps/api/src/services/brand-ingestion/` + a Bull
 
 ### Entry point
 
+> **Note:** The worker entry point is `worker.ts` (not `index.ts`). Concurrency defaults to 3 and is configurable via `INGESTOR_CONCURRENCY`.
+
 ```typescript
-// services/ingestor/src/index.ts
-import { Worker, type Job } from "bullmq";
-import { redisConnection } from "./redis";
-import { parseSource } from "./parser";
-import { extractBrandData } from "./extractor";
-import { ingestBrandDocument } from "./embedder";
+// services/ingestor/src/worker.ts
+import { Worker } from "bullmq";
+import { Redis } from "ioredis";
 import type { IngestBrandPayload } from "@anthyx/queue-contracts";
+import { parseSource } from "./parser.js";
+import { extractBrandData } from "./extractor.js";
+import { ingestBrandDocument } from "./embedder.js";
+import { db } from "./db.js";
+import { brandProfiles } from "./schema.js";
+
+const connection = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379", {
+  maxRetriesPerRequest: null,
+});
 
 const worker = new Worker<IngestBrandPayload>(
   "anthyx-ingestor",
-  async (job: Job<IngestBrandPayload>) => {
-    const { brandId, organizationId, sourceType, filePath, url } = job.data;
+  async (job) => {
+    const { brandId, organizationId, sourceType, filePath, url, rawText, sourceName } = job.data;
 
-    const parsed = await parseSource(
-      sourceType === "url" ? { type: "url", url: url! }
-      : { type: sourceType, path: filePath! }
-    );
-
+    const parsed = await parseSource({ type: sourceType, path: filePath, url, rawText });
     const extraction = await extractBrandData(parsed.text);
 
-    await ingestBrandDocument(parsed.text, brandId, organizationId, parsed.sourceName, extraction);
+    await ingestBrandDocument(parsed.text, brandId, organizationId, sourceName ?? parsed.sourceName, extraction);
 
-    // Update brand profile via direct DB write (ingestor owns this operation)
-    await updateBrandProfile(brandId, extraction);
-
-    console.log(`[Ingestor] Brand ${brandId} ingested successfully`);
+    // Update brand profile fields directly — ingestor owns this write
+    await db.update(brandProfiles).set({
+      industry: extraction.industry,
+      voiceTraits: extraction.voiceTraits,
+      toneDescriptors: extraction.toneDescriptors,
+      primaryColors: extraction.primaryColors,
+      secondaryColors: extraction.secondaryColors,
+      typography: extraction.typography,
+      updatedAt: new Date(),
+    }).where(eq(brandProfiles.id, brandId));
   },
-  { connection: redisConnection, concurrency: 2 }
+  { connection, concurrency: parseInt(process.env.INGESTOR_CONCURRENCY ?? "3") }
 );
 
-worker.on("error", (err) => console.error("[Ingestor] Error:", err));
+worker.on("failed", (job, err) => console.error(`[ingestor] Job ${job?.id} failed:`, err.message));
 ```
 
 ### extractor.ts — Gemini version
@@ -687,38 +699,37 @@ const mcp = new FastMCP("anthyx-mcp-server");
 
 mcp.addTool({
   name: "retrieve_brand_context",
-  description: "Semantic search over brand documents filtered by brandId",
+  description: "Retrieve relevant brand knowledge chunks and voice metadata from Qdrant",
   parameters: z.object({
-    brandId: z.string().uuid(),
+    brandProfileId: z.string().uuid(),   // NOTE: uses brandProfileId, not brandId
     query: z.string(),
-    topK: z.number().int().min(1).max(20).default(5),
+    topK: z.number().int().min(1).max(20).default(10),
   }),
   execute: async (args) => retrieveBrandContext(args),
 });
 
 mcp.addTool({
   name: "retrieve_brand_voice",
-  description: "Retrieve voice and tone chunks for content generation",
+  description: "Retrieve brand voice rules, tone descriptors, and brand statements for a topic",
   parameters: z.object({
-    brandId: z.string().uuid(),
-    platform: z.enum(["x", "instagram", "linkedin", "facebook", "telegram", "tiktok"]),
+    brandProfileId: z.string().uuid(),
+    topic: z.string(),   // topic-based retrieval, not platform-based
   }),
   execute: async (args) => retrieveBrandVoice(args),
 });
 
 mcp.addTool({
   name: "retrieve_brand_rules",
-  description: "Retrieve prohibition rules for the Reviewer agent",
+  description: "Retrieve all active brand guidelines including voice traits, tone, and colors",
   parameters: z.object({
-    brandId: z.string().uuid(),
-    organizationId: z.string().uuid(),
+    brandProfileId: z.string().uuid(),
   }),
   execute: async (args) => retrieveBrandRules(args),
 });
 
 mcp.addTool({
   name: "retrieve_diet_instructions",
-  description: "Retrieve agent-level behavioral overrides",
+  description: "Retrieve content diet instructions and prohibitions for an agent",
   parameters: z.object({
     agentId: z.string().uuid(),
   }),
@@ -727,42 +738,42 @@ mcp.addTool({
 
 mcp.addTool({
   name: "read_engagement_analytics",
-  description: "Read voice performance scores for the Strategist feedback loop",
+  description: "Read post engagement analytics for a brand profile and classify content performance",
   parameters: z.object({
-    brandId: z.string().uuid(),
-    lookbackDays: z.number().int().default(30),
+    brandProfileId: z.string().uuid(),
+    lookbackDays: z.number().int().min(1).max(90).default(30),
   }),
   execute: async (args) => readEngagementAnalytics(args),
 });
 
 mcp.addTool({
   name: "schedule_post",
-  description: "Create a BullMQ post execution job with jitter",
+  description: "Schedule an approved post for publishing via BullMQ with jitter",
   parameters: z.object({
     postId: z.string().uuid(),
-    scheduledAt: z.string().datetime(),
+    scheduledAt: z.string(),   // ISO 8601 datetime string
   }),
   execute: async (args) => schedulePost(args),
 });
 
 mcp.addTool({
   name: "web_search_trends",
-  description: "Search for industry trends (used by Strategist)",
+  description: "Search for trending topics and news in an industry using Tavily",
   parameters: z.object({
-    query: z.string(),
     industry: z.string(),
+    keywords: z.array(z.string()).min(1).max(10),
+    timeframe: z.enum(["7d", "30d"]).default("7d"),
   }),
   execute: async (args) => webSearchTrends(args),
 });
 
 mcp.addTool({
   name: "generate_image_asset",
-  description: "Route to template or AI image generation",
+  description: "Generate a marketing image asset via DALL-E 3 aligned with brand colors",
   parameters: z.object({
-    brandId: z.string().uuid(),
     prompt: z.string(),
-    platform: z.enum(["x", "instagram", "linkedin", "facebook", "telegram", "tiktok"]),
-    preferTemplate: z.boolean().default(true),
+    brandColors: z.array(z.string()),   // hex codes e.g. ["#FF5733"]
+    aspectRatio: z.enum(["1:1", "16:9"]).default("1:1"),
   }),
   execute: async (args) => generateImageAsset(args),
 });
@@ -858,11 +869,14 @@ cp -r apps/dashboard frontend
 
 ### Model mapping
 
-| Current (Claude) | New (Gemini) | Role |
-|---|---|---|
-| `claude-opus-4-7` | `gemini-2.0-pro` | Strategist (complex, long-context) |
-| `claude-sonnet-4-6` | `gemini-2.0-flash` | Copywriter (fast, quality) |
-| `claude-haiku-4-5` | `gemini-2.0-flash-8b` | Reviewer (cheapest, fast gate) |
+| Current (Claude) | Deployed (Gemini) | Role | Env override |
+|---|---|---|---|
+| `claude-opus-4-7` | `gemini-1.5-pro` | Strategist (complex, long-context) | `GEMINI_STRATEGIST_MODEL` |
+| `claude-sonnet-4-6` | `gemini-1.5-flash` | Copywriter (fast, quality) | `GEMINI_COPYWRITER_MODEL` |
+| `claude-haiku-4-5` | `gemini-1.5-flash-8b` | Reviewer (cheapest, fast gate) | `GEMINI_REVIEWER_MODEL` |
+| — | `gemini-1.5-flash` | Brand extraction (ingestor) | `GEMINI_EXTRACTION_MODEL` |
+
+> **Note:** All model names are configurable via environment variable. The defaults above (`gemini-1.5-*`) are what's running in production today. The plan called for `gemini-2.0-*` — upgrade by setting the env vars once those models stabilize.
 
 ### SDK setup
 
@@ -874,9 +888,9 @@ const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 export function getModel(model: "pro" | "flash" | "flash-8b") {
   const modelMap = {
-    pro:       "gemini-2.0-pro",
-    flash:     "gemini-2.0-flash",
-    "flash-8b": "gemini-2.0-flash-8b",
+    pro:        process.env.GEMINI_STRATEGIST_MODEL ?? "gemini-1.5-pro",
+    flash:      process.env.GEMINI_COPYWRITER_MODEL ?? "gemini-1.5-flash",
+    "flash-8b": process.env.GEMINI_REVIEWER_MODEL   ?? "gemini-1.5-flash-8b",
   };
   return genai.getGenerativeModel({ model: modelMap[model] });
 }
@@ -1245,68 +1259,55 @@ AUTH_SECRET=                       # next-auth secret
 
 Each phase is independently deployable. Do not start a phase until the previous is in production.
 
-### Phase 1 — Extract the frontend (1–2 days)
+### Phase status (April 2026)
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Extract frontend | ✅ Complete — `frontend/` in place |
+| 2 | Extract MCP server | ✅ Complete — `services/mcp/` running |
+| 3 | Extract Ingestor | ✅ Complete — `services/ingestor/` running |
+| 4 | Extract Agent Service | ⚠️ Partial — plan + content workers exist; post/analytics workers still in `apps/api`; disabled in compose |
+| 5 | Laravel API | ❌ Not started |
+| 6 | Remove `apps/api` | ❌ Blocked on Phase 5 |
+
+---
+
+### Phase 1 — Extract the frontend ✅ COMPLETE
 
 **Goal:** Dashboard runs independently, pointed at the existing Express API.
 
-1. `cp -r apps/dashboard frontend`
-2. Update `package.json` name → `@anthyx/frontend`
-3. Update `pnpm-workspace.yaml`
-4. Confirm `NEXT_PUBLIC_API_URL` still points to existing Express API
-5. Deploy frontend independently (Vercel or Docker)
-6. Delete `apps/dashboard/`
-
-**Risk:** None. Frontend is already stateless against the API.
+`frontend/` exists, built, and running. `apps/dashboard/` deleted.
 
 ---
 
-### Phase 2 — Extract the MCP server (2–3 days)
+### Phase 2 — Extract the MCP server ✅ COMPLETE
 
 **Goal:** MCP server runs as a standalone process.
 
-1. `mkdir -p services/mcp/src/tools`
-2. `pnpm add fastmcp zod` in `services/mcp`
-3. Port each tool file from `apps/api/src/mcp/tools/` → `services/mcp/src/tools/`
-   - Only change: export a bare async function instead of the `{ name, inputSchema, handler }` object
-4. Write `services/mcp/src/index.ts` using the fastmcp API (see Section 7)
-5. In `apps/api/src/mcp/server.ts` — update `registerMcpRoutes` to proxy SSE requests to the new standalone server (or remove it entirely once agent service is migrated)
-6. Deploy `services/mcp` as a separate container
-7. Confirm agent tools work by checking `agent_logs` table
-
-**Risk:** Low. MCP is stateless; if it fails, workers throw and retry.
+`services/mcp/` is deployed. `apps/api/src/mcp/server.ts` still registers in-process MCP routes for backwards compatibility.
 
 ---
 
-### Phase 3 — Extract the Ingestor (2–3 days)
+### Phase 3 — Extract the Ingestor ✅ COMPLETE
 
 **Goal:** Brand ingestion runs independently, triggered by a queue job.
 
-1. `mkdir -p services/ingestor/src`
-2. Copy `apps/api/src/services/brand-ingestion/` → `services/ingestor/src/`
-3. Write `services/ingestor/src/index.ts` BullMQ worker (see Section 5)
-4. Replace Claude with Gemini in `extractor.ts` (see Section 9)
-5. In `apps/api/src/routes/brands.ts` — replace `await extractBrandData(...)` with `await queue.add("ingest", payload)` (push to queue, return 202)
-6. Verify by uploading a PDF and checking Qdrant for brand chunks
-7. Deploy `services/ingestor`
-
-**Risk:** Medium. Test PDF + URL ingestion paths. Add a dead-letter queue for failed jobs.
+`services/ingestor/` is deployed. Entry point is `worker.ts`, concurrency is controlled by `INGESTOR_CONCURRENCY` (default 3).
 
 ---
 
-### Phase 4 — Extract the Agent Service (3–5 days)
+### Phase 4 — Extract the Agent Service ⚠️ PARTIAL
 
 **Goal:** Agent orchestration and workers run independently.
 
-1. `mkdir -p services/agent/src/workers`
-2. Copy agent services: `orchestrator`, `strategist`, `copywriter`, `reviewer`, `brand-context`, `prompt-builder`, `guardrails`, `logger`
-3. Copy workers: `plan.worker`, `content.worker`, `post.worker`, `analytics.worker`, `overage.worker`
-4. Replace Anthropic SDK with Gemini in all agent files (see Section 9)
-5. Replace in-process MCP calls with external MCP client (see Section 6)
-6. Write `services/agent/src/index.ts` that starts all workers
-7. Remove agent code from `apps/api` — the Express workers are no longer needed
-8. Deploy `services/agent`
+**Done:** `services/agent/` exists with `plan.worker.ts` and `content.worker.ts`.  
+**Remaining:**
+1. Port `post.worker.ts` and `analytics.worker.ts` from `apps/api/src/workers/` → `services/agent/src/workers/`
+2. Enable the `agent` service in `docker-compose.yml`
+3. Remove agent/plan/content workers from `apps/api/src/workers/index.ts`
+4. Monitor `agent_logs` table for 1 billing cycle before removing `apps/api` workers
 
-**Risk:** High (most complex step). Run old and new workers in parallel for 1 billing cycle before removing old workers. Watch `agent_logs` table.
+**Blocker:** `services/agent` is disabled in `docker-compose.yml` — it competes on the same BullMQ queues as the `apps/api` worker process. Re-enable once `apps/api` workers are removed.
 
 ---
 
@@ -1403,21 +1404,23 @@ Route::get('/health', fn() => response()->json(['ok' => true, 'ts' => now()]));
 | `apps/dashboard/lib/api.ts` | `frontend/src/lib/api.ts` |
 | `apps/dashboard/lib/auth.ts` | `frontend/src/lib/auth.ts` |
 
-### Rewrite (LLM swap only — same logic, different SDK)
+### Rewrite (LLM swap — COMPLETE)
 
-| File | Change |
+| File | Status |
 |------|--------|
-| `services/agent/strategist.ts` | Anthropic → Gemini Pro |
-| `services/agent/copywriter.ts` | Anthropic → Gemini Flash |
-| `services/agent/reviewer.ts` | Anthropic → Gemini Flash-8B |
-| `services/brand-ingestion/extractor.ts` | Anthropic → Gemini Pro |
+| `services/agent/src/strategist.ts` | ✅ Gemini 1.5 Pro (two-phase: tool-call + formatter) |
+| `services/agent/src/copywriter.ts` | ✅ Gemini 1.5 Flash |
+| `services/agent/src/reviewer.ts` | ✅ Gemini 1.5 Flash-8B |
+| `services/ingestor/src/extractor.ts` | ✅ Gemini 1.5 Flash |
+| `apps/api/src/services/agent/llm-client.ts` | ✅ Gemini primary + Claude fallback |
 
-### Rewrite (MCP library swap)
+### Rewrite (MCP library swap — COMPLETE for standalone service)
 
-| File | Change |
+| File | Status |
 |------|--------|
-| `apps/api/src/mcp/server.ts` | `@modelcontextprotocol/sdk` → `fastmcp` |
-| Each `apps/api/src/mcp/tools/*.ts` | Change export shape from `{ name, inputSchema, handler }` to bare async function |
+| `services/mcp/src/index.ts` | ✅ fastmcp SSE server |
+| `services/mcp/src/tools/*.ts` | ✅ Bare async functions (fastmcp pattern) |
+| `apps/api/src/mcp/server.ts` | Unchanged — still uses `@modelcontextprotocol/sdk` in-process |
 
 ### Rewrite (Laravel — new code, same business logic)
 
@@ -1442,7 +1445,9 @@ Route::get('/health', fn() => response()->json(['ok' => true, 'ts' => now()]));
 | `middleware/plan-limits.ts` | `PlanLimitMiddleware.php` |
 | `workers/overage.worker.ts` | Laravel scheduled command (`php artisan schedule:run`) |
 
-### Delete entirely
+### Delete entirely (pending Phase 5 — Laravel)
+
+These deletions are blocked on Phase 5. Do not delete until Laravel is in production:
 
 - `apps/api/src/index.ts` — replaced by Laravel
 - `apps/api/src/queue/` — queue config moves to each Node.js service individually
@@ -1452,4 +1457,4 @@ Route::get('/health', fn() => response()->json(['ok' => true, 'ts' => now()]));
 
 ---
 
-*StackUpdate.md — Anthyx architecture migration guide — April 2026*
+*StackUpdate.md — Anthyx architecture migration guide — updated April 2026*

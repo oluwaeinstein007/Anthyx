@@ -1,7 +1,7 @@
 # Anthyx — Project Structure
 
-> **Stack:** Express 4 · TypeScript · Next.js 14 · Drizzle ORM · BullMQ · Qdrant  
-> **Pattern:** Turborepo monorepo · pnpm workspaces · two apps + two shared packages  
+> **Stack:** Express 4 · TypeScript · Next.js 14 · Drizzle ORM · BullMQ · Qdrant · Gemini  
+> **Pattern:** Turborepo monorepo · pnpm workspaces · standalone services + shared packages  
 > **Last updated:** April 2026
 
 ---
@@ -10,10 +10,14 @@
 
 | Layer | App / Package | Purpose |
 |---|---|---|
-| API + Workers + Agents | `apps/api` | Express server, agent pipeline, BullMQ workers, social posting |
-| Dashboard | `apps/dashboard` (frontend/) | Next.js 14, HITL review queue, billing, analytics |
-| Shared types | `packages/types` | TypeScript interfaces shared across both apps |
-| Shared config | `packages/config` | Zod schemas, shared constants, product config |
+| API + In-process Workers | `apps/api` | Express server, MCP registration, BullMQ workers (plan/content/post/analytics/ingestor/notification/overage) |
+| Standalone Ingestor | `services/ingestor` | Brand ingestion pipeline — BullMQ consumer on `anthyx-ingestor` queue |
+| Standalone Agent Service | `services/agent` | Plan + content generation workers — BullMQ consumers (disabled in compose until stable) |
+| Standalone MCP Server | `services/mcp` | fastmcp SSE server on port 3100 — brand context, scheduling, image tools |
+| Dashboard | `frontend/` | Next.js 14, HITL review queue, billing, analytics |
+| Shared types | `packages/types` | TypeScript interfaces shared across all services |
+| Shared config | `packages/config` | Zod schemas, shared constants, product config, credit costs |
+| Queue contracts | `packages/queue-contracts` | BullMQ job payload types shared between API and Node.js services |
 
 ---
 
@@ -28,17 +32,17 @@ anthyx/
 ├── pnpm-lock.yaml
 ├── tsconfig.base.json
 ├── package.json                   # Root scripts: dev, build, test
-├── docker-compose.yml             # Local dev: postgres, redis, qdrant
+├── docker-compose.yml             # Local dev: api, worker, mcp, ingestor, postgres, redis, qdrant
 ├── docker-compose.prod.yml        # Production container overrides
 ├── .env.example
 │
 │  # ── Docs ──────────────────────────────────────────────────────
-├── README.md
-├── technical.md                   # Full technical reference
-├── architecture.md                # Architecture diagrams and file map
-├── improvement.md                 # Feature backlog (all items completed)
+├── docs/
+│   ├── structure.md               # This file
+│   ├── technical.md               # Full technical reference
+│   └── StackUpdate.md             # Architecture migration guide
 │
-│  # ── Apps ──────────────────────────────────────────────────────
+│  # ── Apps (monolithic Express + workers — current primary backend) ──────
 ├── apps/
 │   │
 │   ├── api/                       # Express API + Workers
@@ -60,10 +64,10 @@ anthyx/
 │   │       │   └── validate.ts    # Zod body validation middleware
 │   │       │
 │   │       ├── mcp/
-│   │       │   ├── server.ts      # MCP SSE endpoint registration
+│   │       │   ├── server.ts      # MCP SSE endpoint registration (in-process)
 │   │       │   └── tools/
-│   │       │       ├── competitor-analysis.ts     # Fetches + summarises competitor post patterns
-│   │       │       ├── generate-image-asset.ts    # DALL-E 3 asset generation tool
+│   │       │       ├── competitor-analysis.ts         # Fetches + summarises competitor post patterns
+│   │       │       ├── generate-image-asset.ts        # DALL-E 3 asset generation tool
 │   │       │       ├── read-engagement-analytics.ts
 │   │       │       ├── retrieve-brand-context.ts
 │   │       │       ├── retrieve-brand-rules.ts
@@ -97,14 +101,14 @@ anthyx/
 │   │       │   │   ├── ab-tester.ts         # Generate A/B variants + auto-promote winner
 │   │       │   │   ├── auto-reply.ts        # Comment/DM reply agent (fourth agent)
 │   │       │   │   ├── brand-context.ts     # Qdrant RAG retrieval helper
-│   │       │   │   ├── copywriter.ts        # Copywriter agent (Claude Sonnet)
+│   │       │   │   ├── copywriter.ts        # Copywriter agent (Gemini Flash)
 │   │       │   │   ├── guardrails.ts        # System prompt injection of prohibitions/blackouts
-│   │       │   │   ├── llm-client.ts        # generateWithFallback() — Gemini → Claude
+│   │       │   │   ├── llm-client.ts        # generateWithFallback() — Gemini → Claude fallback
 │   │       │   │   ├── logger.ts            # logAgentAction() → agentLogs + activityEvents
 │   │       │   │   ├── orchestrator.ts      # Parallel content gen pipeline + drift detection
 │   │       │   │   ├── prompt-builder.ts    # Per-platform PLATFORM_RULES for all 14 platforms
-│   │       │   │   ├── reviewer.ts          # Reviewer agent (Claude Haiku, adversarial)
-│   │       │   │   └── strategist.ts        # Strategist agent (Gemini, structured output)
+│   │       │   │   ├── reviewer.ts          # Reviewer agent (Gemini Flash-8B, adversarial)
+│   │       │   │   └── strategist.ts        # Strategist agent (Gemini Pro, structured output)
 │   │       │   │
 │   │       │   ├── analytics/
 │   │       │   │   └── scorer.ts            # computeVoicePerformance() + classifyVoices()
@@ -117,12 +121,14 @@ anthyx/
 │   │       │   │
 │   │       │   ├── billing/
 │   │       │   │   ├── limits.ts            # PlanLimitError + requireLimit() logic
+│   │       │   │   ├── overage.ts           # Calculate + invoice overage at period end
+│   │       │   │   ├── paystack.ts          # Paystack subscription + webhook handler
 │   │       │   │   ├── stripe.ts            # Stripe webhook handler + subscription sync
 │   │       │   │   └── usage-tracker.ts     # incrementPost() + 80%/100% quota alerts
 │   │       │   │
 │   │       │   ├── brand-ingestion/
 │   │       │   │   ├── embedder.ts          # Qdrant upsert + incrementalIngestBrandDocument()
-│   │       │   │   ├── extractor.ts         # Voice/tone/color extraction from parsed docs
+│   │       │   │   ├── extractor.ts         # Voice/tone/color extraction (Gemini Flash)
 │   │       │   │   └── parser.ts            # PDF, Markdown, URL → text chunks
 │   │       │   │
 │   │       │   ├── oauth-proxy/
@@ -143,42 +149,118 @@ anthyx/
 │   │           ├── index.ts                 # Worker process entry point
 │   │           ├── analytics.worker.ts      # Polls published posts for engagement data
 │   │           ├── content.worker.ts        # Runs copywriter + reviewer per post
+│   │           ├── ingestor.worker.ts       # Brand ingestion — in-process BullMQ consumer
 │   │           ├── notification.worker.ts   # Fires webhooks + usage alerts
+│   │           ├── overage.worker.ts        # Cron: calculates + invoices monthly overage
 │   │           ├── plan.worker.ts           # Runs strategist → seeds draft posts
 │   │           └── post.worker.ts           # Executes scheduled posts via executor
+│
+│  # ── Standalone Services (polyglot extraction — in progress) ────────────
+├── services/
 │   │
-│   └── dashboard/  (frontend/)             # Next.js 14 App Router
-│       └── src/app/(dashboard)/dashboard/
-│           ├── page.tsx                     # Overview / home
-│           ├── accounts/                    # Social account OAuth management
-│           ├── agents/                      # Agent CRUD + log viewer
-│           │   └── [id]/page.tsx            # Per-agent log stream
-│           ├── analytics/                   # Cross-brand analytics
-│           ├── billing/                     # Subscription + usage
-│           ├── brands/                      # Brand profiles + ingestion
-│           │   └── [id]/
-│           │       ├── page.tsx
-│           │       └── ingest/page.tsx
-│           ├── campaigns/                   # Campaign CRUD + rollup view
-│           │   └── [id]/page.tsx
-│           ├── plans/                       # Marketing plan list + detail
-│           │   └── [id]/page.tsx
-│           ├── repurpose/                   # Blog URL → social posts
-│           ├── review/                      # HITL review queue (filter + bulk actions)
-│           ├── settings/                    # Org settings + guardrails
-│           ├── team/                        # Team invite + RBAC management
-│           └── webhooks/                    # Webhook endpoint CRUD
+│   ├── ingestor/               # Node.js — brand ingestion pipeline
+│   │   ├── src/
+│   │   │   ├── worker.ts       # BullMQ consumer entry — queue: anthyx-ingestor
+│   │   │   ├── parser.ts       # pdf-parse, cheerio, fs
+│   │   │   ├── extractor.ts    # Gemini Flash — brand data extraction
+│   │   │   ├── embedder.ts     # OpenAI embeddings → Qdrant upsert
+│   │   │   ├── db.ts           # Drizzle client
+│   │   │   └── schema.ts       # DB schema reference (read-only)
+│   │   ├── package.json
+│   │   ├── tsconfig.json
+│   │   └── Dockerfile
+│   │
+│   ├── agent/                  # Node.js — plan + content generation workers
+│   │   │                       # NOTE: disabled in docker-compose; competes with apps/api workers
+│   │   ├── src/
+│   │   │   ├── index.ts        # Entry: starts plan.worker + content.worker
+│   │   │   ├── strategist.ts   # Gemini Pro — two-phase plan generation (tool-call → format)
+│   │   │   ├── copywriter.ts   # Gemini Flash — content generation
+│   │   │   ├── reviewer.ts     # Gemini Flash-8B — adversarial gate
+│   │   │   ├── orchestrator.ts # Copywriter → Reviewer loop with retry
+│   │   │   ├── brand-context.ts
+│   │   │   ├── prompt-builder.ts
+│   │   │   ├── guardrails.ts
+│   │   │   ├── logger.ts
+│   │   │   ├── db.ts
+│   │   │   ├── redis.ts
+│   │   │   ├── schema.ts
+│   │   │   ├── schema-analytics.ts
+│   │   │   ├── tools/
+│   │   │   │   ├── read-engagement-analytics.ts   # Direct DB read
+│   │   │   │   └── web-search-trends.ts           # Brave/Tavily search
+│   │   │   └── workers/
+│   │   │       ├── plan.worker.ts     # BullMQ: anthyx-plan-generation
+│   │   │       └── content.worker.ts  # BullMQ: anthyx-content-generation
+│   │   ├── package.json
+│   │   ├── tsconfig.json
+│   │   └── Dockerfile
+│   │
+│   └── mcp/                    # Node.js — fastmcp SSE server (port 3100)
+│       ├── src/
+│       │   ├── index.ts        # fastmcp server entry
+│       │   ├── db.ts
+│       │   ├── qdrant.ts
+│       │   ├── redis.ts
+│       │   ├── schema.ts
+│       │   └── tools/
+│       │       ├── retrieve-brand-context.ts
+│       │       ├── retrieve-brand-voice.ts
+│       │       ├── retrieve-brand-rules.ts
+│       │       ├── retrieve-diet-instructions.ts
+│       │       ├── read-engagement-analytics.ts
+│       │       ├── schedule-post.ts
+│       │       ├── web-search-trends.ts
+│       │       └── generate-image-asset.ts
+│       ├── package.json
+│       ├── tsconfig.json
+│       └── Dockerfile
+│
+│  # ── Frontend ─────────────────────────────────────────────────────────
+├── frontend/                   # Next.js 14 App Router (moved from apps/dashboard)
+│   └── src/app/(dashboard)/dashboard/
+│       ├── page.tsx                     # Overview / home
+│       ├── accounts/                    # Social account OAuth management
+│       ├── agents/                      # Agent CRUD + log viewer
+│       │   └── [id]/page.tsx            # Per-agent log stream
+│       ├── analytics/                   # Cross-brand analytics
+│       ├── billing/                     # Subscription + usage
+│       ├── brands/                      # Brand profiles + ingestion
+│       │   └── [id]/
+│       │       ├── page.tsx
+│       │       └── ingest/page.tsx
+│       ├── campaigns/                   # Campaign CRUD + rollup view
+│       │   └── [id]/page.tsx
+│       ├── plans/                       # Marketing plan list + detail
+│       │   └── [id]/page.tsx
+│       ├── repurpose/                   # Blog URL → social posts
+│       ├── review/                      # HITL review queue (filter + bulk actions)
+│       ├── settings/                    # Org settings + guardrails
+│       ├── team/                        # Team invite + RBAC management
+│       └── webhooks/                    # Webhook endpoint CRUD
 │
 ├── packages/
 │   ├── types/
 │   │   └── src/
 │   │       ├── index.ts         # Re-exports all types
+│   │       ├── agents.ts        # Agent, ReviewerOutput, CopywriterOutput, etc.
+│   │       ├── billing.ts       # Subscription, PlanTier, UsageRecord types
+│   │       ├── plans.ts         # GeneratedPlanItem, MarketingPlan types
 │   │       └── platforms.ts     # Platform union type (14 values)
 │   │
-│   └── config/
+│   ├── config/
+│   │   └── src/
+│   │       ├── index.ts         # Re-exports all schemas
+│   │       ├── credits.ts       # CREDIT_COSTS — TEXT_POST, AI_IMAGE, PLAN_GENERATION, etc.
+│   │       ├── product.ts       # productConfig — name, limits, model IDs
+│   │       └── schemas.ts       # Zod schemas: post, plan, agent, billing, brand extraction
+│   │
+│   └── queue-contracts/
 │       └── src/
-│           ├── index.ts         # Zod schemas: post, plan, agent, billing
-│           └── product.ts       # productConfig — name, limits, model IDs
+│           ├── index.ts         # Re-exports all payloads
+│           ├── agent.ts         # PlanJobPayload, ContentJobPayload
+│           ├── ingest.ts        # IngestBrandPayload
+│           └── post.ts          # PostExecutionPayload
 ```
 
 ---

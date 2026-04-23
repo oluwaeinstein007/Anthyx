@@ -131,11 +131,11 @@ The architecture is deliberately split into three layers: **The Brain** (strateg
 
 Unlike a single "general marketing AI", Anthyx uses **three distinct sub-agents**, each with a narrow responsibility:
 
-| Agent          | Role                                                                                                                                                                                                           | Model Recommendation            |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| **Strategist** | Generates 30-day marketing plans, topic calendars, content pillars. Consumes engagement data from analytics feed to adjust future plans.                                                                       | Claude Opus (complex reasoning) |
-| **Copywriter** | Takes a single plan item and writes the final post text + hashtags for a specific platform + persona. Retrieves brand voice from Qdrant RAG.                                                                   | Claude Sonnet (speed + quality) |
-| **Reviewer**   | Separate LLM call that acts as a compliance gate. Checks the Copywriter's output against diet instructions, brand rules, and platform guidelines. Returns `pass`, `fail`, or `rewrite` with specific feedback. | Claude Haiku (cheap + fast)     |
+| Agent          | Role                                                                                                                                                                                                           | Model                                     |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| **Strategist** | Generates 30-day marketing plans, topic calendars, content pillars. Consumes engagement data from analytics feed to adjust future plans.                                                                       | `gemini-1.5-pro` (env: `GEMINI_STRATEGIST_MODEL`) |
+| **Copywriter** | Takes a single plan item and writes the final post text + hashtags for a specific platform + persona. Retrieves brand voice from Qdrant RAG.                                                                   | `gemini-1.5-flash` (env: `GEMINI_COPYWRITER_MODEL`) |
+| **Reviewer**   | Separate LLM call that acts as a compliance gate. Checks the Copywriter's output against diet instructions, brand rules, and platform guidelines. Returns `pass`, `fail`, or `rewrite` with specific feedback. | `gemini-1.5-flash-8b` (env: `GEMINI_REVIEWER_MODEL`) |
 
 > **Why three agents?** A single prompt doing all three jobs conflates strategy with execution and lets errors slip through. The Reviewer being a separate call means it has no attachment to the Copywriter's output — it's adversarial by design.
 
@@ -227,22 +227,24 @@ Analytics Worker (triggered 30min post-publish)
 
 ### Backend
 
-| Tool                                | Version | Purpose                                            |
-| ----------------------------------- | ------- | -------------------------------------------------- |
-| Node.js                             | 20 LTS  | Runtime                                            |
-| TypeScript                          | 5.x     | Type safety across entire codebase                 |
-| Express.js                          | 4.x     | HTTP API server                                    |
-| Model Context Protocol (MCP)        | latest  | Agent orchestration and tool-calling               |
-| Anthropic SDK (`@anthropic-ai/sdk`) | latest  | Claude LLM calls                                   |
-| OpenAI SDK (`openai`)               | 4.x     | Embeddings (text-embedding-3-small) + optional GPT |
-| BullMQ                              | 4.x     | Redis-backed job queue for scheduled posts         |
-| `ioredis`                           | 5.x     | Redis client                                       |
-| `pg` / `drizzle-orm`                | latest  | PostgreSQL ORM                                     |
-| `pdf-parse`                         | 1.x     | PDF text extraction                                |
-| `cheerio`                           | 1.x     | URL/web scraping for brand ingestion               |
-| `zod`                               | 3.x     | Runtime schema validation                          |
-| `multer`                            | 1.x     | File upload middleware                             |
-| `node-cron`                         | 3.x     | Internal scheduling fallback                       |
+| Tool                                | Version | Purpose                                                               |
+| ----------------------------------- | ------- | --------------------------------------------------------------------- |
+| Node.js                             | 22 LTS  | Runtime                                                               |
+| TypeScript                          | 5.x     | Type safety across entire codebase                                    |
+| Express.js                          | 4.x     | HTTP API server                                                       |
+| `@google/generative-ai`             | latest  | Primary LLM SDK — Gemini Pro, Flash, Flash-8B                         |
+| `fastmcp`                           | latest  | MCP SSE server (`services/mcp`) — Zod-first tool API                  |
+| `@modelcontextprotocol/sdk`         | latest  | MCP in-process server (`apps/api/src/mcp/server.ts`)                  |
+| Anthropic SDK (`@anthropic-ai/sdk`) | latest  | Claude fallback via `llm-client.ts` `generateWithFallback()`          |
+| OpenAI SDK (`openai`)               | 4.x     | Embeddings (text-embedding-3-small) + DALL-E 3 image generation       |
+| BullMQ                              | 5.x     | Redis-backed job queue for scheduled posts                            |
+| `ioredis`                           | 5.x     | Redis client                                                          |
+| `pg` / `drizzle-orm`                | latest  | PostgreSQL ORM                                                        |
+| `pdf-parse`                         | 1.x     | PDF text extraction                                                   |
+| `cheerio`                           | 1.x     | URL/web scraping for brand ingestion                                  |
+| `zod`                               | 3.x     | Runtime schema validation                                             |
+| `multer`                            | 1.x     | File upload middleware                                                |
+| `node-cron`                         | 3.x     | Internal scheduling fallback                                          |
 
 ### Vector Database
 
@@ -284,116 +286,39 @@ Analytics Worker (triggered 30min post-publish)
 | Instagram Graph API       | Direct posting fallback                                             |
 | LinkedIn API v2           | Direct posting fallback                                             |
 | Telegram Bot API          | Telegram community management                                       |
-| OpenAI API                | Embeddings + GPT-4o for content                                     |
-| Anthropic API (Claude)    | Primary agent reasoning + content generation                        |
+| Google Gemini API         | Primary LLM — Strategist (Pro), Copywriter (Flash), Reviewer (Flash-8B), brand extraction |
+| OpenAI API                | Embeddings (text-embedding-3-small) + DALL-E 3 image generation     |
+| Anthropic API (Claude)    | LLM fallback via `generateWithFallback()` in `llm-client.ts`        |
 | DALL-E 3 API              | Image asset generation                                              |
 | Midjourney API (optional) | Premium image asset generation                                      |
 | **Stripe API**            | Subscription billing, usage-based overage invoicing, webhook events |
+| **Paystack API**          | Alternative payment gateway (NG/Africa market)                      |
 
 ---
 
 ## 4. Directory Structure
 
+See [docs/structure.md](structure.md) for the full annotated directory tree.
+
+### Summary
+
 ```
 anthyx/
-├── apps/
-│   ├── api/                          # Express API server
-│   │   ├── src/
-│   │   │   ├── routes/
-│   │   │   │   ├── brands.ts         # Brand ingestion endpoints
-│   │   │   │   ├── agents.ts         # Agent CRUD
-│   │   │   │   ├── accounts.ts       # Social account management
-│   │   │   │   ├── plans.ts          # Marketing plan generation
-│   │   │   │   ├── posts.ts          # Post management + HITL
-│   │   │   │   ├── analytics.ts      # Engagement data
-│   │   │   │   └── billing.ts        # Subscription, usage, upgrade/downgrade
-│   │   │   ├── services/
-│   │   │   │   ├── brand-ingestion/
-│   │   │   │   │   ├── parser.ts     # PDF/MD/URL parsing
-│   │   │   │   │   ├── extractor.ts  # NLP voice/tone/color extraction
-│   │   │   │   │   └── embedder.ts   # Qdrant embedding + chunking
-│   │   │   │   ├── agent/
-│   │   │   │   │   ├── orchestrator.ts    # Coordinates all three agents
-│   │   │   │   │   ├── strategist.ts      # Strategist Agent (Claude Opus)
-│   │   │   │   │   ├── copywriter.ts      # Copywriter Agent (Claude Sonnet)
-│   │   │   │   │   ├── reviewer.ts        # Reviewer Agent (Claude Haiku)
-│   │   │   │   │   ├── brand-context.ts   # Qdrant RAG retrieval (tenant-isolated)
-│   │   │   │   │   └── prompt-builder.ts  # Platform constraint rules
-│   │   │   │   ├── plan/
-│   │   │   │   │   ├── generator.ts  # Triggers Strategist Agent
-│   │   │   │   │   └── scheduler.ts  # BullMQ job creation
-│   │   │   │   ├── posting/
-│   │   │   │   │   ├── executor.ts   # Platform publish logic
-│   │   │   │   │   └── social-mcp.ts # Unified MCP tool wrapper
-│   │   │   │   ├── oauth-proxy/
-│   │   │   │   │   ├── index.ts      # OAuthProxyService (getValidToken, refresh)
-│   │   │   │   │   ├── refreshers.ts # Per-platform token refresh implementations
-│   │   │   │   │   └── crypto.ts     # AES-256-GCM encrypt/decrypt
-│   │   │   │   ├── billing/
-│   │   │   │   │   ├── stripe.ts         # Stripe client + webhook handler
-│   │   │   │   │   ├── subscriptions.ts  # Create/update/cancel subscription logic
-│   │   │   │   │   ├── usage-tracker.ts  # Increment usage counters in DB
-│   │   │   │   │   ├── limits.ts         # Enforce plan limits before actions
-│   │   │   │   │   └── overage.ts        # Calculate + invoice overage at period end
-│   │   │   │   └── assets/
-│   │   │   │       └── generator.ts  # DALL-E 3 + CDN upload
-│   │   │   ├── workers/
-│   │   │   │   ├── post.worker.ts         # BullMQ: publish approved posts
-│   │   │   │   ├── content.worker.ts      # BullMQ: run Copywriter + Reviewer per post
-│   │   │   │   ├── plan.worker.ts         # BullMQ: run Strategist Agent
-│   │   │   │   └── analytics.worker.ts    # BullMQ: fetch + store engagement data
-│   │   │   ├── mcp/
-│   │   │   │   ├── server.ts              # MCP server setup + tool registration
-│   │   │   │   └── tools/
-│   │   │   │       ├── retrieve-brand-context.ts
-│   │   │   │       ├── retrieve-brand-voice.ts
-│   │   │   │       ├── web-search-trends.ts
-│   │   │   │       ├── read-engagement-analytics.ts
-│   │   │   │       ├── retrieve-diet-instructions.ts
-│   │   │   │       ├── retrieve-brand-rules.ts
-│   │   │   │       ├── generate-image-asset.ts
-│   │   │   │       └── schedule-post.ts
-│   │   │   ├── db/
-│   │   │   │   ├── schema.ts         # Drizzle ORM schema
-│   │   │   │   ├── migrations/
-│   │   │   │   └── client.ts
-│   │   │   ├── queue/
-│   │   │   │   ├── client.ts         # BullMQ + Redis setup
-│   │   │   │   └── jobs.ts           # Job definitions + schedulePostJob()
-│   │   │   ├── middleware/
-│   │   │   │   ├── auth.ts
-│   │   │   │   └── validate.ts
-│   │   │   └── index.ts
-│   │   ├── Dockerfile
-│   │   └── package.json
-│   │
-│   └── dashboard/                    # Next.js frontend
-│       ├── app/
-│       │   ├── (auth)/
-│       │   ├── (dashboard)/
-│       │   │   ├── brands/
-│       │   │   ├── agents/
-│       │   │   ├── plans/
-│       │   │   ├── posts/            # HITL approval queue
-│       │   │   ├── analytics/
-│       │   │   └── billing/          # Plan overview, usage meters, upgrade flow
-│       │   └── api/                  # Next.js API routes (auth only)
-│       ├── components/
-│       ├── lib/
-│       └── Dockerfile
-│
+├── apps/api/          # Express API server + all in-process BullMQ workers (primary backend)
+├── services/
+│   ├── ingestor/      # Standalone brand ingestion worker (BullMQ consumer)
+│   ├── agent/         # Standalone plan + content workers (disabled in compose — see note below)
+│   └── mcp/           # fastmcp SSE server on port 3100
+├── frontend/          # Next.js 14 dashboard (moved from apps/dashboard)
 ├── packages/
-│   ├── types/                        # Shared TypeScript types
-│   │   ├── agents.ts                 # Agent, ReviewerOutput, StrategistInput, etc.
-│   │   ├── plans.ts                  # GeneratedPlanItem, MarketingPlan, etc.
-│   │   └── platforms.ts              # Platform enum, PlatformConstraints
-│   └── config/                       # Shared Zod schemas
-│
+│   ├── types/         # Shared TypeScript interfaces
+│   ├── config/        # Zod schemas, productConfig, CREDIT_COSTS
+│   └── queue-contracts/ # BullMQ payload types shared between services
 ├── docker-compose.yml
-├── docker-compose.prod.yml
-├── .env.example
-└── turbo.json                        # Turborepo monorepo config
+└── turbo.json
 ```
+
+> **Note on `services/agent`:** The standalone agent service exists but is commented out in `docker-compose.yml`. It competes with the `apps/api` worker process on the same BullMQ queues. Re-enable it only after migrating the `apps/api` workers to use it exclusively.
 
 ---
 
