@@ -12,7 +12,9 @@ export type Platform =
   | "threads"
   | "bluesky"
   | "mastodon"
-  | "youtube";
+  | "youtube"
+  | "pinterest"
+  | "email";
 
 export const PLATFORMS: Platform[] = [
   "x",
@@ -29,6 +31,8 @@ export const PLATFORMS: Platform[] = [
   "bluesky",
   "mastodon",
   "youtube",
+  "pinterest",
+  "email",
 ];
 
 export interface PlatformConstraints {
@@ -110,6 +114,16 @@ export const PLATFORM_CONSTRAINTS: Record<Platform, PlatformConstraints> = {
     maxCharacters: null,
     maxHashtags: 15,
     notes: "Description: first 100 chars are the visible preview snippet. Chapters as 00:00 Section name. Hashtags in body.",
+  },
+  pinterest: {
+    maxCharacters: 500,
+    maxHashtags: 20,
+    notes: "Image required. Title (100 char max) + description up to 500 chars. Visual-first — image is primary. Add board ID in account config.",
+  },
+  email: {
+    maxCharacters: null,
+    maxHashtags: 0,
+    notes: "Subject line (50 char ideal), preview text (90 char), HTML body. Requires recipient list. No hashtags. CTA required.",
   },
 };
 

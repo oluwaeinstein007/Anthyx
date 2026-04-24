@@ -9,6 +9,16 @@ export const PlatformSchema = z.enum([
   "facebook",
   "telegram",
   "tiktok",
+  "discord",
+  "whatsapp",
+  "slack",
+  "reddit",
+  "threads",
+  "bluesky",
+  "mastodon",
+  "youtube",
+  "pinterest",
+  "email",
 ]);
 
 // ── Brand Ingestion ────────────────────────────────────────────────────────────
@@ -140,6 +150,7 @@ export const GeneratePlanSchema = z.object({
   feedbackLoopEnabled: z.boolean().optional().default(false),
   postsPerPlatformPerDay: z.number().int().min(1).max(3).optional().default(1),
   targetLocale: z.string().optional(),
+  campaignId: z.string().uuid().optional(),
 });
 
 export const ApprovePostSchema = z.object({
@@ -183,8 +194,29 @@ export const SubscribeSchema = z.object({
   tier: z.enum(["starter", "growth", "agency", "scale"]),
   interval: z.enum(["monthly", "annual"]),
   provider: z.enum(["stripe", "paystack"]).optional().default("paystack"),
+  promoCode: z.string().optional(),
 });
 
 export const UpdateOverageCapSchema = z.object({
   overageCapCents: z.number().int().min(0).max(100_000_00),
+});
+
+export const ValidatePromoSchema = z.object({
+  code: z.string().min(1),
+  tier: z.enum(["starter", "growth", "agency", "scale"]).optional(),
+});
+
+export const CreateEmailCampaignSchema = z.object({
+  brandProfileId: z.string().uuid(),
+  subject: z.string().min(1).max(255),
+  previewText: z.string().max(200).optional(),
+  htmlBody: z.string().min(1),
+  plainText: z.string().optional(),
+  recipientList: z.array(z.string().email()).min(1),
+  scheduledAt: z.string().datetime({ offset: true }).optional(),
+});
+
+export const CreateRssFeedSchema = z.object({
+  feedUrl: z.string().url(),
+  label: z.string().min(1).max(100),
 });

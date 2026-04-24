@@ -253,4 +253,37 @@ router.post("/ab-tests/:abTestId/promote", auth, async (req, res) => {
   return res.json(result);
 });
 
+// POST /posts/:id/regenerate-image — regenerate AI image for a draft/pending post
+router.post("/:id/regenerate-image", auth, async (req, res) => {
+  const post = await db.query.scheduledPosts.findFirst({
+    where: and(
+      eq(scheduledPosts.id, req.params.id!),
+      eq(scheduledPosts.organizationId, req.user.orgId),
+    ),
+  });
+  if (!post) return res.status(404).json({ error: "Not found" });
+  if (!["draft", "pending_review"].includes(post.status!)) {
+    return res.status(400).json({ error: "Can only regenerate image for draft or pending_review posts" });
+  }
+
+  const prompt = (req.body as { prompt?: string }).prompt ?? post.suggestedMediaPrompt;
+  if (!prompt) return res.status(400).json({ error: "No media prompt — provide one in the request body" });
+
+  const { generateAssetForPost } = await import("../services/assets/generator");
+  const mediaUrl = await generateAssetForPost({
+    contentText: post.contentText,
+    suggestedMediaPrompt: prompt,
+    assetTrack: "ai",
+  });
+
+  if (!mediaUrl) return res.status(500).json({ error: "Image generation returned no result" });
+
+  await db
+    .update(scheduledPosts)
+    .set({ mediaUrls: [mediaUrl], suggestedMediaPrompt: prompt, updatedAt: new Date() })
+    .where(eq(scheduledPosts.id, post.id));
+
+  return res.json({ mediaUrl });
+});
+
 export { router as postsRouter };

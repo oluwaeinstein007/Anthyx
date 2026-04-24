@@ -7,6 +7,7 @@ import {
   jsonb,
   boolean,
   integer,
+  numeric,
   pgEnum,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
@@ -28,6 +29,8 @@ export const platformEnum = pgEnum("platform", [
   "bluesky",
   "mastodon",
   "youtube",
+  "pinterest",
+  "email",
 ]);
 
 export const postStatusEnum = pgEnum("post_status", [
@@ -72,15 +75,22 @@ export const actorTypeEnum = pgEnum("actor_type", ["agent", "human"]);
 
 export const entityTypeEnum = pgEnum("entity_type", ["post", "plan", "brand", "agent"]);
 
+export const campaignStatusEnum = pgEnum("campaign_status", ["active", "completed", "archived"]);
+
+export const affiliateStatusEnum = pgEnum("affiliate_status", ["pending", "approved", "suspended"]);
+
+export const conversionStatusEnum = pgEnum("conversion_status", ["pending", "cleared", "paid"]);
+
+export const emailCampaignStatusEnum = pgEnum("email_campaign_status", ["draft", "scheduled", "sent"]);
+
 // ── Organizations ──────────────────────────────────────────────────────────────
 
 export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
-  // Guardrails
   globalProhibitions: text("global_prohibitions").array().default(sql`'{}'`),
-  sensitiveEventBlackouts: jsonb("sensitive_event_blackouts"), // [{ id, name, startDate, endDate }]
+  sensitiveEventBlackouts: jsonb("sensitive_event_blackouts"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -94,6 +104,8 @@ export const users = pgTable("users", {
   name: text("name"),
   passwordHash: text("password_hash"),
   role: text("role").notNull().default("member"), // 'owner' | 'admin' | 'member'
+  isSuperAdmin: boolean("is_super_admin").default(false),
+  emailVerified: boolean("email_verified").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -114,7 +126,7 @@ export const brandProfiles = pgTable("brand_profiles", {
   qdrantCollectionId: text("qdrant_collection_id").unique(),
   sourceFiles: jsonb("source_files"),
   brandContext: jsonb("brand_context"),
-  ingestStatus: text("ingest_status").default("idle"), // 'idle' | 'processing' | 'done' | 'failed'
+  ingestStatus: text("ingest_status").default("idle"),
   bannerBearTemplateUid: text("bannerbear_template_uid"),
   logoUrl: text("logo_url"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -172,8 +184,6 @@ export const socialAccounts = pgTable(
   }),
 );
 
-// ── Marketing Plans ────────────────────────────────────────────────────────────
-
 // ── Campaigns ─────────────────────────────────────────────────────────────────
 
 export const campaigns = pgTable("campaigns", {
@@ -184,9 +194,14 @@ export const campaigns = pgTable("campaigns", {
   name: text("name").notNull(),
   goals: text("goals").array(),
   budgetCapCents: integer("budget_cap_cents"),
+  status: campaignStatusEnum("status").default("active"),
+  startDate: timestamp("start_date"),
+  endDate: timestamp("end_date"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+// ── Marketing Plans ────────────────────────────────────────────────────────────
 
 export const marketingPlans = pgTable("marketing_plans", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -230,7 +245,7 @@ export const scheduledPosts = pgTable("scheduled_posts", {
     .notNull(),
   platform: platformEnum("platform").notNull(),
   contentText: text("content_text").notNull(),
-  contentType: text("content_type"), // educational | promotional | engagement | trending
+  contentType: text("content_type"),
   contentHashtags: text("content_hashtags").array(),
   mediaUrls: text("media_urls").array(),
   scheduledAt: timestamp("scheduled_at").notNull(),
@@ -242,11 +257,28 @@ export const scheduledPosts = pgTable("scheduled_posts", {
   reviewedBy: uuid("reviewed_by").references(() => users.id),
   reviewedAt: timestamp("reviewed_at"),
   reviewNotes: text("review_notes"),
-  assetTrack: text("asset_track").default("template"), // 'template' | 'ai'
+  assetTrack: text("asset_track").default("template"),
   suggestedMediaPrompt: text("suggested_media_prompt"),
-  segments: jsonb("segments"), // string[] for threads / carousels (multi-part content)
+  segments: jsonb("segments"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ── Post Comments (team collaboration) ────────────────────────────────────────
+
+export const postComments = pgTable("post_comments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  postId: uuid("post_id")
+    .references(() => scheduledPosts.id)
+    .notNull(),
+  userId: uuid("user_id")
+    .references(() => users.id)
+    .notNull(),
+  organizationId: uuid("organization_id")
+    .references(() => organizations.id)
+    .notNull(),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // ── Post Analytics ─────────────────────────────────────────────────────────────
@@ -275,7 +307,7 @@ export const agentLogs = pgTable("agent_logs", {
     .notNull(),
   agentId: uuid("agent_id").references(() => agents.id),
   postId: uuid("post_id").references(() => scheduledPosts.id),
-  action: text("action").notNull(), // 'reviewer_pass' | 'reviewer_fail' | 'token_refreshed' | etc.
+  action: text("action").notNull(),
   payload: jsonb("payload"),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -318,7 +350,7 @@ export const subscriptions = pgTable("subscriptions", {
     .unique(),
   tier: planTierEnum("tier").notNull().default("sandbox"),
   billingInterval: billingIntervalEnum("billing_interval").default("monthly"),
-  billingProvider: text("billing_provider").default("stripe"), // 'stripe' | 'paystack'
+  billingProvider: text("billing_provider").default("stripe"),
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
   stripePriceId: text("stripe_price_id"),
@@ -391,9 +423,9 @@ export const webhookEndpoints = pgTable("webhook_endpoints", {
     .references(() => organizations.id)
     .notNull(),
   url: text("url").notNull(),
-  events: text("events").array().default(sql`'{}'`), // ['post_published', 'post_failed', 'plan_ready']
-  channels: text("channels").array().default(sql`'{}'`), // ['slack', 'discord', 'email', 'webhook']
-  secret: text("secret"), // HMAC signing secret for verification
+  events: text("events").array().default(sql`'{}'`),
+  channels: text("channels").array().default(sql`'{}'`),
+  secret: text("secret"),
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -409,8 +441,8 @@ export const workflowParticipants = pgTable("workflow_participants", {
   userId: uuid("user_id")
     .references(() => users.id)
     .notNull(),
-  brandProfileId: uuid("brand_profile_id").references(() => brandProfiles.id), // null = org-wide
-  agentId: uuid("agent_id").references(() => agents.id), // null = all agents on brand
+  brandProfileId: uuid("brand_profile_id").references(() => brandProfiles.id),
+  agentId: uuid("agent_id").references(() => agents.id),
   stage: workflowStageEnum("stage").notNull(),
   canEdit: boolean("can_edit").default(false),
   canVeto: boolean("can_veto").default(false),
@@ -426,10 +458,118 @@ export const activityEvents = pgTable("activity_events", {
     .references(() => organizations.id)
     .notNull(),
   actorType: actorTypeEnum("actor_type").notNull(),
-  actorId: uuid("actor_id").notNull(), // agentId or userId depending on actorType
+  actorId: uuid("actor_id").notNull(),
   entityType: entityTypeEnum("entity_type").notNull(),
   entityId: uuid("entity_id").notNull(),
-  event: text("event").notNull(), // 'caption_edited' | 'reviewer_fail' | 'post_approved' | 'plan_vetoed'
-  diff: jsonb("diff"), // { field, oldValue, newValue } for edits
+  event: text("event").notNull(),
+  diff: jsonb("diff"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Feature Flags ──────────────────────────────────────────────────────────────
+
+export const featureFlags = pgTable("feature_flags", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  flagName: text("flag_name").notNull().unique(),
+  enabledGlobally: boolean("enabled_globally").default(false),
+  enabledForOrgs: text("enabled_for_orgs").array().default(sql`'{}'`),
+  disabledForOrgs: text("disabled_for_orgs").array().default(sql`'{}'`),
+});
+
+// ── Affiliates ─────────────────────────────────────────────────────────────────
+
+export const affiliates = pgTable("affiliates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").references(() => users.id),
+  email: text("email").notNull().unique(),
+  name: text("name").notNull(),
+  status: affiliateStatusEnum("status").default("pending"),
+  commissionRate: numeric("commission_rate", { precision: 5, scale: 4 }).default("0.20"),
+  totalEarnedCents: integer("total_earned_cents").default(0),
+  totalPaidCents: integer("total_paid_cents").default(0),
+  payoutThresholdCents: integer("payout_threshold_cents").default(5000),
+  stripeAccountId: text("stripe_account_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const affiliateLinks = pgTable("affiliate_links", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  affiliateId: uuid("affiliate_id").references(() => affiliates.id).notNull(),
+  code: text("code").notNull().unique(),
+  campaign: text("campaign"),
+  clicks: integer("clicks").default(0),
+  conversions: integer("conversions").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const affiliateConversions = pgTable("affiliate_conversions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  affiliateLinkId: uuid("affiliate_link_id").references(() => affiliateLinks.id).notNull(),
+  convertedOrgId: uuid("converted_org_id").references(() => organizations.id),
+  planTier: text("plan_tier").notNull(),
+  commissionCents: integer("commission_cents").notNull(),
+  status: conversionStatusEnum("status").default("pending"),
+  clearedAt: timestamp("cleared_at"),
+  paidAt: timestamp("paid_at"),
+});
+
+// ── Promo Codes ────────────────────────────────────────────────────────────────
+
+export const promoCodes = pgTable("promo_codes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  code: text("code").notNull().unique(),
+  discountType: text("discount_type").notNull(), // 'percent' | 'fixed_cents'
+  discountValue: integer("discount_value").notNull(),
+  applicableTiers: text("applicable_tiers").array(),
+  maxUses: integer("max_uses"),
+  usedCount: integer("used_count").default(0),
+  expiresAt: timestamp("expires_at"),
+  isActive: boolean("is_active").default(true),
+  stripeCouponId: text("stripe_coupon_id"),
+  paystackPlanCode: text("paystack_plan_code"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Email Campaigns ────────────────────────────────────────────────────────────
+
+export const emailCampaigns = pgTable("email_campaigns", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
+  brandProfileId: uuid("brand_profile_id").references(() => brandProfiles.id),
+  subject: text("subject").notNull(),
+  previewText: text("preview_text"),
+  htmlBody: text("html_body").notNull(),
+  plainText: text("plain_text"),
+  recipientList: text("recipient_list").array().default(sql`'{}'`),
+  status: emailCampaignStatusEnum("status").default("draft"),
+  scheduledAt: timestamp("scheduled_at"),
+  sentAt: timestamp("sent_at"),
+  opens: integer("opens").default(0),
+  clicks: integer("clicks").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── RSS Feeds ──────────────────────────────────────────────────────────────────
+
+export const rssFeeds = pgTable("rss_feeds", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
+  brandProfileId: uuid("brand_profile_id").references(() => brandProfiles.id),
+  feedUrl: text("feed_url").notNull(),
+  label: text("label").notNull(),
+  lastFetchedAt: timestamp("last_fetched_at"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const feedItems = pgTable("feed_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  rssFeedId: uuid("rss_feed_id").references(() => rssFeeds.id).notNull(),
+  organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
+  title: text("title"),
+  url: text("url"),
+  summary: text("summary"),
+  publishedAt: timestamp("published_at"),
+  isFlagged: boolean("is_flagged").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });

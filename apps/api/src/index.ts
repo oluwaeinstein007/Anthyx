@@ -2,6 +2,7 @@ import "express-async-errors";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import rateLimit from "express-rate-limit";
 import { authRouter } from "./routes/auth";
 import { brandsRouter } from "./routes/brands";
 import { agentsRouter } from "./routes/agents";
@@ -16,8 +17,15 @@ import { campaignsRouter } from "./routes/campaigns";
 import { teamRouter } from "./routes/team";
 import { webhooksRouter } from "./routes/webhooks";
 import { reportsRouter } from "./routes/reports";
+import { adminRouter } from "./routes/admin";
+import { inboxRouter } from "./routes/inbox";
+import { emailCampaignsRouter } from "./routes/email-campaigns";
+import { feedsRouter } from "./routes/feeds";
 import { PlanLimitError } from "./services/billing/limits";
 import { registerMcpRoutes } from "./mcp/server";
+import { db } from "./db/client";
+import { sql } from "drizzle-orm";
+import { redisConnection } from "./queue/client";
 
 const app = express();
 const PORT = parseInt(process.env["PORT"] ?? "4000");
@@ -38,8 +46,36 @@ app.use(
 app.use(express.json({ limit: "10mb" }));
 app.use(cookieParser());
 
+// ── Rate limiting — 100 req/min per IP ───────────────────────────────────────
+app.use(
+  "/v1",
+  rateLimit({
+    windowMs: 60 * 1000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many requests — slow down" },
+  }),
+);
+
 // ── Health check ──────────────────────────────────────────────────────────────
-app.get("/health", (_, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+app.get("/health", async (_, res) => {
+  let dbOk = false;
+  let redisOk = false;
+
+  try {
+    await db.execute(sql`SELECT 1`);
+    dbOk = true;
+  } catch {}
+
+  try {
+    await redisConnection.ping();
+    redisOk = true;
+  } catch {}
+
+  const status = dbOk && redisOk ? "ok" : "degraded";
+  return res.status(status === "ok" ? 200 : 503).json({ status, db: dbOk, redis: redisOk, ts: new Date().toISOString() });
+});
 
 // ── API routes ────────────────────────────────────────────────────────────────
 app.use("/v1/auth", authRouter);
@@ -56,6 +92,10 @@ app.use("/v1/campaigns", campaignsRouter);
 app.use("/v1/team", teamRouter);
 app.use("/v1/webhooks", webhooksRouter);
 app.use("/v1/reports", reportsRouter);
+app.use("/v1/admin", adminRouter);
+app.use("/v1/inbox", inboxRouter);
+app.use("/v1/email-campaigns", emailCampaignsRouter);
+app.use("/v1/brands", feedsRouter);
 
 // ── MCP SSE routes ────────────────────────────────────────────────────────────
 registerMcpRoutes(app);

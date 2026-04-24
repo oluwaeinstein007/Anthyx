@@ -495,53 +495,42 @@ Email drivers: `MAIL_MAILER=smtp` (SMTP/Gmail), `sendgrid` (SendGrid API key), o
 
 ### Integration approach
 
-Install `social-mcp` as an npm dependency in `api/`. No Docker service needed — the `@modelcontextprotocol/sdk` (already in `api/package.json`) provides `StdioClientTransport` which spawns `social-mcp` as a child process and communicates over stdio. The package stays in-process from the container's perspective.
+Install `social-mcp` into the existing `services/mcp/` package (which already uses FastMCP). Register Pinterest and Email as new tools on the existing `FastMCP` instance — no new service, no new client, no extra process. Agents already call the Anthyx MCP server over SSE; they will pick up the new tools automatically.
 
 **Install:**
 ```bash
-pnpm add social-mcp --filter api
+pnpm add social-mcp --filter @anthyx/mcp
 ```
 
-**Create `api/src/services/social-mcp-client.ts`:**
+**Register tools in `services/mcp/src/index.ts`:**
 ```typescript
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { createPin, getBoards, getBoardPins } from "social-mcp/pinterest";
+import { sendEmail, sendBulkEmail } from "social-mcp/email";
 
-let _client: Client | null = null;
+mcp.addTool({
+  name: "pinterest_create_pin",
+  description: "Create a Pinterest pin on a board. Image URL required.",
+  parameters: z.object({
+    boardId: z.string(),
+    title: z.string(),
+    description: z.string(),
+    imageUrl: z.string().url(),
+    link: z.string().url().optional(),
+  }),
+  execute: async (args) => createPin(args),
+});
 
-export async function getSocialMcpClient(): Promise<Client> {
-  if (_client) return _client;
-
-  const transport = new StdioClientTransport({
-    command: "npx",
-    args: ["social-mcp"],
-    env: {
-      ...process.env,
-      PINTEREST_ACCESS_TOKEN: process.env.PINTEREST_ACCESS_TOKEN ?? "",
-      MAIL_MAILER: process.env.MAIL_MAILER ?? "smtp",
-      MAIL_FROM_ADDRESS: process.env.MAIL_FROM_ADDRESS ?? "",
-      MAIL_FROM_NAME: process.env.MAIL_FROM_NAME ?? "",
-      MAIL_HOST: process.env.MAIL_HOST ?? "",
-      MAIL_PORT: process.env.MAIL_PORT ?? "587",
-      MAIL_USERNAME: process.env.MAIL_USERNAME ?? "",
-      MAIL_PASSWORD: process.env.MAIL_PASSWORD ?? "",
-      MAIL_ENCRYPTION: process.env.MAIL_ENCRYPTION ?? "tls",
-      SENDGRID_API_KEY: process.env.SENDGRID_API_KEY ?? "",
-      MAILGUN_API_KEY: process.env.MAILGUN_API_KEY ?? "",
-      MAILGUN_DOMAIN: process.env.MAILGUN_DOMAIN ?? "",
-    },
-  });
-
-  _client = new Client({ name: "anthyx-api", version: "1.0.0" }, { capabilities: {} });
-  await _client.connect(transport);
-  return _client;
-}
-
-export async function callSocialMcp(tool: string, args: Record<string, unknown>) {
-  const client = await getSocialMcpClient();
-  const result = await client.callTool({ name: tool, arguments: args });
-  return result;
-}
+mcp.addTool({
+  name: "email_send_bulk",
+  description: "Send a campaign email to multiple recipients via the configured mail driver.",
+  parameters: z.object({
+    recipients: z.array(z.string().email()),
+    subject: z.string(),
+    html: z.string(),
+    text: z.string().optional(),
+  }),
+  execute: async (args) => sendBulkEmail(args),
+});
 ```
 
 **Add env vars to `.env.example`** (no new infrastructure required):
@@ -560,13 +549,15 @@ MAIL_ENCRYPTION=tls
 # MAILGUN_DOMAIN=
 ```
 
+> If `social-mcp` does not yet export individual tool functions (current `exports` only exposes the main index), add named exports for `pinterest` and `email` services to the package — this is straightforward since you own it.
+
 ### Pinterest — what to build in Anthyx
 
 - Add `pinterest` to the `Platform` type in `packages/types/src/`
-- In `api/src/services/posting/executor.ts`: when platform is `pinterest`, call `callSocialMcp("PINTEREST_CREATE_PIN", { boardId, title, description, imageUrl, link })` instead of going through `publishPost` in `social-mcp.ts`
+- In `api/src/services/posting/executor.ts`: when platform is `pinterest`, the agent calls `pinterest_create_pin` on the FastMCP server (same as any other tool call) — no changes needed in `executor.ts` beyond adding `pinterest` to the platform switch
   - Pinterest requires an image — ensure `mediaUrl` is populated; fall back to `generate_image_asset` tool
   - `boardId` comes from the social account record (`accountId` field)
-- In `analytics.worker.ts`: call `callSocialMcp("PINTEREST_GET_BOARD_PINS", { boardId })` to fetch saves/impressions for analytics
+- In `analytics.worker.ts`: agent calls `pinterest_get_board_pins` via the FastMCP server to fetch saves/impressions for analytics
 - Frontend: add Pinterest to the platform selector on account connection and plan generation
 
 ### Email marketing — what to build in Anthyx
@@ -595,7 +586,7 @@ Email newsletters are a distinct channel — agent generates the content, `socia
   );
   ```
 - `POST /v1/email-campaigns` — create draft
-- `POST /v1/email-campaigns/:id/send` — calls `callSocialMcp("EMAIL_SEND_BULK", { recipients, subject, text, html })` with the campaign's recipient list
+- `POST /v1/email-campaigns/:id/send` — calls the `email_send_bulk` tool on the FastMCP server with the campaign's recipient list, subject, and body
 - Add email copy instructions to `copywriter.ts` — email needs subject line, preview text, and body with CTA (longer form than social posts)
 
 **Frontend**
@@ -616,7 +607,7 @@ The package's read tools can seed the engagement inbox without building custom p
 | `GET_LINKEDIN_POSTS` | Fetch recent LinkedIn post activity |
 | `GET_DISCORD_MESSAGES` | Fetch recent channel messages |
 
-Wire these into `fetchAndReplyToInbox` in `auto-reply.ts` via `callSocialMcp(toolName, args)` to replace the current stub — no custom platform fetch code needed.
+Register these as additional tools on the FastMCP server in `services/mcp/src/index.ts` (same pattern as above), then call them from `fetchAndReplyToInbox` in `auto-reply.ts` via the existing MCP tool-call path — no custom platform fetch code needed.
 
 ---
 

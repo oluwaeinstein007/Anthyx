@@ -1,10 +1,10 @@
 import { Router } from "express";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db/client";
-import { subscriptions } from "../db/schema";
+import { subscriptions, promoCodes } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
-import { SubscribeSchema, UpdateOverageCapSchema } from "@anthyx/config";
+import { SubscribeSchema, UpdateOverageCapSchema, ValidatePromoSchema } from "@anthyx/config";
 import { stripe, createSubscription, handleStripeWebhook } from "../services/billing/stripe";
 import { createPaystackSubscription, handlePaystackWebhook, cancelPaystackSubscription, isValidPlanCode, verifyPaystackTransaction } from "../services/billing/paystack";
 import { getCurrentUsage } from "../services/billing/usage-tracker";
@@ -161,6 +161,35 @@ router.put("/overage-cap", auth, validate(UpdateOverageCapSchema), async (req, r
     .where(eq(subscriptions.organizationId, req.user.orgId));
 
   return res.json({ updated: true });
+});
+
+// POST /billing/validate-promo — validate a promo code and return discount preview (public with auth)
+router.post("/validate-promo", auth, validate(ValidatePromoSchema), async (req, res) => {
+  const { code, tier } = req.body as { code: string; tier?: string };
+  const now = new Date();
+
+  const promo = await db.query.promoCodes.findFirst({
+    where: and(
+      eq(promoCodes.code, code.toUpperCase()),
+      eq(promoCodes.isActive, true),
+    ),
+  });
+
+  if (!promo) return res.status(404).json({ error: "Invalid promo code" });
+  if (promo.expiresAt && promo.expiresAt < now) return res.status(400).json({ error: "Promo code has expired" });
+  if (promo.maxUses !== null && promo.usedCount! >= promo.maxUses) {
+    return res.status(400).json({ error: "Promo code has reached its usage limit" });
+  }
+  if (tier && promo.applicableTiers && promo.applicableTiers.length > 0 && !promo.applicableTiers.includes(tier)) {
+    return res.status(400).json({ error: `Promo code is not valid for the ${tier} plan` });
+  }
+
+  return res.json({
+    valid: true,
+    discountType: promo.discountType,
+    discountValue: promo.discountValue,
+    applicableTiers: promo.applicableTiers,
+  });
 });
 
 // POST /billing/webhook/stripe

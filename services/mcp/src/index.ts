@@ -93,6 +93,83 @@ mcp.addTool({
   execute: async (args) => generateImageAsset(args),
 });
 
+// ── Pinterest tools (via social-mcp) ─────────────────────────────────────────
+// Install: pnpm add social-mcp --filter @anthyx/mcp
+// Requires PINTEREST_ACCESS_TOKEN in env.
+// Once installed, uncomment the block below and remove this comment.
+//
+// import { createPin, getBoards, getBoardPins } from "social-mcp/pinterest";
+//
+// mcp.addTool({
+//   name: "pinterest_create_pin",
+//   description: "Create a Pinterest pin on a board. Image URL is required.",
+//   parameters: z.object({
+//     boardId: z.string(),
+//     title: z.string(),
+//     description: z.string(),
+//     imageUrl: z.string().url(),
+//     link: z.string().url().optional(),
+//   }),
+//   execute: async (args) => createPin(args),
+// });
+//
+// mcp.addTool({
+//   name: "pinterest_get_boards",
+//   description: "List all boards for the authenticated Pinterest account.",
+//   parameters: z.object({ limit: z.number().int().min(1).max(50).default(25) }),
+//   execute: async (args) => getBoards(args),
+// });
+//
+// mcp.addTool({
+//   name: "pinterest_get_board_pins",
+//   description: "Fetch pins (saves/impressions) from a Pinterest board for analytics.",
+//   parameters: z.object({ boardId: z.string(), limit: z.number().int().min(1).max(100).default(25) }),
+//   execute: async (args) => getBoardPins(args),
+// });
+
+// ── Email tools (via social-mcp) ──────────────────────────────────────────────
+// Install: pnpm add social-mcp --filter @anthyx/mcp
+// Requires MAIL_MAILER + MAIL_FROM_ADDRESS in env (smtp | sendgrid | mailgun).
+// Once installed, uncomment the block below and remove this comment.
+//
+// import { sendEmail, sendBulkEmail } from "social-mcp/email";
+//
+// mcp.addTool({
+//   name: "email_send",
+//   description: "Send a transactional email to a single recipient.",
+//   parameters: z.object({
+//     to: z.string().email(),
+//     subject: z.string(),
+//     html: z.string(),
+//     text: z.string().optional(),
+//   }),
+//   execute: async (args) => sendEmail(args),
+// });
+//
+// mcp.addTool({
+//   name: "email_send_bulk",
+//   description: "Send a campaign email to multiple recipients via the configured mail driver.",
+//   parameters: z.object({
+//     recipients: z.array(z.string().email()),
+//     subject: z.string(),
+//     html: z.string(),
+//     text: z.string().optional(),
+//   }),
+//   execute: async (args) => sendBulkEmail(args),
+// });
+
+// ── Social inbox read tools (via social-mcp) ──────────────────────────────────
+// These seed the engagement inbox (§4.1). Uncomment once social-mcp is installed.
+//
+// import { searchTweets, getInstagramPosts, getFacebookPosts, getLinkedinPosts } from "social-mcp";
+//
+// mcp.addTool({
+//   name: "search_tweets",
+//   description: "Fetch recent mentions and replies on X (Twitter).",
+//   parameters: z.object({ query: z.string(), limit: z.number().int().default(20) }),
+//   execute: async (args) => searchTweets(args),
+// });
+
 const port = parseInt(process.env["MCP_PORT"] ?? "3100");
 
 mcp.start({
