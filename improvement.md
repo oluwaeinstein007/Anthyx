@@ -196,9 +196,101 @@ Key rules:
 
 ---
 
-## 4. Missing Features in Existing Apps
+## 4. Competitive Feature Gaps
 
-### 4.1 Authentication (`apps/api` + `frontend/`)
+Features that Buffer, Jasper, or Copy.ai offer where Anthyx is behind. Each entry is verified against the current codebase — "absent" means zero code, "partial" means backend exists but UI or wiring is incomplete.
+
+### 4.1 Unified Engagement Inbox — **HIGH / Missing**
+
+**What competitors have:** Buffer ships a cross-platform comment + DM inbox. From a single view operators can read and reply to comments, DMs, and mentions across all connected accounts.
+
+**What Anthyx has:** `auto-reply.ts` contains `runAutoReplyAgent` (full AI reply logic) and `fetchAndReplyToInbox` — but the fetch function body is entirely a stub with commented-out pseudo-code. There is no frontend inbox page and no API route (`GET /inbox`, `POST /inbox/:id/reply`).
+
+**What to build:**
+- Platform-specific inbox fetch integrations inside `fetchAndReplyToInbox` (X, Instagram, LinkedIn comment/DM APIs)
+- `GET /v1/inbox` — returns paginated comments/DMs across all org social accounts, with `replied` flag
+- `POST /v1/inbox/:messageId/reply` — posts reply via `social-mcp.ts`, marks as replied
+- Frontend page at `/dashboard/inbox`: unified feed with filter by platform/brand, reply composer, escalation flag
+
+### 4.2 Per-Post Analytics Drill-down — **HIGH / Partial**
+
+**What competitors have:** Buffer and Jasper both report reach, impressions, clicks, and engagement rate at the individual post level with historical trend lines per channel.
+
+**What Anthyx has:** `GET /analytics` returns org-wide aggregates and the last 10 published posts. `GET /analytics/brand/:id` returns content-type performance scores. `scorer.ts` computes engagement rate per content type. The frontend analytics page only shows two bar charts — posts published and avg engagement rate, both aggregated by platform. No per-post detail, no best-performing post list, no brand filter, no reach/impressions breakdown.
+
+**What to build:**
+- Extend `GET /analytics` to accept `brandProfileId` query param for per-brand filtering in the UI
+- Add `GET /analytics/posts` — paginated list of published posts sorted by engagement rate, including `reach`, `impressions`, `likes`, `clicks` from `postAnalytics`
+- Add `GET /analytics/posts/:postId` — full detail for a single post
+- Frontend: best-performing posts table on the analytics page, with per-post modal showing all metrics + a link to the original post
+
+### 4.3 AI Image Generation UI — **MEDIUM / Backend done, UI missing**
+
+**Note:** Anthyx is *not* text-only — AI image generation is fully built. `ai-generator.ts` calls Gemini Imagen 3 and uploads to CDN. `template-renderer.ts` supports BannerBear template cards. `generator.ts` routes between the two tracks. The MCP tool `generate_image_asset` is available to agents. Generation is triggered automatically when the agent sets `suggestedMediaPrompt` or writes `[GENERATE_IMAGE]` in the content.
+
+**What's missing:** Users have no way to see or manage images from the UI. In the HITL review queue, there is no image preview alongside the post text. Users can't manually request image regeneration or swap the image. There's no indicator that an image was generated.
+
+**What to build:**
+- Show generated image URL (if any) alongside post text in the review page (`/dashboard/review`)
+- Add "Regenerate image" button per post in the HITL queue — calls a new `POST /posts/:id/regenerate-image`
+- Show image thumbnail in the posts list page
+- Expose `suggestedMediaPrompt` as an editable field in the post editor so users can guide generation
+
+### 4.4 SEO Layer — **MEDIUM / Absent**
+
+**What competitors have:** Jasper integrates SurferSEO for keyword suggestions and readability scoring inline in the writing flow, aimed at blog and web copy use cases.
+
+**What Anthyx has:** Nothing. No keyword tooling, no readability scoring, no SEO integration anywhere in the codebase.
+
+**Is this a priority for Anthyx?** Only if targeting blog/web copy alongside social — which the `blog-repurposer.ts` service suggests is a goal. Medium priority.
+
+**What to build:**
+- Add a readability score to the post review page (Flesch-Kincaid via a lightweight npm package — no external API needed)
+- Add `GET /v1/seo/keywords?topic=X&brand=Y` — calls web search trends tool + LLM to suggest 5-10 keywords for the topic in the brand's niche
+- Surface keyword suggestions and readability score in the HITL editor as a sidebar panel (not a blocker for approval, just informational)
+
+### 4.5 RSS / Live Competitor Feed Auto-Ingestion — **MEDIUM / Absent**
+
+**What competitors have:** Buffer pulls competitor and industry content via RSS for repurposing ideas. Content is curated automatically — operators don't need to manually trigger research.
+
+**What Anthyx has:** `competitor-analysis.ts` MCP tool runs on-demand research when agents invoke it. `web-search-trends.ts` fetches live trend data on demand. No automated feed subscription.
+
+**What to build:**
+- DB table: `rss_feeds (id, organizationId, brandProfileId, feedUrl, label, lastFetchedAt, isActive)`
+- `POST /v1/brands/:id/feeds` — register an RSS feed URL
+- A scheduled worker (`feeds.worker.ts`) that runs hourly: fetches new items from all registered feeds, stores them as raw intel in a `feedItems` table, flags relevant ones for agent use
+- `GET /v1/brands/:id/feeds/items` — returns recent feed items for the brand
+- Feed items should be injectable into `strategist.ts` context when building a content plan so the agent can reference real recent industry events
+
+### 4.6 A/B Test UI — **MEDIUM / Service done, UI missing**
+
+Already tracked in §5.3, repeated here for competitive context. Copy.ai auto-generates multiple copy versions; Anthyx's `ab-tester.ts` is a complete service (`generateAbVariants`, `evaluateAndPromoteWinner`) and `abTests` DB table exists. Route exists at `POST /posts/:id/ab-test`. The only gap is the frontend — build the UI per §5.3.
+
+### 4.7 CRM / Content-to-Conversion Tracking — **LATER / Absent**
+
+**What competitors have:** Copy.ai positions as a GTM platform — connecting marketing content to sales pipeline outcomes. Content-to-conversion tracking lets operators see which posts drove leads or revenue.
+
+**What Anthyx has:** Nothing. The `postAnalytics` table tracks engagement (likes, shares) but not downstream conversion events.
+
+**What to build (when ready for enterprise tier):**
+- Add `utm_source`, `utm_medium`, `utm_campaign`, `utm_content` fields to post generation — auto-append UTM params to links in posts
+- Webhook receiver for conversion events from CRMs (HubSpot, Salesforce) or simple event ping endpoint
+- Attribution model: match conversion events to the post's UTM params
+- Surface in analytics: "posts that drove conversions this month"
+
+### 4.8 Plagiarism / Originality Check — **LATER / Absent**
+
+**What competitors have:** Jasper includes a Copyscape plagiarism check on generated content.
+
+**What Anthyx has:** Nothing. The reviewer agent checks brand-voice adherence but not originality.
+
+**What to build:** Call Copyscape SERP API or similar before sending content to HITL approval — flag if similarity score exceeds threshold. Block or warn in the review queue.
+
+---
+
+## 5. Missing Features in Existing Apps
+
+### 5.1 Authentication (`apps/api` + `frontend/`)
 
 | Item | Status | What to do |
 |---|---|---|
@@ -210,7 +302,7 @@ Key rules:
 | Session revocation | Missing | JWT is stateless — add a Redis denylist for logout + password change |
 | Email verification on register | Missing | Currently registers immediately — add `email_verified` flag + Resend verification email |
 
-### 4.2 Billing (`apps/api/src/routes/billing.ts` + `services/billing/`)
+### 5.2 Billing (`apps/api/src/routes/billing.ts` + `services/billing/`)
 
 | Item | Status | What to do |
 |---|---|---|
@@ -226,7 +318,7 @@ Key rules:
 | Proration preview before upgrade | Missing | Call Stripe `retrieveUpcomingInvoice` and show user the charge before confirming |
 | Enterprise quote flow | Missing | Enterprise tier = custom pricing — add "Contact sales" CTA with Cal.com embed or email form |
 
-### 4.3 Posts & Planning
+### 5.3 Posts & Planning
 
 | Item | Status | What to do |
 |---|---|---|
@@ -240,7 +332,7 @@ Key rules:
 | A/B test UI | `ab-tester.ts` service + `abTests` DB table exist | Build UI: create variant B, view winner after N days |
 | Post failure alerts | Missing | When `status = failed`, send email/webhook notification |
 
-### 4.4 Agents
+### 5.4 Agents
 
 | Item | Status | What to do |
 |---|---|---|
@@ -250,7 +342,7 @@ Key rules:
 | Diet instruction UI | DB field exists | Verify the agents/[id] page has a text area for diet instructions |
 | Per-agent guardrail overrides | Missing | Agents inherit org guardrails — add per-agent additional restrictions |
 
-### 4.5 Analytics & Reporting
+### 5.5 Analytics & Reporting
 
 | Item | Status | What to do |
 |---|---|---|
@@ -262,7 +354,7 @@ Key rules:
 | Exportable reports | `reports.ts` route exists | Add CSV/PDF export button on reports page |
 | Usage analytics (admin-only) | Missing | Separate from post analytics — track feature adoption across orgs |
 
-### 4.6 Team & Collaboration
+### 5.6 Team & Collaboration
 
 | Item | Status | What to do |
 |---|---|---|
@@ -272,7 +364,7 @@ Key rules:
 | Notification preferences | Missing | Per-user setting: get notified on post approval, failure, new plan |
 | @mentions in comments | Missing | Tag team members in post comments |
 
-### 4.7 Brand & Content
+### 5.7 Brand & Content
 
 | Item | Status | What to do |
 |---|---|---|
@@ -282,7 +374,7 @@ Key rules:
 | Brand health score | Missing | Score how consistent generated content is with brand guidelines |
 | Multi-language support | Missing | Agent should generate content in brand's target language(s) |
 
-### 4.8 Social Accounts
+### 5.8 Social Accounts
 
 | Item | Status | What to do |
 |---|---|---|
@@ -294,9 +386,9 @@ Key rules:
 
 ---
 
-## 5. Technical Debt & Infrastructure
+## 6. Technical Debt & Infrastructure
 
-### 5.1 API
+### 6.1 API
 
 | Item | Status | Fix |
 |---|---|---|
@@ -311,7 +403,7 @@ Key rules:
 | Database connection pooling | Unknown | Verify postgres.js pool size is tuned for production load |
 | Missing `posts` route in some references | Minor | Ensure `routes/posts.ts` is mounted in `index.ts` |
 
-### 5.2 Frontend (`frontend/`)
+### 6.2 Frontend (`frontend/`)
 
 | Item | Status | Fix |
 |---|---|---|
@@ -328,7 +420,7 @@ Key rules:
 | Accessibility (a11y) | Unknown | ARIA labels on icon buttons, focus traps in modals, keyboard navigation |
 | `posts/` page | Exists as folder | Verify it has a `page.tsx` — not shown in initial listing |
 
-### 5.3 Workers
+### 6.3 Workers
 
 | Item | Status | Fix |
 |---|---|---|
@@ -338,7 +430,7 @@ Key rules:
 | Dead-letter queues | Unknown | Add DLQ for all workers — failed jobs should not silently disappear |
 | Worker health metrics | Missing | Expose BullMQ queue depths to the admin dashboard |
 
-### 5.4 Testing
+### 6.4 Testing
 
 | Item | Status | Fix |
 |---|---|---|
@@ -347,7 +439,7 @@ Key rules:
 | E2E tests | Missing | Playwright for critical paths: register → create brand → generate plan → approve post |
 | Load testing | Missing | k6 or Artillery for post-execution worker under load |
 
-### 5.5 DevOps / CI
+### 6.5 DevOps / CI
 
 | Item | Status | Fix |
 |---|---|---|
@@ -360,7 +452,7 @@ Key rules:
 
 ---
 
-## 6. New Features (Future Roadmap)
+## 7. New Features (Future Roadmap)
 
 These are not blockers for launch but are high-value for growth and retention.
 
@@ -384,7 +476,7 @@ These are not blockers for launch but are high-value for growth and retention.
 
 ---
 
-## 7. Summary — Priority Order
+## 8. Summary — Priority Order
 
 ### Immediate (launch blockers)
 1. Verify all frontend pages are complete and wired to API (especially `posts/`, `review/`, `plans/[id]`)
@@ -399,17 +491,24 @@ These are not blockers for launch but are high-value for growth and retention.
 8. Annual billing toggle in UI
 9. Post failure notifications
 10. Basic onboarding wizard
+11. **Unified engagement inbox** — `auto-reply.ts` logic is done; wire platform fetch APIs, add route + frontend page (§4.1)
+12. **Per-post analytics drill-down** — extend analytics route + add best-performers table to analytics UI (§4.2)
+13. **AI image preview in HITL queue** — backend is fully built; just needs to surface the image URL in the review UI (§4.3)
 
 ### Medium-term (1-3 months)
-11. Affiliate dashboard (`affiliate/`) — if running a referral program
-12. A/B test UI (service already built)
-13. Auto-reply UI (service already built)
-14. Competitor analysis UI (MCP tool already built)
-15. 2FA / TOTP
+14. Affiliate dashboard (`affiliate/`) — if running a referral program
+15. A/B test UI (service already built, see §4.6)
+16. Auto-reply / engagement inbox UI (service already built, see §4.1)
+17. Competitor analysis UI (MCP tool already built)
+18. RSS / live competitor feed auto-ingestion (§4.5)
+19. SEO readability scoring in post editor (§4.4)
+20. 2FA / TOTP
 
 ### Long-term
-16. Mobile app / PWA
-17. White-label portal
-18. Social listening
-19. Zapier integration
-20. Multi-workspace support
+21. Mobile app / PWA
+22. White-label portal
+23. Social listening
+24. Zapier integration
+25. Multi-workspace support
+26. CRM / content-to-conversion tracking (§4.7)
+27. Plagiarism checker (§4.8)
