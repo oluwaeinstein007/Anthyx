@@ -6,7 +6,7 @@
 
 ## 1. Admin Dashboard — `admin/` (NEW APP)
 
-A separate Next.js app at `admin/` (monorepo root, alongside `frontend/`) for platform operators. Completely isolated from the user-facing `frontend/`. Protected by a separate `ADMIN_SECRET` or an `is_super_admin` flag on the users table.
+A separate Next.js app at `admin/` (monorepo root, alongside `frontend/` and `api/`). Each top-level app is a standalone deployable unit — flat structure makes future repo separation straightforward. Completely isolated from the user-facing frontend. Protected by a separate `ADMIN_SECRET` or an `is_super_admin` flag on the users table.
 
 ### Pages to build
 
@@ -31,7 +31,7 @@ A separate Next.js app at `admin/` (monorepo root, alongside `frontend/`) for pl
 | `/support` | View recent signup errors, API 500s, failed webhook deliveries |
 | `/settings` | Platform-level settings: maintenance mode, SMTP config, Stripe webhook URLs |
 
-### API routes to add (in `apps/api/src/routes/admin.ts`)
+### API routes to add (in `api/src/routes/admin.ts`)
 
 All under `/v1/admin/*`, gated by `requireRole('super_admin')` middleware.
 
@@ -88,7 +88,7 @@ CREATE TABLE feature_flags (
 | `/resources` | Marketing materials (logos, banners, email templates) |
 | `/settings` | Profile, payment info, notification preferences |
 
-### API routes to add (in `apps/api/src/routes/affiliates.ts`)
+### API routes to add (in `api/src/routes/affiliates.ts`)
 
 ```
 POST /affiliates/register            — apply to affiliate program
@@ -290,7 +290,7 @@ Already tracked in §5.3, repeated here for competitive context. Copy.ai auto-ge
 
 ## 5. Missing Features in Existing Apps
 
-### 5.1 Authentication (`apps/api` + `frontend/`)
+### 5.1 Authentication (`api/` + `frontend/`)
 
 | Item | Status | What to do |
 |---|---|---|
@@ -302,7 +302,7 @@ Already tracked in §5.3, repeated here for competitive context. Copy.ai auto-ge
 | Session revocation | Missing | JWT is stateless — add a Redis denylist for logout + password change |
 | Email verification on register | Missing | Currently registers immediately — add `email_verified` flag + Resend verification email |
 
-### 5.2 Billing (`apps/api/src/routes/billing.ts` + `services/billing/`)
+### 5.2 Billing (`api/src/routes/billing.ts` + `services/billing/`)
 
 | Item | Status | What to do |
 |---|---|---|
@@ -473,42 +473,277 @@ These are not blockers for launch but are high-value for growth and retention.
 | **Social listening** | Monitor brand mentions across platforms → surface in analytics |
 | **Sentiment analysis on comments** | Classify comment sentiment on published posts → feed back into agent voice tuning |
 | **Commission/revenue share for agencies** | White-label agencies resell seats — track sub-org revenue, compute agency's share |
+| **Ideas board** | Scratchpad for content ideas before they become full plans — Buffer calls this "Ideas". Table: `ideas (id, orgId, brandId, title, notes, status)`. Lightweight CRUD, no agent needed. |
+| **Hashtag manager** | Save/organise branded hashtag sets per brand (e.g. "product launch set", "awareness set"). Auto-attach a set to post generation. Agents already generate hashtags — this lets users curate and reuse them. |
+| **First comment scheduling (configurable)** | `social-mcp.ts` already posts hashtags as first comment on Instagram + Threads. Extend this to be user-configurable: any text as first comment, on any platform that supports it (LinkedIn, Facebook). |
+| **Google Docs / OneDrive export** | Export generated posts directly to a Google Doc or OneDrive file — useful for teams whose approval workflow lives outside Anthyx. |
 
 ---
 
-## 8. Summary — Priority Order
+## 8. Email Marketing & Pinterest via `social-mcp` npm package
+
+> **Note:** `social-mcp` (npm) is Anthyx's own published MCP server package. It already supports Pinterest and Email natively. Do not build custom implementations — integrate via this package.
+
+### What `social-mcp` provides
+
+| Platform | Tools available |
+|---|---|
+| **Pinterest** | `PINTEREST_GET_BOARDS`, `PINTEREST_CREATE_BOARD`, `PINTEREST_CREATE_PIN`, `PINTEREST_GET_PIN`, `PINTEREST_GET_BOARD_PINS`, `PINTEREST_DELETE_PIN` |
+| **Email** | `EMAIL_SEND` (single recipient), `EMAIL_SEND_BULK` (multiple recipients) |
+
+Email drivers: `MAIL_MAILER=smtp` (SMTP/Gmail), `sendgrid` (SendGrid API key), or `mailgun` (Mailgun API key). Switching providers requires only changing the env var — no code changes.
+
+### Integration approach
+
+`social-mcp` runs as a standalone MCP server process (`npx social-mcp`). The right integration is to add it as a service in `docker-compose.yml` and expose its tools to Anthyx agents alongside the existing `services/mcp/` server.
+
+**Add to `docker-compose.yml`:**
+```yaml
+social-mcp:
+  image: node:22-alpine
+  command: npx social-mcp
+  environment:
+    PINTEREST_ACCESS_TOKEN: "${PINTEREST_ACCESS_TOKEN}"
+    MAIL_MAILER: "${MAIL_MAILER}"          # smtp | sendgrid | mailgun
+    MAIL_FROM_ADDRESS: "${MAIL_FROM_ADDRESS}"
+    MAIL_FROM_NAME: "${MAIL_FROM_NAME}"
+    # SMTP vars (if MAIL_MAILER=smtp)
+    MAIL_HOST: "${MAIL_HOST}"
+    MAIL_PORT: "${MAIL_PORT}"
+    MAIL_USERNAME: "${MAIL_USERNAME}"
+    MAIL_PASSWORD: "${MAIL_PASSWORD}"
+    MAIL_ENCRYPTION: "${MAIL_ENCRYPTION}"
+    # Or SendGrid: SENDGRID_API_KEY
+    # Or Mailgun: MAILGUN_API_KEY, MAILGUN_DOMAIN
+  ports:
+    - "3200:3200"
+  restart: unless-stopped
+```
+
+**Wire into agent pipeline (`api/src/mcp/server.ts`):**
+- Register the `social-mcp` MCP server as an additional tool source alongside the existing MCP tools
+- Agents can then call `PINTEREST_CREATE_PIN` and `EMAIL_SEND` / `EMAIL_SEND_BULK` directly
+
+### Pinterest — what to build in Anthyx
+
+- Add `pinterest` to the `Platform` type in `packages/types/src/`
+- In `api/src/services/posting/executor.ts`: when platform is `pinterest`, call `PINTEREST_CREATE_PIN` via the `social-mcp` MCP connection instead of `publishPost` in `social-mcp.ts`
+  - Pinterest requires `imageUrl` — ensure `mediaUrl` is populated (fall back to `generate_image_asset` tool)
+  - `boardId` stored on the social account record (`accountId` field)
+- Add `PINTEREST_GET_BOARD_PINS` call in `analytics.worker.ts` for engagement data (saves, impressions)
+- Frontend: add Pinterest to the platform selector on account connection and plan generation
+
+### Email marketing — what to build in Anthyx
+
+Email newsletters are a distinct channel — agent generates the content, `social-mcp` sends it.
+
+**Backend**
+- Add `email` to the `Platform` type
+- DB table for email campaigns:
+  ```sql
+  CREATE TABLE email_campaigns (
+    id UUID PRIMARY KEY,
+    organization_id UUID REFERENCES organizations(id),
+    brand_profile_id UUID REFERENCES brand_profiles(id),
+    subject TEXT NOT NULL,
+    preview_text TEXT,
+    html_body TEXT NOT NULL,
+    plain_text TEXT,
+    recipient_list TEXT[],         -- email addresses (or audience tag for future CRM integration)
+    status TEXT DEFAULT 'draft',   -- draft | scheduled | sent
+    scheduled_at TIMESTAMPTZ,
+    sent_at TIMESTAMPTZ,
+    opens INTEGER DEFAULT 0,
+    clicks INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+  ```
+- `POST /v1/email-campaigns` — create draft
+- `POST /v1/email-campaigns/:id/send` — call `EMAIL_SEND_BULK` on `social-mcp` with recipient list
+- Add email copy instructions to `copywriter.ts` — email needs subject line, preview text, and body with CTA (longer form than social posts)
+
+**Frontend**
+- `/dashboard/email` — list of email campaigns per brand with open/click stats
+- Draft editor: subject, preview text, body (Markdown or rich text), recipient list
+- "Generate with AI" button — invokes agent with `platform: "email"` to draft the full campaign
+- Schedule or send immediately button → calls `/email-campaigns/:id/send`
+
+### `social-mcp` also helps with the engagement inbox (§4.1)
+
+The package's read tools can seed the engagement inbox without building custom platform fetch code:
+
+| Tool | Use in Anthyx inbox |
+|---|---|
+| `SEARCH_TWEETS` | Fetch recent mentions on X |
+| `GET_INSTAGRAM_POSTS` | Fetch recent Instagram post comments |
+| `GET_FACEBOOK_POSTS` | Fetch recent Facebook page activity |
+| `GET_LINKEDIN_POSTS` | Fetch recent LinkedIn post activity |
+| `GET_DISCORD_MESSAGES` | Fetch recent channel messages |
+
+Wire these into `fetchAndReplyToInbox` in `auto-reply.ts` to replace the current stub.
+
+---
+
+## 9. Promo Codes
+
+Promo codes are essential for launch campaigns, influencer deals, and affiliate onboarding. Both Stripe and Paystack support them natively.
+
+### DB table
+
+```sql
+CREATE TABLE promo_codes (
+  id UUID PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  discount_type TEXT NOT NULL,     -- 'percent' | 'fixed_cents'
+  discount_value INTEGER NOT NULL, -- e.g. 20 for 20%, or 5000 for $50
+  applicable_tiers TEXT[],         -- null = all tiers
+  max_uses INTEGER,                -- null = unlimited
+  used_count INTEGER DEFAULT 0,
+  expires_at TIMESTAMPTZ,
+  is_active BOOLEAN DEFAULT TRUE,
+  stripe_coupon_id TEXT,           -- mirror in Stripe for server-side application
+  paystack_plan_code TEXT,         -- mirror in Paystack if applicable
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### API routes (in `api/src/routes/billing.ts`)
+
+```
+POST /billing/validate-promo        — validate code, return discount details (public)
+POST /billing/subscribe             — existing route; extend to accept promoCode param
+GET  /admin/promo-codes             — list all codes (admin only)
+POST /admin/promo-codes             — create new code (admin only)
+PATCH /admin/promo-codes/:id        — activate / deactivate / update (admin only)
+```
+
+### Frontend
+
+- Input field on `/dashboard/billing/upgrade` — "Got a promo code?" collapses to reveal a text input; validate on blur via `POST /billing/validate-promo`, show discount preview
+- Admin: `/admin/promo-codes` table with create modal (code, type, value, max uses, expiry, applicable tiers)
+
+### Stripe integration
+
+Create a Stripe `Coupon` when the admin creates a promo code, store `stripe_coupon_id`. Apply it at subscription creation via `promotion_code` param on `stripe.subscriptions.create`.
+
+### Paystack integration
+
+Paystack has discount codes on plans. Create a Paystack plan with a discounted amount or apply the discount manually before calculating the charge.
+
+---
+
+## 10. Folder Structure Adjustments
+
+### Current structure (problem areas)
+
+```
+Anthyx/
+├── apps/
+│   └── api/          ← only app here; apps/ adds no value as a wrapper
+├── frontend/         ← at root (correct — this is the target pattern for all apps)
+├── services/
+│   ├── agent/        ← disabled in docker-compose (conflicts with api workers)
+│   ├── ingestor/
+│   └── mcp/
+├── packages/
+│   ├── config/
+│   ├── types/
+│   └── queue-contracts/
+├── config.ts         ← stale root file, should be in packages/config
+└── scripts/
+```
+
+### Why `api/` at root, not `apps/api/`
+
+The goal is eventual separation of each deployable unit into its own repo. A flat structure where every app sits at the root means extraction is just moving a folder — no extra `apps/` layer to strip. `frontend/` is already at the root and works correctly, so the pattern is proven. The cleaner target:
+
+```
+Anthyx/
+├── api/              ← was apps/api/
+├── frontend/         ← already here
+├── admin/            ← new
+├── affiliate/        ← new
+├── services/
+│   ├── ingestor/
+│   └── mcp/
+├── packages/
+│   ├── config/
+│   ├── types/
+│   └── queue-contracts/
+├── scripts/
+└── docs/
+```
+
+### Migration steps for `apps/api` → `api/`
+
+This is a one-time rename. Impact is contained:
+
+1. `git mv apps/api api/` — move the folder
+2. `pnpm-workspace.yaml` — replace `"apps/*"` with `"api"` (and add `"admin"`, `"affiliate"` explicitly when ready)
+3. Root `package.json` workspaces — same update
+4. `turbo.json` — no path changes needed (turbo reads workspaces from package.json)
+5. `docker-compose.yml` — change `dockerfile: apps/api/Dockerfile` → `dockerfile: api/Dockerfile` (two lines: api service and worker service)
+6. `docker-compose.prod.yml` — same update
+7. Root `package.json` scripts — `cd apps/api` → `cd api` in `db:migrate`, `db:generate`, `db:studio`
+8. `Makefile` — check for any `apps/api` references
+9. `api/package.json` — name stays `@anthyx/api`; no internal path changes needed
+10. Any CI/CD scripts referencing `apps/api/`
+
+> **Do this before building `admin/` or `affiliate/` to avoid having to redo it.**
+
+### Other structural fixes
+
+| Item | Fix |
+|---|---|
+| `config.ts` at monorepo root | Move contents into `packages/config/src/index.ts` and delete the root file. Already flagged — do it during the `apps/api → api/` migration |
+| `services/agent/` | Currently **disabled** — it competes with `api` workers on the same BullMQ queues and has bugs (hardcoded prompt, silent null-account skips). Either fix it properly or delete it. Leaving dead code in a disabled state is a maintenance liability. |
+| Root `package.json` workspaces | Currently lists `["apps/*", "packages/*"]` but `pnpm-workspace.yaml` has `["apps/*", "services/*", "frontend", "packages/*"]` — they are **out of sync**. After the `api/` rename, update both to `["api", "admin", "affiliate", "frontend", "services/*", "packages/*"]` (list each app explicitly). |
+| `docs/` folder | `structure.md`, `technical.md`, `StackUpdate.md` — verify these are up to date or consolidate into `README.md` and `architecture.md` at root |
+
+---
+
+## 11. Summary — Priority Order
 
 ### Immediate (launch blockers)
 1. Verify all frontend pages are complete and wired to API (especially `posts/`, `review/`, `plans/[id]`)
-2. Password reset end-to-end test (new pages exist in `frontend/(auth)/`)
+2. Password reset end-to-end test
 3. Rate limiting on API
 4. Error monitoring (Sentry)
 5. Health check endpoint
 
 ### Short-term (1-4 weeks)
-6. Admin dashboard (`admin/`) — operator visibility is critical
-7. Email verification on register
-8. Annual billing toggle in UI
-9. Post failure notifications
-10. Basic onboarding wizard
-11. **Unified engagement inbox** — `auto-reply.ts` logic is done; wire platform fetch APIs, add route + frontend page (§4.1)
-12. **Per-post analytics drill-down** — extend analytics route + add best-performers table to analytics UI (§4.2)
-13. **AI image preview in HITL queue** — backend is fully built; just needs to surface the image URL in the review UI (§4.3)
+6. **`apps/api` → `api/` rename** — do this before adding more apps (§10)
+7. Fix `pnpm-workspace.yaml` / `package.json` workspace list mismatch (§10)
+8. Admin dashboard (`admin/`) — operator visibility is critical (§1)
+9. Email verification on register
+10. Annual billing toggle in UI
+11. Promo code support — Stripe + Paystack + admin UI (§9)
+12. **Add `social-mcp` as Docker service** — configure `PINTEREST_ACCESS_TOKEN` + mail env vars; wire into agent pipeline (§8)
+13. **Pinterest platform support** — add to `Platform` type, wire `PINTEREST_CREATE_PIN` in executor, add to account connect UI (§8)
+14. **Unified engagement inbox** — use `social-mcp` read tools (`SEARCH_TWEETS`, `GET_INSTAGRAM_POSTS`, etc.) to replace the stub in `auto-reply.ts`; add route + frontend page (§4.1, §8)
+15. **Per-post analytics drill-down** — best-performers table, brand filter in analytics UI (§4.2)
+16. **AI image preview in HITL queue** — surface `mediaUrl` in review page (§4.3)
+17. Post failure notifications
+18. Basic onboarding wizard
 
 ### Medium-term (1-3 months)
-14. Affiliate dashboard (`affiliate/`) — if running a referral program
-15. A/B test UI (service already built, see §4.6)
-16. Auto-reply / engagement inbox UI (service already built, see §4.1)
-17. Competitor analysis UI (MCP tool already built)
-18. RSS / live competitor feed auto-ingestion (§4.5)
-19. SEO readability scoring in post editor (§4.4)
-20. 2FA / TOTP
+19. Affiliate dashboard (`affiliate/`) — if running a referral program (§2)
+20. Email marketing channel — agent generates copy, `EMAIL_SEND_BULK` via `social-mcp` sends it; add `email_campaigns` table + `/dashboard/email` UI (§8)
+21. A/B test UI (service already built, §4.6)
+22. Competitor analysis UI (MCP tool already built)
+23. RSS / live competitor feed auto-ingestion (§4.5)
+24. SEO readability scoring in post editor (§4.4)
+25. Hashtag manager (§7)
+26. Ideas board (§7)
+27. 2FA / TOTP
 
 ### Long-term
-21. Mobile app / PWA
-22. White-label portal
-23. Social listening
-24. Zapier integration
-25. Multi-workspace support
-26. CRM / content-to-conversion tracking (§4.7)
-27. Plagiarism checker (§4.8)
+28. Mobile app / PWA
+29. White-label portal
+30. Social listening
+31. Zapier integration
+32. Multi-workspace support
+33. CRM / content-to-conversion tracking (§4.7)
+34. Plagiarism checker (§4.8)
+35. Google Docs / OneDrive export (§7)
+36. `services/agent/` — fix or delete (§10)
