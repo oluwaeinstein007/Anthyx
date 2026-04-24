@@ -495,42 +495,78 @@ Email drivers: `MAIL_MAILER=smtp` (SMTP/Gmail), `sendgrid` (SendGrid API key), o
 
 ### Integration approach
 
-`social-mcp` runs as a standalone MCP server process (`npx social-mcp`). The right integration is to add it as a service in `docker-compose.yml` and expose its tools to Anthyx agents alongside the existing `services/mcp/` server.
+Install `social-mcp` as an npm dependency in `api/`. No Docker service needed — the `@modelcontextprotocol/sdk` (already in `api/package.json`) provides `StdioClientTransport` which spawns `social-mcp` as a child process and communicates over stdio. The package stays in-process from the container's perspective.
 
-**Add to `docker-compose.yml`:**
-```yaml
-social-mcp:
-  image: node:22-alpine
-  command: npx social-mcp
-  environment:
-    PINTEREST_ACCESS_TOKEN: "${PINTEREST_ACCESS_TOKEN}"
-    MAIL_MAILER: "${MAIL_MAILER}"          # smtp | sendgrid | mailgun
-    MAIL_FROM_ADDRESS: "${MAIL_FROM_ADDRESS}"
-    MAIL_FROM_NAME: "${MAIL_FROM_NAME}"
-    # SMTP vars (if MAIL_MAILER=smtp)
-    MAIL_HOST: "${MAIL_HOST}"
-    MAIL_PORT: "${MAIL_PORT}"
-    MAIL_USERNAME: "${MAIL_USERNAME}"
-    MAIL_PASSWORD: "${MAIL_PASSWORD}"
-    MAIL_ENCRYPTION: "${MAIL_ENCRYPTION}"
-    # Or SendGrid: SENDGRID_API_KEY
-    # Or Mailgun: MAILGUN_API_KEY, MAILGUN_DOMAIN
-  ports:
-    - "3200:3200"
-  restart: unless-stopped
+**Install:**
+```bash
+pnpm add social-mcp --filter api
 ```
 
-**Wire into agent pipeline (`api/src/mcp/server.ts`):**
-- Register the `social-mcp` MCP server as an additional tool source alongside the existing MCP tools
-- Agents can then call `PINTEREST_CREATE_PIN` and `EMAIL_SEND` / `EMAIL_SEND_BULK` directly
+**Create `api/src/services/social-mcp-client.ts`:**
+```typescript
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+let _client: Client | null = null;
+
+export async function getSocialMcpClient(): Promise<Client> {
+  if (_client) return _client;
+
+  const transport = new StdioClientTransport({
+    command: "npx",
+    args: ["social-mcp"],
+    env: {
+      ...process.env,
+      PINTEREST_ACCESS_TOKEN: process.env.PINTEREST_ACCESS_TOKEN ?? "",
+      MAIL_MAILER: process.env.MAIL_MAILER ?? "smtp",
+      MAIL_FROM_ADDRESS: process.env.MAIL_FROM_ADDRESS ?? "",
+      MAIL_FROM_NAME: process.env.MAIL_FROM_NAME ?? "",
+      MAIL_HOST: process.env.MAIL_HOST ?? "",
+      MAIL_PORT: process.env.MAIL_PORT ?? "587",
+      MAIL_USERNAME: process.env.MAIL_USERNAME ?? "",
+      MAIL_PASSWORD: process.env.MAIL_PASSWORD ?? "",
+      MAIL_ENCRYPTION: process.env.MAIL_ENCRYPTION ?? "tls",
+      SENDGRID_API_KEY: process.env.SENDGRID_API_KEY ?? "",
+      MAILGUN_API_KEY: process.env.MAILGUN_API_KEY ?? "",
+      MAILGUN_DOMAIN: process.env.MAILGUN_DOMAIN ?? "",
+    },
+  });
+
+  _client = new Client({ name: "anthyx-api", version: "1.0.0" }, { capabilities: {} });
+  await _client.connect(transport);
+  return _client;
+}
+
+export async function callSocialMcp(tool: string, args: Record<string, unknown>) {
+  const client = await getSocialMcpClient();
+  const result = await client.callTool({ name: tool, arguments: args });
+  return result;
+}
+```
+
+**Add env vars to `.env.example`** (no new infrastructure required):
+```
+PINTEREST_ACCESS_TOKEN=
+MAIL_MAILER=smtp          # smtp | sendgrid | mailgun
+MAIL_FROM_ADDRESS=
+MAIL_FROM_NAME=
+MAIL_HOST=
+MAIL_PORT=587
+MAIL_USERNAME=
+MAIL_PASSWORD=
+MAIL_ENCRYPTION=tls
+# SENDGRID_API_KEY=
+# MAILGUN_API_KEY=
+# MAILGUN_DOMAIN=
+```
 
 ### Pinterest — what to build in Anthyx
 
 - Add `pinterest` to the `Platform` type in `packages/types/src/`
-- In `api/src/services/posting/executor.ts`: when platform is `pinterest`, call `PINTEREST_CREATE_PIN` via the `social-mcp` MCP connection instead of `publishPost` in `social-mcp.ts`
-  - Pinterest requires `imageUrl` — ensure `mediaUrl` is populated (fall back to `generate_image_asset` tool)
-  - `boardId` stored on the social account record (`accountId` field)
-- Add `PINTEREST_GET_BOARD_PINS` call in `analytics.worker.ts` for engagement data (saves, impressions)
+- In `api/src/services/posting/executor.ts`: when platform is `pinterest`, call `callSocialMcp("PINTEREST_CREATE_PIN", { boardId, title, description, imageUrl, link })` instead of going through `publishPost` in `social-mcp.ts`
+  - Pinterest requires an image — ensure `mediaUrl` is populated; fall back to `generate_image_asset` tool
+  - `boardId` comes from the social account record (`accountId` field)
+- In `analytics.worker.ts`: call `callSocialMcp("PINTEREST_GET_BOARD_PINS", { boardId })` to fetch saves/impressions for analytics
 - Frontend: add Pinterest to the platform selector on account connection and plan generation
 
 ### Email marketing — what to build in Anthyx
@@ -559,7 +595,7 @@ Email newsletters are a distinct channel — agent generates the content, `socia
   );
   ```
 - `POST /v1/email-campaigns` — create draft
-- `POST /v1/email-campaigns/:id/send` — call `EMAIL_SEND_BULK` on `social-mcp` with recipient list
+- `POST /v1/email-campaigns/:id/send` — calls `callSocialMcp("EMAIL_SEND_BULK", { recipients, subject, text, html })` with the campaign's recipient list
 - Add email copy instructions to `copywriter.ts` — email needs subject line, preview text, and body with CTA (longer form than social posts)
 
 **Frontend**
@@ -580,7 +616,7 @@ The package's read tools can seed the engagement inbox without building custom p
 | `GET_LINKEDIN_POSTS` | Fetch recent LinkedIn post activity |
 | `GET_DISCORD_MESSAGES` | Fetch recent channel messages |
 
-Wire these into `fetchAndReplyToInbox` in `auto-reply.ts` to replace the current stub.
+Wire these into `fetchAndReplyToInbox` in `auto-reply.ts` via `callSocialMcp(toolName, args)` to replace the current stub — no custom platform fetch code needed.
 
 ---
 
