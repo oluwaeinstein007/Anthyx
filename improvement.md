@@ -394,14 +394,14 @@ These are not blockers for launch but are high-value for growth and retention.
 5. Health check endpoint
 
 ### Short-term (1-4 weeks)
-6. Admin dashboard (`apps/admin/`) — operator visibility is critical
+6. Admin dashboard (`admin/`) — operator visibility is critical
 7. Email verification on register
 8. Annual billing toggle in UI
 9. Post failure notifications
 10. Basic onboarding wizard
 
 ### Medium-term (1-3 months)
-11. Affiliate dashboard (`apps/affiliate/`) — if running a referral program
+11. Affiliate dashboard (`affiliate/`) — if running a referral program
 12. A/B test UI (service already built)
 13. Auto-reply UI (service already built)
 14. Competitor analysis UI (MCP tool already built)
