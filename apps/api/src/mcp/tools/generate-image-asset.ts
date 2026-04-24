@@ -4,7 +4,7 @@ import { generateAIAsset } from "../../services/assets/ai-generator";
 export const generateImageAssetTool = {
   name: "generate_image_asset",
   description:
-    "Generate an AI image for a post using DALL-E 3. Brand colors are automatically injected into the prompt.",
+    "Generate an AI image for a post using Gemini Imagen 3. Brand colors are automatically injected into the prompt.",
   inputSchema: z.object({
     prompt: z.string().min(10).max(400),
     brandColors: z.array(z.string()).min(1),

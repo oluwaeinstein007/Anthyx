@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
@@ -72,7 +74,31 @@ const PLANS = [
 ];
 
 export default function BillingPage() {
+  return (
+    <Suspense fallback={<div className="space-y-4 animate-pulse max-w-2xl"><div className="h-8 bg-gray-200 rounded-lg w-32" /><div className="h-40 bg-gray-100 rounded-2xl" /></div>}>
+      <BillingPageContent />
+    </Suspense>
+  );
+}
+
+function BillingPageContent() {
   const qc = useQueryClient();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  useEffect(() => {
+    const provider = searchParams.get("provider");
+    const reference = searchParams.get("reference") ?? searchParams.get("trxref");
+    if (provider !== "paystack" || !reference) return;
+
+    api.get(`/billing/verify/paystack?reference=${reference}`)
+      .then(() => qc.invalidateQueries({ queryKey: ["billing"] }))
+      .catch(console.error)
+      .finally(() => {
+        // Strip the query params from the URL without re-navigating
+        router.replace("/dashboard/billing");
+      });
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data, isLoading, error } = useQuery<BillingData>({
     queryKey: ["billing"],

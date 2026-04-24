@@ -6,7 +6,8 @@ export const productConfig = {
 
   domain: "anthyx.ai",
   apiUrl: "https://api.anthyx.ai",
-  dashboardUrl: "https://app.anthyx.ai",
+  // dashboardUrl: "https://app.anthyx.ai",
+  dashboardUrl: "http://localhost:3000",
   marketingUrl: "https://anthyx.ai",
 
   contact: {

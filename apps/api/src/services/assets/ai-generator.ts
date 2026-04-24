@@ -1,10 +1,10 @@
-import OpenAI from "openai";
-import { uploadToCDN } from "./cdn";
+import { GoogleGenAI } from "@google/genai";
+import { uploadBufferToCDN } from "./cdn";
 
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) _openai = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] });
-  return _openai;
+let _genai: GoogleGenAI | null = null;
+function getGenAI(): GoogleGenAI {
+  if (!_genai) _genai = new GoogleGenAI({ apiKey: process.env["GEMINI_API_KEY"]! });
+  return _genai;
 }
 
 export async function generateAIAsset(params: {
@@ -17,16 +17,19 @@ export async function generateAIAsset(params: {
 
   const fullPrompt = `${params.prompt}. Primary brand color: ${primaryColor}, accent: ${accentColor}. Professional digital marketing visual. Clean, modern aesthetic. No text overlay.`;
 
-  const response = await getOpenAI().images.generate({
-    model: process.env["DALLE_MODEL"] ?? "dall-e-3",
+  const response = await getGenAI().models.generateImages({
+    model: process.env["GEMINI_IMAGE_MODEL"] ?? "imagen-3.0-generate-002",
     prompt: fullPrompt,
-    size: params.aspectRatio === "16:9" ? "1792x1024" : "1024x1024",
-    quality: "standard",
-    n: 1,
+    config: {
+      numberOfImages: 1,
+      aspectRatio: params.aspectRatio === "16:9" ? "16:9" : "1:1",
+      outputMimeType: "image/jpeg",
+    },
   });
 
-  const imageUrl = response.data[0]?.url;
-  if (!imageUrl) throw new Error("DALL-E returned no image URL");
+  const imageBytes = response.generatedImages?.[0]?.image?.imageBytes;
+  if (!imageBytes) throw new Error("Gemini returned no image");
 
-  return uploadToCDN(imageUrl);
+  const buffer = Buffer.from(imageBytes, "base64");
+  return uploadBufferToCDN(buffer, "image/jpeg");
 }

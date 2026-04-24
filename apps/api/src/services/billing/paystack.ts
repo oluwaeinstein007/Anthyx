@@ -65,7 +65,7 @@ export async function createPaystackSubscription(params: {
       email: params.email,
       amount: 0, // overridden by plan
       plan: params.planCode,
-      callback_url: `${productConfig.dashboardUrl}/billing?provider=paystack`,
+      callback_url: `${productConfig.dashboardUrl}/dashboard/billing?provider=paystack`,
       metadata: { organizationId: params.organizationId },
     },
   );
@@ -102,6 +102,36 @@ export async function handlePaystackWebhook(rawBody: Buffer, signature: string):
       await handleInvoiceFailed(event.data);
       break;
   }
+}
+
+// ── Verify transaction (called on redirect return) ────────────────────────────
+
+export async function verifyPaystackTransaction(reference: string): Promise<void> {
+  const data = await paystackRequest<Record<string, unknown>>("GET", `/transaction/verify/${reference}`);
+
+  const status = data["status"] as string;
+  if (status !== "success") throw new Error(`Payment not successful: ${status}`);
+
+  const metadata = data["metadata"] as { organizationId?: string } | null;
+  const orgId = metadata?.organizationId;
+  if (!orgId) throw new Error("No organizationId in transaction metadata");
+
+  const planCode = (data["plan"] as string | null) ?? "";
+  const tier = PLAN_CODE_TO_TIER[planCode] ?? null;
+
+  const customer = data["customer"] as { customer_code?: string } | null;
+
+  await db
+    .update(subscriptions)
+    .set({
+      ...(tier ? { tier } : {}),
+      billingProvider: "paystack",
+      paystackCustomerCode: customer?.customer_code ?? null,
+      paystackPlanCode: planCode || null,
+      status: "active",
+      updatedAt: new Date(),
+    })
+    .where(eq(subscriptions.organizationId, orgId));
 }
 
 // ── Cancel helper (called from billing route) ─────────────────────────────────
@@ -152,11 +182,14 @@ async function handleChargeSuccess(data: Record<string, unknown>) {
   if (!orgId) return;
 
   const customer = data["customer"] as { customer_code?: string } | null;
+  const planCode = (data["plan"] as string | null) ?? "";
+  const tier = PLAN_CODE_TO_TIER[planCode] ?? null;
 
   await db
     .update(subscriptions)
     .set({
       paystackCustomerCode: customer?.customer_code ?? null,
+      ...(tier ? { tier, billingProvider: "paystack", paystackPlanCode: planCode } : {}),
       status: "active",
       updatedAt: new Date(),
     })

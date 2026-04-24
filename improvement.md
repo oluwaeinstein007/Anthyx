@@ -1,294 +1,415 @@
-# Anthyx — Improvement & Feature Backlog
+# Anthyx — Improvement & Roadmap
 
-> **Status as of April 2026: All items below are implemented.**
-> This document is preserved for historical context.
-
----
-
-## New Features
-
-### Agent / AI
-
-**A/B content testing**
-Generate 2 variants per post, publish each to a slice of audience, and auto-promote the winner based on engagement rate. The `postAnalytics` schema already tracks all required signals — this is a natural extension of the feedback loop.
-
-**Comment/DM auto-reply agent**
-A fourth agent that monitors platform inboxes and replies in brand voice, subject to `dietInstructions` and guardrails. Sits downstream of the current Strategist → Copywriter → Reviewer chain.
-
-**Competitor analysis MCP tool**
-New MCP tool that fetches and summarises competitor post patterns, fed into the strategist alongside `web-search-trends`. Gives the strategist differentiation signal, not just industry trends.
-
-**Multi-language content generation**
-Add `targetLocale` to `StrategistRunInput` and the copywriter system prompt. Qdrant is already filtered per brand — locale-segmented ingestion is feasible without schema changes.
-
-**Brand voice drift detection**
-After each review cycle, compute semantic distance between the generated post and the brand's Qdrant vectors. Surface an alert when drift exceeds a configurable threshold. Protects brand consistency at scale.
+> Status as of April 2026. Covers what needs to be built, updated, or fixed across the full stack.
 
 ---
 
-### Platform Expansion via social-mcp
+## 1. Admin Dashboard — `admin/` (NEW APP)
 
-Anthyx currently posts to X, Instagram, LinkedIn, Facebook, Telegram, and TikTok. The `social-mcp` package (v1.7.0) adds the following platforms and richer tool sets — all available via `npm i social-mcp`:
+A separate Next.js app at `admin/` (monorepo root, alongside `frontend/`) for platform operators. Completely isolated from the user-facing `frontend/`. Protected by a separate `ADMIN_SECRET` or an `is_super_admin` flag on the users table.
 
-| Platform | Available Tools | Priority |
-|---|---|---|
-| **Discord** | Send message, get messages | High — community-first brands |
-| **WhatsApp** | Send message | High — high-reach for emerging markets |
-| **Slack** | Send message, get messages, list channels | Medium — B2B / internal comms |
-| **Reddit** | Submit post, get posts, comment, vote, search, get user info | Medium — niche community marketing |
-| **Threads** | Get profile, create post, reply, get posts, delete post | High — Instagram-adjacent, fast growing |
-| **Bluesky** | Get profile, create post, reply, get posts, delete post, like post, search posts | Medium — tech/creator audience |
-| **Mastodon** | Get profile, create post, reply, search posts, boost post, favourite post, delete post | Low — niche but brand-safe |
-| **YouTube** | Get channel info, search videos, get video info, list channel videos, get comments, post comment, update video | High — video repurposing and comment engagement |
+### Pages to build
 
-**What needs to change:**
-- Add new values to the `platformEnum` in [apps/api/src/db/schema.ts](apps/api/src/db/schema.ts) for each new platform.
-- Extend `social-mcp.ts` in the posting service to route to social-mcp tool calls for each new platform.
-- Extend the strategist's platform distribution logic to include the new platforms when active accounts exist.
-- Upgrade the existing X, Instagram, and LinkedIn integrations to use richer social-mcp tools (reply to tweet, like post, add comment) to support the comment/DM auto-reply agent feature.
-
-**Existing platform upgrades available from social-mcp:**
-
-| Platform | New Tools Unlocked |
+| Page | Purpose |
 |---|---|
-| X / Twitter | Reply to tweet, like tweet, delete tweet, search tweets |
-| Instagram | Get posts (enables analytics sync) |
-| LinkedIn | Get profile, like post, add comment, search people |
-| Facebook | Get posts (enables analytics sync) |
-| Telegram | Forward message, pin message, get channel admins, edit/delete message |
-| TikTok | Query creator info, get user info, get post status, photo post |
+| `/dashboard` | Platform overview: total orgs, MRR, posts published today, queue depths |
+| `/organizations` | List all orgs — search, filter by tier, flag suspicious |
+| `/organizations/[id]` | Org detail: members, subscription, usage, billing history, audit log |
+| `/users` | All users across platform, searchable by email |
+| `/users/[id]` | User detail: org membership, last login, impersonate button |
+| `/subscriptions` | All active subscriptions — override tier, grant trial extension, mark enterprise |
+| `/billing` | MRR chart, churn, overages billed this month, failed charges |
+| `/billing/invoices` | All Stripe/Paystack invoices, refund button |
+| `/plans` | Plan tier config editor — update prices, feature flags, limits |
+| `/queues` | BullMQ queue monitor: depth, failed jobs, retry failed, flush queue |
+| `/agents` | All agent runs across platform — see failures, avg review retries |
+| `/posts` | All scheduled/published posts — search, inspect content, force delete |
+| `/audit-log` | Platform-wide activity log: filter by org, actor, event type |
+| `/feature-flags` | Toggle features per org or globally (e.g. disable A/B for free tier) |
+| `/email-templates` | Preview & edit transactional email templates (Resend) |
+| `/affiliates` | Manage affiliates: approve applications, view stats, trigger payouts |
+| `/support` | View recent signup errors, API 500s, failed webhook deliveries |
+| `/settings` | Platform-level settings: maintenance mode, SMTP config, Stripe webhook URLs |
+
+### API routes to add (in `apps/api/src/routes/admin.ts`)
+
+All under `/v1/admin/*`, gated by `requireRole('super_admin')` middleware.
+
+```
+GET  /admin/stats                    — platform-level metrics
+GET  /admin/organizations            — all orgs (paginated + search)
+GET  /admin/organizations/:id        — org detail + members + usage
+PUT  /admin/organizations/:id        — update tier override, feature flags
+GET  /admin/users                    — all users
+GET  /admin/users/:id                — user detail
+POST /admin/users/:id/impersonate    — issue short-lived impersonation JWT
+POST /admin/subscriptions/:id/override  — force tier / extend trial
+GET  /admin/queues                   — BullMQ stats per queue
+POST /admin/queues/:queue/retry-failed  — retry all failed jobs
+GET  /admin/audit-log                — platform audit log (paginated)
+GET  /admin/feature-flags            — list all flags
+PUT  /admin/feature-flags/:flag      — toggle flag per org or globally
+GET  /admin/affiliates               — list affiliate accounts
+PUT  /admin/affiliates/:id           — approve / suspend / update commission
+POST /admin/affiliates/:id/payout    — trigger payout via Stripe/Paystack
+```
+
+### DB changes needed
+
+```sql
+-- Add to users table
+ALTER TABLE users ADD COLUMN is_super_admin BOOLEAN DEFAULT FALSE;
+
+-- Feature flags table
+CREATE TABLE feature_flags (
+  id UUID PRIMARY KEY,
+  flag_name TEXT NOT NULL,
+  enabled_globally BOOLEAN DEFAULT FALSE,
+  enabled_for_orgs TEXT[] DEFAULT '{}',  -- org IDs
+  disabled_for_orgs TEXT[] DEFAULT '{}'
+);
+
+-- Affiliates table (see Section 3)
+```
 
 ---
 
-### Content Formats
+## 2. Affiliate Dashboard — `affiliate/` (NEW APP)
 
-**Thread and carousel support**
-Twitter threads and Instagram carousels are high-performing formats. `contentType` and `mediaUrls[]` are already modelled in `scheduledPosts` — add a `segments` JSONB column for multi-part content and extend the copywriter prompt to output segmented arrays.
+**Is this required?** Yes, if you want referral-driven growth. For a SaaS with 6 billing tiers, an affiliate program drives low-CAC acquisition — especially for agency and scale tiers. Without it, growth relies entirely on paid/organic. Build it when you're ready to run a referral program, not before.
 
-**Blog / RSS repurposing pipeline**
-Accept a URL, extract the article, and reformat it as platform-specific social posts. The existing brand-ingestion pipeline (parser → extractor → embedder) is directly reusable for this flow.
+### What an affiliate needs
 
----
-
-### Product / Dashboard
-
-**Campaign grouping**
-Link multiple marketing plans under a campaign with shared goals, a budget cap, and a rollup analytics view. Requires one FK column (`campaignId`) on `marketingPlans` — minimal schema change with high product value for agency-tier customers.
-
-**White-label client reports**
-PDF/CSV export of plan performance per brand, scoped to agency-tier customers. The `whiteLabel` flag is already modelled on `planTiers` — no billing logic changes needed, just a report-generation service.
-
-**Webhook / notification integrations**
-Push post-publish events to Slack, Discord, or email. BullMQ already emits a job on every post completion — add a lightweight notification worker that reads user-configured webhook URLs.
-
----
-
----
-
-### Team Members & Role-Based Access (RBAC)
-
-**The problem with a flat role system:**
-The `users.role` column is org-level and flat. Adding brand-scoped access, seat billing, handoff notifications, and audit trails as separate features produces four disconnected tables that all encode "who can do what" in different ways — guaranteed sync bugs and every new feature touches all of them.
-
-**Better design: the workflow participant model**
-
-The agent pipeline already has natural human intervention points:
-
-```
-Plan generation → Content generation → Reviewer agent → HITL → Publisher
-```
-
-A team member is simply a human assigned to intervene at one or more of those stages, on one or more brands. One table replaces separate brand-membership, role, and handoff-assignment tables:
-
-```
-workflow_participants
-─────────────────────────────────────────────────────────
-id               uuid PK
-organizationId   uuid FK → organizations
-userId           uuid FK → users
-brandProfileId   uuid FK → brandProfiles  (nullable = org-wide)
-agentId          uuid FK → agents         (nullable = all agents on brand)
-stage            enum: plan_review | hitl | legal_review | analytics_only
-canEdit          boolean
-canVeto          boolean
-notifyOn         text[]   -- e.g. ['high_risk', 'reviewer_fail', 'plan_ready']
-createdAt        timestamp
-```
-
-**Unified event log** — replaces `agentLogs` and fills the missing human audit trail:
-
-```
-activity_events
-─────────────────────────────────────────────────────────
-id               uuid PK
-organizationId   uuid FK → organizations
-actorType        enum: agent | human
-actorId          uuid  -- agentId or userId depending on actorType
-entityType       enum: post | plan | brand | agent
-entityId         uuid
-event            text  -- 'caption_edited' | 'reviewer_fail' | 'post_approved' | 'plan_vetoed'
-diff             jsonb -- { field, oldValue, newValue } for edits
-createdAt        timestamp
-```
-
-**What this unified model gives you for free:**
-
-- **RBAC** — middleware checks `workflow_participants` for the user's stage and brand. No separate role table needed.
-- **Brand scoping** — nullable `brandProfileId` means org-wide or per-brand in one column, not a separate join table.
-- **Agent-to-human handoff** — when the reviewer agent flags a high-risk post, query `workflow_participants` for users with `stage: legal_review` on that brand and `'high_risk'` in `notifyOn`. One notification worker handles all cases.
-- **Full audit trail** — agent actions and human edits both write to `activity_events`. "Reviewer agent failed on Post #455" and "User B edited the caption on Post #455" are in the same queryable log.
-- **Seat billing** — `SELECT COUNT(DISTINCT userId) FROM workflow_participants WHERE organizationId = ?`, enforced against `planTiers.maxTeamMembers` at invite time.
-
-**Seat limits by tier:**
-
-| Tier | Max Team Members |
+| Page | Purpose |
 |---|---|
-| Sandbox / Starter | 1 (owner only) |
-| Growth | 3 |
-| Agency | 10 |
-| Scale / Enterprise | Unlimited |
+| `/dashboard` | Earnings overview: total clicks, conversions, commission earned, pending payout |
+| `/links` | Generate unique referral links per campaign/source |
+| `/payouts` | Payout history, pending balance, bank/PayPal details |
+| `/resources` | Marketing materials (logos, banners, email templates) |
+| `/settings` | Profile, payment info, notification preferences |
 
-Add `maxTeamMembers integer` to `planTiers` and add `teamMembersActive integer` to `usageRecords`.
+### API routes to add (in `apps/api/src/routes/affiliates.ts`)
 
-**Agency client portal — one row:**
 ```
-{ userId: clientId, brandProfileId: clientBrandId, stage: 'hitl',
-  canEdit: false, canVeto: true, notifyOn: ['plan_ready'] }
-```
-Client gets an email when the 30-day plan is ready, logs in, sees only their brand, can approve or veto posts, nothing else.
+POST /affiliates/register            — apply to affiliate program
+POST /affiliates/login               — affiliate-specific auth (or reuse user auth)
+GET  /affiliates/me                  — stats, balance, tier
+GET  /affiliates/links               — referral links
+POST /affiliates/links               — generate new link with UTM params
+GET  /affiliates/conversions         — list of converted referrals
+GET  /affiliates/payouts             — payout history
+POST /affiliates/payouts/request     — request payout (min threshold check)
 
-**Legal / compliance reviewer — one row:**
+# Tracking (public, no auth)
+GET  /r/:code                        — redirect + record click (affiliate tracking pixel)
 ```
-{ userId: legalId, brandProfileId: null, stage: 'legal_review',
-  canEdit: false, canVeto: true, notifyOn: ['high_risk', 'reviewer_fail'] }
-```
-Gets notified only on flagged posts across all brands. Cannot touch plans, agents, or billing.
 
-**Implementation order:**
-1. Add `workflow_participants` and `activity_events` tables to schema + migrations
-2. Migrate existing `agentLogs` writes to `activity_events`
-3. Add `maxTeamMembers` to `planTiers` and `teamMembersActive` to `usageRecords`
-4. Auth middleware: replace org-membership check with participant + stage check per route
-5. `POST /auth/invite` — signed invite token, seat limit check, creates participant row on accept
-6. `GET/PATCH/DELETE /team` — list, reassign stage, revoke
-7. Notification worker subscribed to `activity_events` filtered by `notifyOn`
-8. Dashboard: `/settings/team` page for invite management, stage assignment, and per-brand scoping
+### DB changes needed
+
+```sql
+CREATE TABLE affiliates (
+  id UUID PRIMARY KEY,
+  user_id UUID REFERENCES users(id),  -- if affiliate has a user account
+  email TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  status TEXT DEFAULT 'pending',       -- pending | approved | suspended
+  commission_rate NUMERIC DEFAULT 0.20, -- 20% default
+  total_earned_cents INTEGER DEFAULT 0,
+  total_paid_cents INTEGER DEFAULT 0,
+  payout_threshold_cents INTEGER DEFAULT 5000,  -- $50 minimum
+  stripe_account_id TEXT,              -- Stripe Connect for payouts
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE affiliate_links (
+  id UUID PRIMARY KEY,
+  affiliate_id UUID REFERENCES affiliates(id),
+  code TEXT NOT NULL UNIQUE,           -- short code in /r/:code
+  campaign TEXT,                       -- for segmenting (e.g. "twitter-bio")
+  clicks INTEGER DEFAULT 0,
+  conversions INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE affiliate_conversions (
+  id UUID PRIMARY KEY,
+  affiliate_link_id UUID REFERENCES affiliate_links(id),
+  converted_org_id UUID REFERENCES organizations(id),
+  plan_tier TEXT NOT NULL,
+  commission_cents INTEGER NOT NULL,
+  status TEXT DEFAULT 'pending',       -- pending | cleared | paid
+  cleared_at TIMESTAMPTZ,              -- after refund window (e.g. 30 days)
+  paid_at TIMESTAMPTZ
+);
+```
 
 ---
 
-## Improvements to Existing Features
+## 3. Campaigns — How They Work & What's Missing
 
-### Agent Pipeline
+### How campaigns relate to brands, agents, and plans
 
-**Parallelize content generation in the orchestrator**
-`generateContentForPlan` iterates draft posts in a sequential `for...of` loop (`orchestrator.ts:130–188`). At scale a 30-day plan blocks on each post in series. Replace with `Promise.allSettled` + a concurrency limiter (e.g. `p-limit` at 5) to saturate the LLM quota without overwhelming it.
+The entity hierarchy is:
 
-**Replace strategist JSON retry loop with structured output**
-The strategist retries raw text extraction up to 4 times (`strategist.ts:145–160`). Gemini supports `responseMimeType: "application/json"` with a `responseSchema` — use native structured output to eliminate the retry loop entirely and make parse failures impossible.
+```
+Organization
+  └── Brand (brand_profiles)   — identity, voice, visual assets, ingested docs
+        └── Agent (agents)     — a persona tied to ONE brand; has diet instructions, prompt overrides
+Campaign (campaigns)           — an org-level objective container (name, goals[], budgetCapCents)
+              ↑
+Marketing Plan (marketing_plans) — links brand + agent + optional campaign; generates scheduled posts
+  └── Scheduled Posts          — one post per platform slot, generated by the agent
+        └── Post Analytics     — engagement data synced back after publishing
+```
 
-**Deepen the feedback loop**
-`feedbackLoopEnabled` currently only passes analytics into the strategist prompt (`strategist.ts:117`). The same performance data should also adjust copywriter tone weighting and tighten reviewer thresholds — creating a closed learning loop rather than just informing planning.
+Key rules:
+- A **brand** defines the identity. An **agent** is the persona that speaks for that brand on social media. One brand can have multiple agents (e.g. one per tone/region).
+- A **plan** is the execution unit: you pick a brand + agent + platforms + date range → the AI generates a schedule of posts. Plans belong to one brand and one agent.
+- A **campaign** is an optional grouping layer above plans. It has no brand or agent of its own — a campaign can contain plans across multiple brands and multiple agents, since each plan independently declares its brand+agent. A campaign is purely a named objective with a shared budget cap.
+- The link is a **nullable `campaignId` FK on `marketing_plans`**. Plans exist independently of campaigns; assigning a plan to a campaign is optional.
+- `GET /campaigns/:id/analytics` rolls up: campaign → plans → posts → postAnalytics into a single engagement summary and per-platform breakdown.
+
+> **Note:** The `campaign` field on `affiliate_links` is a separate, unrelated concept — it is a UTM label (e.g. `"twitter-bio"`) for segmenting affiliate tracking clicks. It has nothing to do with the marketing `campaigns` table.
+
+### What's currently built
+
+| Item | Status |
+|---|---|
+| `campaigns` DB table (`id`, `name`, `goals[]`, `budgetCapCents`) | Done |
+| `campaignId` FK on `marketing_plans` | Done |
+| CRUD API (`GET/POST/PATCH/DELETE /campaigns`) | Done |
+| Campaign analytics API (`GET /campaigns/:id/analytics`) | Done |
+| Campaigns list page (`/dashboard/campaigns`) with create form | Done |
+| Campaign detail page (`/dashboard/campaigns/[id]`) — KPI cards + per-platform breakdown | Done |
+
+### What's missing
+
+| Item | What to do |
+|---|---|
+| **Assign plan to campaign at generation time** | Add `campaignId: z.string().uuid().optional()` to `GeneratePlanSchema` in `packages/config/src/schemas.ts` and pass it through in `routes/plans.ts` `POST /plans/generate` → `db.insert(marketingPlans)` |
+| **Assign/move an existing plan to a campaign** | Add `campaignId` to `PUT /plans/:id` (currently only updates `name`, `goals`, `feedbackLoopEnabled`). Also add a dropdown on the plan detail UI to select a campaign. |
+| **Plans list on campaign detail page** | The API returns `plans[]` in the analytics response but the frontend `[id]/page.tsx` never renders them. Add a section listing the plans under the campaign with links to each plan. |
+| **Campaign status** | Add a `status` field (`active` \| `completed` \| `archived`) to the `campaigns` table. No lifecycle management exists today. |
+| **Campaign date range** | Add `startDate` / `endDate` to `campaigns` table so time-bounded campaigns are queryable. Currently only plans have date ranges. |
+| **Budget spend tracking** | `budgetCapCents` is stored but never decremented or compared against anything. Spend tracking requires a concept of cost-per-post (ad spend, not content cost), which doesn't exist in the current model. Either remove the field or define what "spend" means. |
+| **Create campaign and generate plan in one flow** | Today the user must create a campaign, then separately generate a plan, then assign it. Add a "New plan" shortcut button on the campaign detail page that pre-fills `campaignId`. |
 
 ---
 
-### Analytics & Scoring
+## 4. Missing Features in Existing Apps
 
-**Fix voice trait / content type mislabelling in scorer**
-`computeVoicePerformance` groups by `contentType` but the result type is named `VoicePerformanceScore.voiceTrait` (`scorer.ts:24`). Either rename the field to `contentType` throughout, or separately capture actual voice traits from the copywriter output so the scoring reflects real brand-voice signal.
+### 4.1 Authentication (`apps/api` + `frontend/`)
 
-**Real-time overage alerting**
-`overageCostCents` accumulates in `usageRecords` but there is no in-app warning when approaching tier limits. Add threshold checks in `usage-tracker.ts` that enqueue a BullMQ notification job at 80 % and 100 % of the monthly post quota.
-
----
-
-### Scalability
-
-**Incremental brand re-ingestion**
-`ingestStatus` supports `idle / processing / done / failed` but has no incremental update path. When brand guidelines change, the entire Qdrant collection must be rebuilt from scratch. Add a diff-based re-ingest that only re-embeds changed chunks and tombstones removed ones.
-
-**Expose agent logs in the dashboard**
-`agentLogs` is written on every reviewer pass, rewrite, and failure but is never surfaced to users. Add a `GET /agents/:id/logs` route and a log viewer page in the dashboard so teams can debug reviewer rejections and audit agent behaviour without touching the database directly.
-
-**Add filter and bulk-action to the HITL review queue**
-The review queue currently shows all `pending_review` posts flat. Agency-tier customers managing multiple brands and platforms need filter by brand, platform, and content type, plus bulk approve/veto on a filtered selection. Without this, the queue becomes unmanageable at volume.
-
----
-
-### Platform-Specific Text Formatting
-
-**Current problem:** The copywriter receives platform rules via `prompt-builder.ts` (character limits, hashtag placement, tone) but the publisher in `social-mcp.ts` does crude string concatenation — it trusts whatever the LLM returned and just slaps hashtags on the end. The two sides don't enforce the same rules, so the LLM output and the final published text can diverge.
-
-Specific failures today:
-
-| Platform | Current behaviour | What should happen |
+| Item | Status | What to do |
 |---|---|---|
-| **X** | `content + hashtags joined with spaces, sliced to 280` — silent truncation mid-sentence | Hard-enforce 280 chars, trim hashtags first not content, warn if content alone exceeds limit |
-| **Instagram** | Hashtags appended to caption inline | Hashtags must go in a **first comment**, not in the caption — the LLM is told this but the publisher doesn't enforce it |
-| **LinkedIn** | Hashtags appended with `\n\n` | Inline hashtags are correct for LinkedIn but bold/italic markers (`**text**`) should be stripped — LinkedIn's API ignores markdown and renders it as literal characters |
-| **Telegram** | `parse_mode: Markdown` set | Correct, but the LLM output must use Telegram's specific Markdown subset (e.g. `*bold*` not `**bold**`) — no sanitisation is applied before sending |
-| **Facebook** | Falls to `default` throw — not implemented | Needs plain text, no markdown, hashtags inline, 400 char soft limit enforced |
-| **TikTok** | Falls to `default` throw — not implemented | Caption + 3–5 hashtags, 2200 char limit, hook must appear before the "more" fold (~100 chars) |
-| **Threads** | Not in schema | Same caption rules as Instagram — hashtags in first comment, visual-first framing |
-| **Bluesky** | Not in schema | 300 char limit, hashtags as native facets (not appended text), links as embed cards |
-| **Discord** | Not in schema | Supports full Markdown (bold, italic, code blocks, headers) — format accordingly |
-| **Reddit** | Not in schema | Title + body structure, Markdown body, no inline hashtags — post to specific subreddit |
-| **YouTube** | Not in schema | Description formatting: chapters via timestamps, hashtags in description body, first 100 chars are the visible preview |
-| **WhatsApp** | Not in schema | Bold via `*text*`, italic via `_text_`, no hashtags, links auto-preview |
+| Email/password login | Done | — |
+| Password reset | Frontend pages exist (`forgot-password/`, `reset-password/`), need to verify wiring to API | Test end-to-end |
+| Google OAuth | Missing | Add via next-auth `GoogleProvider` in `frontend/lib/auth.ts` |
+| Two-factor auth (TOTP) | Missing | Add `totp_secret` to users table, QR code setup page, verify on login |
+| API key management | Missing | Users create API keys for CLI / integrations (table: `api_keys`, hashed) |
+| Session revocation | Missing | JWT is stateless — add a Redis denylist for logout + password change |
+| Email verification on register | Missing | Currently registers immediately — add `email_verified` flag + Resend verification email |
 
-**The fix: a `formatPostForPlatform` function**
+### 4.2 Billing (`apps/api/src/routes/billing.ts` + `services/billing/`)
 
-Add a pure formatter that runs between content generation and publishing. It receives the raw copywriter output (`content`, `hashtags`, `mediaUrls`) and returns a `FormattedPost` shaped for each platform's actual API contract:
+| Item | Status | What to do |
+|---|---|---|
+| Stripe Subscribe | Done | — |
+| Paystack Subscribe | Done | — |
+| Upgrade/Downgrade | Done | — |
+| Overage invoicing | Done (`overage.ts`, `overage.worker.ts`) | Verify cron fires correctly |
+| Trial-to-paid conversion email | Missing | Send Resend email 3 days before trial ends |
+| Dunning (failed payment retry) | Missing | Handle `invoice.payment_failed` Stripe webhook + email sequence |
+| Paused subscription (grace period) | Missing | Add `suspended` grace period before cancelling access |
+| Annual billing discount UI | Missing | Billing page toggle for monthly/annual — currently API-only |
+| Invoice PDF download | Missing | Stripe has invoice PDF URL — expose it in `/billing/invoices` |
+| Proration preview before upgrade | Missing | Call Stripe `retrieveUpcomingInvoice` and show user the charge before confirming |
+| Enterprise quote flow | Missing | Enterprise tier = custom pricing — add "Contact sales" CTA with Cal.com embed or email form |
 
-```typescript
-// apps/api/src/services/posting/formatter.ts
+### 4.3 Posts & Planning
 
-export interface FormattedPost {
-  primaryText: string        // main caption / body / tweet text
-  firstComment?: string      // Instagram / Threads hashtag comment
-  hashtags?: string[]        // platforms that take hashtags as separate fields
-  markupMode?: 'markdown' | 'html' | 'none'
-  segments?: string[]        // for threads / carousels (future)
-  truncated: boolean         // flag if content was cut to fit the limit
-}
+| Item | Status | What to do |
+|---|---|---|
+| Manual post creation | Route exists (`POST /v1/posts`), no clear UI path | Add "New Post" button on posts page |
+| Content calendar view | Missing | Visual 30-day calendar on plans/[id] (currently list view only) |
+| Bulk approve in HITL queue | Route exists, UI unknown | Add "Approve All" / "Approve Next 10" in review page |
+| Post preview (platform mockup) | Missing | Render how post will look on X, LinkedIn, Instagram before approving |
+| Drag-and-drop reschedule | Missing | Calendar drag to reschedule a post (calls `PUT /posts/:id`) |
+| Content recycling | Missing | "Re-publish best posts" — surface top performers by engagement, re-queue |
+| Post versioning | Missing | When post is edited in HITL, store previous versions (audit trail) |
+| A/B test UI | `ab-tester.ts` service + `abTests` DB table exist | Build UI: create variant B, view winner after N days |
+| Post failure alerts | Missing | When `status = failed`, send email/webhook notification |
 
-export function formatPostForPlatform(
-  platform: Platform,
-  content: string,
-  hashtags: string[],
-): FormattedPost
-```
+### 4.4 Agents
 
-**Per-platform formatting rules for the formatter:**
+| Item | Status | What to do |
+|---|---|---|
+| Auto-reply UI | `auto-reply.ts` service exists | Add toggle in agent settings: enable auto-reply, configure tone for replies |
+| Agent performance scoring | `scorer.ts` exists | Surface score in agent detail page (which voice traits drive engagement) |
+| Agent cloning | Missing | Duplicate an agent with all its settings to a new brand |
+| Diet instruction UI | DB field exists | Verify the agents/[id] page has a text area for diet instructions |
+| Per-agent guardrail overrides | Missing | Agents inherit org guardrails — add per-agent additional restrictions |
 
-- **X** — enforce 280 chars; if over limit, trim content to fit, preserve hashtags (max 2) at the end; set `truncated: true` and log it
-- **Instagram / Threads** — caption is content only (no hashtags); hashtags go in `firstComment` joined by spaces; double line breaks preserved; 2200 char cap on caption
-- **LinkedIn** — strip markdown syntax (asterisks, underscores) from content before sending; append max 3 hashtags inline at end separated by spaces; enforce 3000 char limit
-- **Telegram** — sanitise to Telegram Markdown v1 subset: `*bold*`, `_italic_`, `` `code` ``, `[text](url)`; strip unsupported syntax; no character limit
-- **Facebook** — strip all markdown; hashtags inline at end; soft warn if over 400 chars
-- **TikTok** — ensure hook is within first 100 chars (before "more" fold); 3–5 hashtags appended; 2200 char cap
-- **Bluesky** — enforce 300 char limit including hashtags; hashtags as plain text (facet encoding handled by social-mcp); no markdown
-- **Discord** — pass through standard Markdown (bold `**`, italic `*`, code blocks, headers); no hashtags
-- **Reddit** — split content into `title` (first line, 300 char max) and `body` (remainder, Markdown); no hashtags
-- **YouTube** — first 100 chars become the visible preview snippet; chapters formatted as `00:00 Section name`; hashtags in body at end
-- **WhatsApp** — convert `**bold**` → `*bold*`, `*italic*` → `_italic_`; strip hashtags; 4096 char limit
-- **Slack** — convert Markdown to Slack mrkdwn: `**bold**` → `*bold*`, `` `code` `` unchanged, `[text](url)` → `<url|text>`; no hashtags
+### 4.5 Analytics & Reporting
 
-**Where it plugs in:**
+| Item | Status | What to do |
+|---|---|---|
+| Post analytics | `scorer.ts`, `analytics.worker.ts` exist | Verify analytics page shows per-post stats |
+| Platform breakdown | Missing | Chart: engagement by platform (X vs LinkedIn vs Instagram) |
+| Best posting times | Missing | Heatmap of engagement by day/hour from historical data |
+| Hashtag analytics | Missing | Which hashtags drive most reach — aggregate from `postAnalytics` |
+| Competitor analysis UI | `competitor-analysis.ts` MCP tool exists | Build UI to input competitor handles, view analysis in brand profile |
+| Exportable reports | `reports.ts` route exists | Add CSV/PDF export button on reports page |
+| Usage analytics (admin-only) | Missing | Separate from post analytics — track feature adoption across orgs |
 
-`executor.ts` calls `publishToplatform` → insert `formatPostForPlatform` before the `publishPost` call so every platform gets correctly shaped text. The copywriter output is never sent raw to an API again.
+### 4.6 Team & Collaboration
 
-**Also update `prompt-builder.ts`:**
-Add new platform rules for Threads, Bluesky, Discord, Reddit, YouTube, WhatsApp, and Slack to `PLATFORM_RULES` so the LLM generates content that aligns with what the formatter will enforce.
+| Item | Status | What to do |
+|---|---|---|
+| Team invites | Done (email token flow) | — |
+| RBAC stages | Done (plan_review, hitl, legal_review, analytics_only) | — |
+| Comments on posts | Missing | Reviewers should be able to leave comments on posts before approving/vetoing |
+| Notification preferences | Missing | Per-user setting: get notified on post approval, failure, new plan |
+| @mentions in comments | Missing | Tag team members in post comments |
+
+### 4.7 Brand & Content
+
+| Item | Status | What to do |
+|---|---|---|
+| Brand ingestion | Done (PDF, URL, Markdown) | — |
+| Content pillar configuration | Missing | Let users define their content pillars (Education 40%, Promo 20%, etc.) |
+| Tone slider UI | Missing | Visual slider for brand tone (formal ↔ casual, serious ↔ playful) |
+| Brand health score | Missing | Score how consistent generated content is with brand guidelines |
+| Multi-language support | Missing | Agent should generate content in brand's target language(s) |
+
+### 4.8 Social Accounts
+
+| Item | Status | What to do |
+|---|---|---|
+| OAuth connect | Done | — |
+| Token refresh | Done | — |
+| Account health check | Missing | Surface expired/invalid tokens proactively on the accounts page |
+| Multi-account per platform | Missing | Some orgs run multiple X accounts — allow per-agent account assignment |
+| Platform-specific limits display | `PLATFORM_CONSTRAINTS` type exists | Show char limit, hashtag limit inline in post editor |
 
 ---
 
-### TikTok and Facebook are not implemented — social-mcp is not used at all
+## 5. Technical Debt & Infrastructure
 
-`publishPost` in [apps/api/src/services/posting/social-mcp.ts](apps/api/src/services/posting/social-mcp.ts) only handles `x`, `instagram`, `linkedin`, and `telegram`. Both `tiktok` and `facebook` fall to the `default` throw (`"Platform X not yet supported"`), meaning any scheduled TikTok or Facebook post will fail at execution time despite being valid in the schema.
+### 5.1 API
 
-More broadly, **no platform is using the `social-mcp` npm package**. The file contains fully hand-rolled `fetch` calls and has a TODO comment at the top explicitly saying to migrate. social-mcp v1.7.0 is now available and covers all six current platforms plus eight more.
+| Item | Status | Fix |
+|---|---|---|
+| Rate limiting | Missing | Add `@hono/rate-limiter` or `express-rate-limit` — 100 req/min per org |
+| CORS configuration | Unknown | Verify `cors()` is configured for production domain (not `*`) |
+| Request logging | Unknown | Add Pino/Winston structured logging — critical for debugging production issues |
+| Error monitoring | Missing | Add Sentry SDK (`@sentry/node`) — captures unhandled errors with stack traces |
+| OpenAPI / Swagger docs | Missing | Generate from Zod schemas using `zod-openapi` — unblocks API consumers |
+| Health check endpoint | Unknown | Add `GET /health` returning `{ status: 'ok', db: true, redis: true }` |
+| API versioning strategy | Unclear | `/v1/` prefix exists — document the versioning policy |
+| `config.ts` at monorepo root | Exists | Move into `packages/config/src/index.ts` and delete root file (per adjustments.md) |
+| Database connection pooling | Unknown | Verify postgres.js pool size is tuned for production load |
+| Missing `posts` route in some references | Minor | Ensure `routes/posts.ts` is mounted in `index.ts` |
 
-**What needs to be done:**
-1. Install `social-mcp` as a dependency in `apps/api`.
-2. Replace `social-mcp.ts` with a thin adapter that instantiates `SocialMCP` with the org's access token and proxied agent, then delegates all `publishPost` and `fetchEngagementData` calls to it.
-3. This immediately unblocks TikTok and Facebook, and makes adding the new platforms (Discord, WhatsApp, Slack, Reddit, Threads, Bluesky, Mastodon, YouTube) a matter of adding cases to the `platformEnum` and strategy routing — not writing new API clients.
+### 5.2 Frontend (`frontend/`)
+
+| Item | Status | Fix |
+|---|---|---|
+| Next-auth integration | `lib/auth.ts` referenced in adjustments.md | Verify it exists and is wired to login page |
+| Error boundaries | Missing | Add `error.tsx` per route segment for graceful error display |
+| Loading skeletons | Unknown | Add `loading.tsx` for all data-heavy pages (plans, posts, analytics) |
+| Empty states | Unknown | Every list page needs a friendly empty state with a CTA |
+| Toast notifications | Unknown | Add `sonner` or `react-hot-toast` for action feedback |
+| Form validation | Unknown | Zod + `react-hook-form` on all forms — match API Zod schemas |
+| Mobile responsiveness | Unknown | Test all pages at 375px — sidebar needs a hamburger menu on mobile |
+| Dark mode | Unknown | Add `dark:` Tailwind variants — many SaaS users prefer dark mode |
+| Keyboard shortcuts | Missing | `k` for command palette, `n` for new post, `r` for review queue |
+| Optimistic UI updates | Missing | TanStack Query `useMutation` with `onMutate` for instant UI feedback |
+| Accessibility (a11y) | Unknown | ARIA labels on icon buttons, focus traps in modals, keyboard navigation |
+| `posts/` page | Exists as folder | Verify it has a `page.tsx` — not shown in initial listing |
+
+### 5.3 Workers
+
+| Item | Status | Fix |
+|---|---|---|
+| `overage.worker.ts` | Exists | Verify cron schedule (nightly 2am) is correctly configured |
+| `ingestor.worker.ts` | Exists | Verify it handles PDF/URL parsing failures gracefully (retry + DLQ) |
+| `notification.worker.ts` | Exists | Verify webhook delivery retries on failure (exponential backoff) |
+| Dead-letter queues | Unknown | Add DLQ for all workers — failed jobs should not silently disappear |
+| Worker health metrics | Missing | Expose BullMQ queue depths to the admin dashboard |
+
+### 5.4 Testing
+
+| Item | Status | Fix |
+|---|---|---|
+| Unit tests | Missing | Add Vitest for services (billing limits, usage tracker, guardrails) |
+| Integration tests | Missing | Test full agent pipeline against a test DB |
+| E2E tests | Missing | Playwright for critical paths: register → create brand → generate plan → approve post |
+| Load testing | Missing | k6 or Artillery for post-execution worker under load |
+
+### 5.5 DevOps / CI
+
+| Item | Status | Fix |
+|---|---|---|
+| GitHub Actions CI | Unknown | Add: install → type-check → lint → test on every PR |
+| DB migration in CI | Missing | Run `db:migrate` in CI against a test Postgres instance |
+| Docker image tagging | Unknown | Tag with git SHA for traceable deployments |
+| Environment variable validation at startup | Partially done (`schemas.ts`) | Confirm it throws loudly if required vars are missing |
+| Log aggregation | Missing | Configure Pino → Loki or Datadog for production |
+| Uptime monitoring | Missing | Add BetterUptime or UptimeRobot for `/health` endpoint |
+
+---
+
+## 6. New Features (Future Roadmap)
+
+These are not blockers for launch but are high-value for growth and retention.
+
+| Feature | Why |
+|---|---|
+| **Content library / templates** | Users save high-performing post formats to reuse — reduces reliance on agents for routine content |
+| **Onboarding wizard** | Step-by-step setup: connect brand → ingest docs → connect account → generate first plan. Reduces time-to-value |
+| **In-app notification center** | Bell icon with unread count — post approved, post failed, plan ready, usage warning |
+| **AI caption editor** | Inline "Improve this caption" / "Make it shorter" buttons on individual posts in HITL queue |
+| **White-label portal** | Agency tier: custom subdomain (`agency.client.com`), replace Anthyx branding with client branding |
+| **Multi-workspace** | Enterprise: manage multiple independent workspaces (different brands, teams) under one billing account |
+| **Mobile app (React Native / PWA)** | Approve/veto posts from phone — HITL reviewers especially need this |
+| **Zapier / Make integration** | Connect Anthyx to 1000+ apps via webhooks: trigger post creation from CRM events, etc. |
+| **AI trend briefing** | Weekly email digest: "Here are the trending topics in your niche this week" — powered by Strategist |
+| **Post scheduling conflict detection** | Warn when two posts are scheduled within 2 hours on the same account |
+| **Content gap analysis** | "You haven't posted about [pillar] in 14 days" — surface in dashboard |
+| **RSS/blog auto-ingest** | Monitor a blog RSS feed → auto-generate social posts from new articles |
+| **Social listening** | Monitor brand mentions across platforms → surface in analytics |
+| **Sentiment analysis on comments** | Classify comment sentiment on published posts → feed back into agent voice tuning |
+| **Commission/revenue share for agencies** | White-label agencies resell seats — track sub-org revenue, compute agency's share |
+
+---
+
+## 7. Summary — Priority Order
+
+### Immediate (launch blockers)
+1. Verify all frontend pages are complete and wired to API (especially `posts/`, `review/`, `plans/[id]`)
+2. Password reset end-to-end test (new pages exist in `frontend/(auth)/`)
+3. Rate limiting on API
+4. Error monitoring (Sentry)
+5. Health check endpoint
+
+### Short-term (1-4 weeks)
+6. Admin dashboard (`apps/admin/`) — operator visibility is critical
+7. Email verification on register
+8. Annual billing toggle in UI
+9. Post failure notifications
+10. Basic onboarding wizard
+
+### Medium-term (1-3 months)
+11. Affiliate dashboard (`apps/affiliate/`) — if running a referral program
+12. A/B test UI (service already built)
+13. Auto-reply UI (service already built)
+14. Competitor analysis UI (MCP tool already built)
+15. 2FA / TOTP
+
+### Long-term
+16. Mobile app / PWA
+17. White-label portal
+18. Social listening
+19. Zapier integration
+20. Multi-workspace support

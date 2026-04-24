@@ -28,15 +28,22 @@ function getS3Client(): S3Client {
 }
 
 export async function uploadToCDN(sourceUrl: string, filename?: string): Promise<string> {
-  const bucket =
-    process.env["DO_SPACES_BUCKET"] ?? process.env["AWS_S3_BUCKET"] ?? "anthyx-assets";
-
-  const key = filename ?? `assets/${Date.now()}-${crypto.randomUUID()}.png`;
-
-  // Fetch the image from the source URL
   const response = await fetch(sourceUrl);
   if (!response.ok) throw new Error(`Failed to fetch image: ${response.status}`);
   const buffer = Buffer.from(await response.arrayBuffer());
+  return uploadBufferToCDN(buffer, "image/png", filename);
+}
+
+export async function uploadBufferToCDN(
+  buffer: Buffer,
+  contentType = "image/jpeg",
+  filename?: string,
+): Promise<string> {
+  const bucket =
+    process.env["DO_SPACES_BUCKET"] ?? process.env["AWS_S3_BUCKET"] ?? "anthyx-assets";
+
+  const ext = contentType === "image/jpeg" ? "jpg" : "png";
+  const key = filename ?? `assets/${Date.now()}-${crypto.randomUUID()}.${ext}`;
 
   const s3 = getS3Client();
 
@@ -45,7 +52,7 @@ export async function uploadToCDN(sourceUrl: string, filename?: string): Promise
       Bucket: bucket,
       Key: key,
       Body: buffer,
-      ContentType: "image/png",
+      ContentType: contentType,
       ACL: "public-read",
     }),
   );

@@ -6,7 +6,7 @@ import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { SubscribeSchema, UpdateOverageCapSchema } from "@anthyx/config";
 import { stripe, createSubscription, handleStripeWebhook } from "../services/billing/stripe";
-import { createPaystackSubscription, handlePaystackWebhook, cancelPaystackSubscription, isValidPlanCode } from "../services/billing/paystack";
+import { createPaystackSubscription, handlePaystackWebhook, cancelPaystackSubscription, isValidPlanCode, verifyPaystackTransaction } from "../services/billing/paystack";
 import { getCurrentUsage } from "../services/billing/usage-tracker";
 import { PLAN_TIER_CONFIGS } from "@anthyx/types";
 import { productConfig } from "@anthyx/config";
@@ -22,6 +22,20 @@ router.get("/subscription", auth, async (req, res) => {
 
   const usage = await getCurrentUsage(req.user.orgId);
   return res.json({ subscription: sub, usage });
+});
+
+// GET /billing/verify/paystack?reference=...
+router.get("/verify/paystack", auth, async (req, res) => {
+  const reference = req.query["reference"] as string | undefined;
+  if (!reference) return res.status(400).json({ error: "Missing reference" });
+
+  try {
+    await verifyPaystackTransaction(reference);
+    return res.json({ verified: true });
+  } catch (err) {
+    console.error("[Billing] Paystack verify error:", err);
+    return res.status(400).json({ error: (err as Error).message });
+  }
 });
 
 // GET /billing/usage
