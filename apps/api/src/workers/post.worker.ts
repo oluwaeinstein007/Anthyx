@@ -1,7 +1,7 @@
 import { Worker, type Job } from "bullmq";
 import { eq } from "drizzle-orm";
 import { db } from "../db/client";
-import { scheduledPosts, agents, brandProfiles } from "../db/schema";
+import { scheduledPosts, agents, brandProfiles, socialAccounts } from "../db/schema";
 import { redisConnection } from "../queue/client";
 import { queueAnalyticsFetch } from "../queue/jobs";
 import { oauthProxy } from "../services/oauth-proxy";
@@ -86,6 +86,11 @@ const worker = new Worker<PostJobData>(
     // Get valid OAuth token via proxy (handles refresh automatically)
     const token = await oauthProxy.getValidToken(post.socialAccountId);
 
+    // Fetch account for platform-specific identifiers and config
+    const account = await db.query.socialAccounts.findFirst({
+      where: eq(socialAccounts.id, post.socialAccountId),
+    });
+
     // Publish
     const result = await publishToplatform({
       platform: post.platform as Platform,
@@ -94,7 +99,8 @@ const worker = new Worker<PostJobData>(
       hashtags: post.contentHashtags ?? [],
       mediaUrls,
       accessToken: token,
-      accountId: undefined, // loaded from account in executor if needed
+      accountId: account?.accountId ?? undefined,
+      platformConfig: account?.platformConfig as Record<string, unknown> | undefined,
     });
 
     // Update DB

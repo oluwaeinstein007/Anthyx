@@ -253,3 +253,32 @@ export function MastodonConnectModal({ onClose }: { onClose: () => void }) {
     />
   );
 }
+
+export function PinterestConnectModal({ onClose }: { onClose: () => void }) {
+  return (
+    <TokenConnectModal
+      platform="pinterest"
+      label="Pinterest"
+      accentColor="bg-red-500"
+      accentRing="focus:ring-red-400"
+      accentBtn="bg-red-600 hover:bg-red-700"
+      endpoint="/accounts/pinterest"
+      fields={[
+        { key: "accessToken", label: "Access Token", placeholder: "your-token", type: "password",
+          hint: "From Pinterest Developer Portal → Your App → Generate Access Token. Needs boards:read and pins:write scopes." },
+        { key: "boardId", label: "Board ID", placeholder: "username/board-name",
+          hint: "From the board URL: pinterest.com/username/board-name — use the username/board-name slug" },
+        { key: "boardName", label: "Board Display Name (optional)", placeholder: "My Brand Board",
+          hint: "A friendly label for this board shown in the dashboard" },
+      ]}
+      steps={[
+        { n: 1, text: <><a href="https://developers.pinterest.com/apps/" target="_blank" rel="noreferrer" className="text-red-600 underline inline-flex items-center gap-0.5">Pinterest Developer Portal <ExternalLink className="w-3 h-3" /></a> → Create App → request scopes <code className="bg-gray-100 px-1 rounded text-xs">boards:read</code> and <code className="bg-gray-100 px-1 rounded text-xs">pins:write</code>.</> },
+        { n: 2, text: <>In your app, go to <strong>Generate Access Token</strong> and copy the token for your Pinterest account.</> },
+        { n: 3, text: <>Find the board you want to post to. The board ID is the path after pinterest.com — e.g. <code className="bg-gray-100 px-1 rounded text-xs">yourname/my-brand-board</code>.</> },
+      ]}
+      onClose={onClose}
+    />
+  );
+}
+
+// EmailConnectModal lives in EmailConnectModal.tsx (needs conditional SMTP/SendGrid/Mailgun fields)

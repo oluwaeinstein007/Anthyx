@@ -569,6 +569,122 @@ router.post("/mastodon", auth, async (req, res) => {
   return res.json({ id: account!.id, platform: "mastodon", accountHandle: handle, isActive: true });
 });
 
+// POST /accounts/pinterest — connect via access token + board ID
+router.post("/pinterest", auth, async (req, res) => {
+  const { accessToken, boardId, boardName } = req.body as {
+    accessToken?: string;
+    boardId?: string;
+    boardName?: string;
+  };
+
+  if (!accessToken?.trim() || !boardId?.trim()) {
+    return res.status(400).json({ error: "Access token and board ID are required" });
+  }
+
+  const verifyRes = await fetch("https://api.pinterest.com/v5/user_account", {
+    headers: { Authorization: `Bearer ${accessToken.trim()}` },
+  });
+  if (!verifyRes.ok) return res.status(400).json({ error: "Invalid Pinterest access token" });
+  const user = (await verifyRes.json()) as { username?: string };
+
+  const boardRes = await fetch(`https://api.pinterest.com/v5/boards/${encodeURIComponent(boardId.trim())}`, {
+    headers: { Authorization: `Bearer ${accessToken.trim()}` },
+  });
+  if (!boardRes.ok) return res.status(400).json({ error: "Board not found — check the board ID and ensure the token has boards:read scope" });
+  const board = (await boardRes.json()) as { id: string; name?: string };
+
+  await PlanLimitsEnforcer.check(req.user.orgId, "account");
+
+  const handle = user.username ?? "pinterest_user";
+  const resolvedBoardName = boardName?.trim() || board.name || boardId.trim();
+
+  const [account] = await db
+    .insert(socialAccounts)
+    .values({
+      organizationId: req.user.orgId,
+      platform: "pinterest",
+      accountHandle: handle,
+      accountId: user.username,
+      accessToken: encryptToken(accessToken.trim()),
+      platformConfig: {
+        boardId: board.id,
+        boardName: resolvedBoardName,
+        username: user.username,
+      },
+      isActive: true,
+    })
+    .onConflictDoUpdate({
+      target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [typeof socialAccounts.organizationId, typeof socialAccounts.platform, typeof socialAccounts.accountHandle],
+      set: {
+        accessToken: encryptToken(accessToken.trim()),
+        platformConfig: {
+          boardId: board.id,
+          boardName: resolvedBoardName,
+          username: user.username,
+        },
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+
+  await backfillPlanPosts(req.user.orgId, account!.id, "pinterest");
+  return res.json({ id: account!.id, platform: "pinterest", accountHandle: handle, isActive: true });
+});
+
+// POST /accounts/email — connect an email list (credentials are server-level env vars,
+// same pattern as Telegram: operator sets MAIL_MAILER+credentials in .env, users just
+// configure their recipient list and a display name)
+router.post("/email", auth, async (req, res) => {
+  const { displayName, recipients } = req.body as {
+    displayName?: string;
+    recipients?: string;
+  };
+
+  if (!recipients?.trim()) {
+    return res.status(400).json({ error: "At least one recipient email address is required" });
+  }
+
+  // Validate that the server email provider is configured (like Telegram checks its bot token)
+  const mailer = process.env["MAIL_MAILER"] ?? "smtp";
+  const fromAddress = process.env["MAIL_FROM_ADDRESS"];
+  if (!fromAddress) {
+    return res.status(500).json({ error: "Server email not configured. Set MAIL_FROM_ADDRESS in environment." });
+  }
+  if (mailer === "smtp" && (!process.env["MAIL_HOST"] || !process.env["MAIL_USERNAME"] || !process.env["MAIL_PASSWORD"])) {
+    return res.status(500).json({ error: "SMTP not configured. Set MAIL_HOST, MAIL_USERNAME, MAIL_PASSWORD in environment." });
+  }
+  if (mailer === "sendgrid" && !process.env["SENDGRID_API_KEY"]) {
+    return res.status(500).json({ error: "SendGrid not configured. Set SENDGRID_API_KEY in environment." });
+  }
+  if (mailer === "mailgun" && (!process.env["MAILGUN_API_KEY"] || !process.env["MAILGUN_DOMAIN"])) {
+    return res.status(500).json({ error: "Mailgun not configured. Set MAILGUN_API_KEY and MAILGUN_DOMAIN in environment." });
+  }
+
+  await PlanLimitsEnforcer.check(req.user.orgId, "account");
+
+  const recipientList = recipients.split(",").map((r) => r.trim()).filter(Boolean);
+  const handle = displayName?.trim() || `list_${recipientList.length}_recipients`;
+
+  const [account] = await db
+    .insert(socialAccounts)
+    .values({
+      organizationId: req.user.orgId,
+      platform: "email",
+      accountHandle: handle,
+      accountId: handle,
+      platformConfig: { recipients: recipientList, mailer },
+      isActive: true,
+    })
+    .onConflictDoUpdate({
+      target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [typeof socialAccounts.organizationId, typeof socialAccounts.platform, typeof socialAccounts.accountHandle],
+      set: { platformConfig: { recipients: recipientList, mailer }, updatedAt: new Date() },
+    })
+    .returning();
+
+  await backfillPlanPosts(req.user.orgId, account!.id, "email");
+  return res.json({ id: account!.id, platform: "email", accountHandle: handle, isActive: true });
+});
+
 // GET /accounts
 router.get("/", auth, async (req, res) => {
   const list = await db.query.socialAccounts.findMany({

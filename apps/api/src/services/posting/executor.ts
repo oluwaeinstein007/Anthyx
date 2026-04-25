@@ -11,6 +11,7 @@ export interface PublishParams {
   mediaUrls?: string[];
   accessToken: string;
   accountId?: string;
+  platformConfig?: Record<string, unknown>;
 }
 
 export interface PublishResult {
@@ -22,6 +23,7 @@ export interface PublishResult {
 export async function publishToplatform(params: PublishParams): Promise<PublishResult> {
   const proxyAgent = buildProxiedAgent(params.organizationId);
   const userAgent = getRandomUserAgent();
+  const cfg = params.platformConfig ?? {};
 
   // Format content and hashtags for the target platform before publishing
   const formatted = formatPostForPlatform(params.platform, params.content, params.hashtags);
@@ -35,6 +37,14 @@ export async function publishToplatform(params: PublishParams): Promise<PublishR
     accountId: params.accountId,
     proxyAgent: proxyAgent ?? undefined,
     userAgent,
+    // Mastodon
+    mastodonInstance: cfg["instance"] as string | undefined,
+    // Bluesky
+    blueskyDid: (cfg["did"] as string | undefined) ?? params.accountId,
+    // Pinterest
+    pinterestBoardId: cfg["boardId"] as string | undefined,
+    // Email — credentials are server-level env vars (MAIL_MAILER etc.), only recipients are per-org
+    emailTo: cfg["recipients"] as string[] | undefined,
   });
 
   return { ...result, truncated: formatted.truncated };

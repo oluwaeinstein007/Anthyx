@@ -6,6 +6,7 @@
 
 import type { Platform } from "@anthyx/types";
 import type { Agent } from "https-proxy-agent";
+import nodemailer from "nodemailer"; // SMTP engine — same dep social-mcp ships internally
 
 export interface PublishPayload {
   platform: Platform;
@@ -24,6 +25,10 @@ export interface PublishPayload {
   mastodonInstance?: string;
   // Bluesky-specific
   blueskyDid?: string;
+  // Pinterest-specific
+  pinterestBoardId?: string;
+  // Email-specific (credentials come from server process.env, same pattern as Telegram)
+  emailTo?: string[];
 }
 
 export interface PublishResult {
@@ -70,6 +75,10 @@ export async function publishPost(payload: PublishPayload): Promise<PublishResul
       return publishToMastodon(payload);
     case "youtube":
       return publishToYouTube(payload);
+    case "pinterest":
+      return publishToPinterest(payload);
+    case "email":
+      return publishToEmail(payload);
     default:
       throw new Error(`Platform ${(payload as PublishPayload).platform} not supported`);
   }
@@ -498,4 +507,118 @@ async function publishToYouTube(p: PublishPayload): Promise<PublishResult> {
   if (!res.ok) throw new Error(`YouTube publish failed: ${res.status} - ${await res.text()}`);
   const data = (await res.json()) as { id: string };
   return { postId: data.id };
+}
+
+async function publishToPinterest(p: PublishPayload): Promise<PublishResult> {
+  if (!p.pinterestBoardId) throw new Error("Pinterest requires board ID in platformConfig");
+
+  // Use first line of content as pin title (100 char max), rest as description
+  const lines = p.content.split("\n");
+  const title = (lines[0] ?? "").slice(0, 100);
+  const description = p.content.slice(0, 500);
+
+  const body: Record<string, unknown> = {
+    board_id: p.pinterestBoardId,
+    title,
+    description,
+  };
+
+  if (p.mediaUrls?.[0]) {
+    body["media_source"] = { source_type: "image_url", url: p.mediaUrls[0] };
+  }
+
+  const res = await fetch("https://api.pinterest.com/v5/pins", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${p.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) throw new Error(`Pinterest publish failed: ${res.status} - ${await res.text()}`);
+  const data = (await res.json()) as { id: string };
+  return { postId: data.id };
+}
+
+async function publishToEmail(p: PublishPayload): Promise<PublishResult> {
+  if (!p.emailTo?.length) throw new Error("Email requires recipient list");
+
+  // Read server-level credentials from process.env at call time (same pattern as publishToTelegram
+  // reading TELEGRAM_BOT_TOKEN). Operator sets MAIL_MAILER + credentials in .env; users only
+  // configure their recipient list.
+  const mailer = process.env["MAIL_MAILER"] ?? "smtp";
+  const fromAddress = process.env["MAIL_FROM_ADDRESS"] ?? "";
+  const fromName = process.env["MAIL_FROM_NAME"] ?? "";
+  const from = fromName ? `${fromName} <${fromAddress}>` : fromAddress;
+
+  if (!fromAddress) throw new Error("Server email not configured — set MAIL_FROM_ADDRESS in environment");
+
+  // First line → subject (strip optional "Subject: " prefix), rest → HTML body
+  const newlineIdx = p.content.indexOf("\n");
+  const subject = (newlineIdx > -1 ? p.content.slice(0, newlineIdx) : p.content.slice(0, 100))
+    .replace(/^Subject:\s*/i, "")
+    .trim();
+  const htmlBody = newlineIdx > -1 ? p.content.slice(newlineIdx + 1).trim() : p.content;
+
+  if (mailer === "smtp") {
+    const host = process.env["MAIL_HOST"] ?? "";
+    const port = parseInt(process.env["MAIL_PORT"] ?? "587", 10);
+    const username = process.env["MAIL_USERNAME"] ?? "";
+    const password = process.env["MAIL_PASSWORD"] ?? "";
+    const encryption = process.env["MAIL_ENCRYPTION"] ?? "tls";
+    if (!host || !username || !password) throw new Error("SMTP not configured — set MAIL_HOST, MAIL_USERNAME, MAIL_PASSWORD");
+
+    const transport = nodemailer.createTransport({
+      host, port,
+      secure: encryption === "ssl",
+      requireTLS: encryption === "tls",
+      auth: { user: username, pass: password },
+    });
+    // Send individually — each recipient gets a separate email, no address leakage
+    const results = await Promise.allSettled(
+      p.emailTo.map((to) => transport.sendMail({ from, to, subject, html: htmlBody })),
+    );
+    transport.close();
+    const firstOk = results.find((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof transport.sendMail>>> => r.status === "fulfilled");
+    return { postId: firstOk?.value.messageId ?? `smtp_${Date.now()}` };
+  }
+
+  if (mailer === "sendgrid") {
+    const apiKey = process.env["SENDGRID_API_KEY"] ?? "";
+    if (!apiKey) throw new Error("SendGrid not configured — set SENDGRID_API_KEY");
+    const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        personalizations: p.emailTo.map((email) => ({ to: [{ email }] })),
+        from: { email: fromAddress, ...(fromName ? { name: fromName } : {}) },
+        subject,
+        content: [{ type: "text/html", value: htmlBody }],
+      }),
+    });
+    if (!res.ok) throw new Error(`SendGrid send failed: ${res.status} - ${await res.text()}`);
+    return { postId: `sg_${Date.now()}` };
+  }
+
+  if (mailer === "mailgun") {
+    const apiKey = process.env["MAILGUN_API_KEY"] ?? "";
+    const domain = process.env["MAILGUN_DOMAIN"] ?? "";
+    if (!apiKey || !domain) throw new Error("Mailgun not configured — set MAILGUN_API_KEY and MAILGUN_DOMAIN");
+    const results = await Promise.allSettled(
+      p.emailTo.map((to) => {
+        const body = new URLSearchParams({ from, to, subject, html: htmlBody });
+        return fetch(`https://api.mailgun.net/v3/${domain}/messages`, {
+          method: "POST",
+          headers: { Authorization: `Basic ${Buffer.from(`api:${apiKey}`).toString("base64")}` },
+          body,
+        });
+      }),
+    );
+    const firstOk = results.find((r): r is PromiseFulfilledResult<Response> => r.status === "fulfilled" && r.value.ok);
+    const firstId = firstOk ? ((await firstOk.value.json()) as { id?: string }).id ?? `mg_${Date.now()}` : `mg_${Date.now()}`;
+    return { postId: firstId };
+  }
+
+  throw new Error(`Unsupported MAIL_MAILER: "${mailer}". Supported: smtp, sendgrid, mailgun`);
 }

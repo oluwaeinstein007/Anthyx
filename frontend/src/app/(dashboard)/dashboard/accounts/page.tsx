@@ -11,7 +11,9 @@ import {
   WhatsAppConnectModal,
   BlueskyConnectModal,
   MastodonConnectModal,
+  PinterestConnectModal,
 } from "@/components/accounts/TokenConnectModal";
+import { EmailConnectModal } from "@/components/accounts/EmailConnectModal";
 
 interface SocialAccount {
   id: string;
@@ -46,15 +48,17 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
   bluesky:   { label: "Bluesky",      textColor: "text-sky-700",    bgColor: "bg-sky-50",     dotColor: "bg-sky-400",    connectionType: "modal",  description: "AT Protocol posts via app password" },
   mastodon:  { label: "Mastodon",     textColor: "text-violet-700", bgColor: "bg-violet-50",  dotColor: "bg-violet-500", connectionType: "modal",  description: "Fediverse posts on any instance" },
   youtube:   { label: "YouTube",      textColor: "text-red-700",    bgColor: "bg-red-50",     dotColor: "bg-red-500",    connectionType: "oauth",  description: "Community posts and description updates" },
+  pinterest: { label: "Pinterest",    textColor: "text-red-700",    bgColor: "bg-rose-50",    dotColor: "bg-rose-500",   connectionType: "modal",  description: "Pin images and content to boards" },
+  email:     { label: "Email",        textColor: "text-amber-700",  bgColor: "bg-amber-50",   dotColor: "bg-amber-500",  connectionType: "modal",  description: "Send campaigns via SendGrid or Mailgun" },
 };
 
 const PLATFORM_ORDER = [
   "x", "instagram", "linkedin", "facebook", "tiktok", "threads",
-  "reddit", "youtube", "telegram", "discord", "slack", "whatsapp",
-  "bluesky", "mastodon",
+  "reddit", "youtube", "pinterest", "email", "telegram", "discord",
+  "slack", "whatsapp", "bluesky", "mastodon",
 ];
 
-type ModalPlatform = "telegram" | "discord" | "slack" | "whatsapp" | "bluesky" | "mastodon" | null;
+type ModalPlatform = "telegram" | "discord" | "slack" | "whatsapp" | "bluesky" | "mastodon" | "pinterest" | "email" | null;
 
 export default function AccountsPage() {
   const qc = useQueryClient();
@@ -101,7 +105,7 @@ export default function AccountsPage() {
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Social Accounts</h1>
-        <p className="text-sm text-gray-500 mt-1">Connect accounts to enable autonomous publishing across 14 platforms.</p>
+        <p className="text-sm text-gray-500 mt-1">Connect accounts to enable autonomous publishing across 16 platforms.</p>
       </div>
 
       {/* Connected accounts */}
@@ -226,6 +230,8 @@ export default function AccountsPage() {
       {openModal === "whatsapp" && <WhatsAppConnectModal onClose={() => setOpenModal(null)} />}
       {openModal === "bluesky" && <BlueskyConnectModal onClose={() => setOpenModal(null)} />}
       {openModal === "mastodon" && <MastodonConnectModal onClose={() => setOpenModal(null)} />}
+      {openModal === "pinterest" && <PinterestConnectModal onClose={() => setOpenModal(null)} />}
+      {openModal === "email" && <EmailConnectModal onClose={() => setOpenModal(null)} />}
     </div>
   );
 }
