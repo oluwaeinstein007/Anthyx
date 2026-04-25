@@ -5,8 +5,27 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import {
   CheckCircle2, XCircle, Pencil, Sparkles, ClipboardCheck,
-  Check, Filter, FlaskConical, X,
+  Check, Filter, FlaskConical, X, Image, AlertCircle,
 } from "lucide-react";
+
+const PLATFORM_CHAR_LIMITS: Record<string, number | null> = {
+  x: 280,
+  instagram: 2200,
+  linkedin: 3000,
+  telegram: null,
+  facebook: 400,
+  tiktok: 2200,
+  discord: null,
+  whatsapp: 4096,
+  slack: null,
+  reddit: null,
+  threads: 500,
+  bluesky: 300,
+  mastodon: 500,
+  youtube: null,
+  pinterest: 500,
+  email: null,
+};
 
 interface Post {
   id: string;
@@ -18,6 +37,7 @@ interface Post {
   agentId: string;
   brandProfileId: string;
   suggestedMediaPrompt: string | null;
+  mediaUrls: string[] | null;
   status: string;
 }
 
@@ -62,6 +82,12 @@ export default function ReviewQueuePage() {
   const [bulkVetoReason, setBulkVetoReason] = useState("");
   const [abTestId, setAbTestId] = useState<string | null>(null);
   const [abResult, setAbResult] = useState<{ abTestId: string; variantAId: string; variantBId: string } | null>(null);
+  const [abError, setAbError] = useState<string | null>(null);
+
+  // Image actions
+  const [imagePromptId, setImagePromptId] = useState<string | null>(null);
+  const [editPrompt, setEditPrompt] = useState("");
+  const [imageError, setImageError] = useState<string | null>(null);
 
   const queryParams = new URLSearchParams();
   if (filterBrand) queryParams.set("brandProfileId", filterBrand);
@@ -104,7 +130,21 @@ export default function ReviewQueuePage() {
 
   const runAbTest = useMutation({
     mutationFn: (postId: string) => api.post<{ abTestId: string; variantAId: string; variantBId: string }>(`/posts/${postId}/ab-test`, {}),
-    onSuccess: (data) => { setAbTestId(null); setAbResult(data); },
+    onSuccess: (data) => { setAbTestId(null); setAbResult(data); setAbError(null); },
+    onError: (err) => { setAbError(err instanceof Error ? err.message : "Failed to generate A/B variant."); },
+  });
+
+  const generateImage = useMutation({
+    mutationFn: ({ id, prompt }: { id: string; prompt?: string }) =>
+      api.post<{ mediaUrl: string }>(`/posts/${id}/regenerate-image`, prompt ? { prompt } : {}),
+    onSuccess: () => {
+      setImagePromptId(null);
+      setImageError(null);
+      qc.invalidateQueries({ queryKey: ["posts-review"] });
+    },
+    onError: (err) => {
+      setImageError(err instanceof Error ? err.message : "Image generation failed.");
+    },
   });
 
   const toggleSelect = (id: string) =>
@@ -340,16 +380,37 @@ export default function ReviewQueuePage() {
               <div className="p-5">
                 {editingId === post.id ? (
                   <div className="space-y-3">
-                    <textarea
-                      value={editText}
-                      onChange={(e) => setEditText(e.target.value)}
-                      rows={4}
-                      className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-green-500"
-                    />
+                    <div className="relative">
+                      <textarea
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        rows={5}
+                        className={`w-full px-3.5 py-2.5 border rounded-xl text-sm resize-none focus:outline-none focus:ring-2 ${
+                          PLATFORM_CHAR_LIMITS[post.platform] !== null &&
+                          PLATFORM_CHAR_LIMITS[post.platform] !== undefined &&
+                          editText.length > (PLATFORM_CHAR_LIMITS[post.platform] as number)
+                            ? "border-red-400 focus:ring-red-400"
+                            : "border-gray-300 focus:ring-green-500"
+                        }`}
+                      />
+                      {(() => {
+                        const limit = PLATFORM_CHAR_LIMITS[post.platform];
+                        const count = editText.length;
+                        const over = limit !== null && limit !== undefined && count > limit;
+                        return (
+                          <span className={`absolute bottom-2.5 right-3 text-xs ${over ? "text-red-500 font-medium" : "text-gray-400"}`}>
+                            {limit !== null && limit !== undefined ? `${count} / ${limit}` : count}
+                          </span>
+                        );
+                      })()}
+                    </div>
                     <div className="flex gap-2">
                       <button
                         onClick={() => updatePost.mutate({ id: post.id, contentText: editText })}
-                        disabled={updatePost.isPending}
+                        disabled={updatePost.isPending || (() => {
+                          const limit = PLATFORM_CHAR_LIMITS[post.platform];
+                          return limit !== null && limit !== undefined && editText.length > limit;
+                        })()}
                         className="px-4 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
                       >
                         {updatePost.isPending ? "Saving…" : "Save changes"}
@@ -371,13 +432,78 @@ export default function ReviewQueuePage() {
                   </div>
                 )}
 
+                {/* Generated image */}
+                {post.mediaUrls && post.mediaUrls.length > 0 && (
+                  <div className="mt-3">
+                    <img
+                      src={post.mediaUrls[0]}
+                      alt="Generated post image"
+                      className="rounded-xl max-h-64 w-full object-cover border border-gray-200"
+                    />
+                  </div>
+                )}
+
+                {/* Image prompt section */}
                 {post.suggestedMediaPrompt && (
-                  <div className="mt-3 flex items-start gap-2.5 p-3 bg-purple-50 rounded-xl border border-purple-100">
-                    <Sparkles className="w-4 h-4 text-purple-500 shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-xs font-medium text-purple-700 mb-0.5">AI image prompt</p>
-                      <p className="text-xs text-purple-600 leading-relaxed">{post.suggestedMediaPrompt}</p>
-                    </div>
+                  <div className="mt-3 rounded-xl border border-purple-100 overflow-hidden">
+                    {imagePromptId === post.id ? (
+                      <div className="p-3 bg-purple-50 space-y-2">
+                        <p className="text-xs font-medium text-purple-700">Edit image prompt</p>
+                        <textarea
+                          rows={3}
+                          value={editPrompt}
+                          onChange={(e) => setEditPrompt(e.target.value)}
+                          className="w-full px-3 py-2 border border-purple-200 rounded-lg text-xs resize-none focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white"
+                        />
+                        {imageError && (
+                          <p className="text-xs text-red-600 flex items-center gap-1">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {imageError}
+                          </p>
+                        )}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => generateImage.mutate({ id: post.id, prompt: editPrompt })}
+                            disabled={generateImage.isPending || !editPrompt.trim()}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
+                          >
+                            <Sparkles className="w-3 h-3" />
+                            {generateImage.isPending ? "Generating…" : "Generate"}
+                          </button>
+                          <button
+                            onClick={() => { setImagePromptId(null); setImageError(null); }}
+                            className="px-3 py-1.5 text-xs border border-purple-200 bg-white hover:bg-purple-50 rounded-lg text-purple-600 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-2.5 p-3 bg-purple-50">
+                        <Sparkles className="w-4 h-4 text-purple-500 shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-purple-700 mb-0.5">AI image prompt</p>
+                          <p className="text-xs text-purple-600 leading-relaxed">{post.suggestedMediaPrompt}</p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => { setImagePromptId(post.id); setEditPrompt(post.suggestedMediaPrompt!); setImageError(null); }}
+                            className="p-1 text-purple-400 hover:text-purple-700 transition-colors"
+                            title="Edit prompt"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => generateImage.mutate({ id: post.id })}
+                            disabled={generateImage.isPending}
+                            className="flex items-center gap-1 px-2 py-1 text-xs text-purple-600 hover:text-purple-800 bg-white border border-purple-200 rounded-lg hover:bg-purple-50 transition-colors disabled:opacity-50"
+                            title="Generate image from prompt"
+                          >
+                            <Image className="w-3 h-3" />
+                            {generateImage.isPending ? "…" : "Generate"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -387,15 +513,20 @@ export default function ReviewQueuePage() {
                 <div className="px-5 pb-5 pt-4 border-t border-purple-100 bg-purple-50 space-y-3">
                   <p className="text-sm font-medium text-purple-800">Generate an A/B variant for this post?</p>
                   <p className="text-xs text-purple-600">The AI will create a second version with a different hook/angle. Both will appear in the review queue.</p>
+                  {abError && (
+                    <p className="text-xs text-red-600 flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {abError}
+                    </p>
+                  )}
                   <div className="flex gap-2">
                     <button
-                      onClick={() => runAbTest.mutate(post.id)}
+                      onClick={() => { setAbError(null); runAbTest.mutate(post.id); }}
                       disabled={runAbTest.isPending}
                       className="px-4 py-2 text-sm bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
                     >
                       {runAbTest.isPending ? "Generating variant…" : "Generate variant B"}
                     </button>
-                    <button onClick={() => setAbTestId(null)} className="px-4 py-2 text-sm border border-purple-200 bg-white hover:bg-purple-50 rounded-xl text-purple-600 transition-colors">
+                    <button onClick={() => { setAbTestId(null); setAbError(null); }} className="px-4 py-2 text-sm border border-purple-200 bg-white hover:bg-purple-50 rounded-xl text-purple-600 transition-colors">
                       Cancel
                     </button>
                   </div>

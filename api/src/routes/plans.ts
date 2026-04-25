@@ -60,6 +60,7 @@ router.post("/generate", auth, validate(GeneratePlanSchema), async (req: Request
         startDate: start,
         endDate: end,
         goals,
+        platforms: validPlatforms,
         feedbackLoopEnabled: feedbackLoopEnabled ?? false,
         ...(campaignId && { campaignId }),
       })
@@ -221,11 +222,15 @@ router.post("/:id/retry", auth, async (req: Request, res: Response, next: NextFu
       }),
     ]);
 
+    // Use stored platforms from original generation; fall back to account-linked platforms
+    const storedPlatforms = (plan.platforms as string[] | null) ?? [];
+    const accountPlatforms = [...new Set(accounts.map((a) => a.platform))];
+    const retryPlatforms = storedPlatforms.length > 0 ? storedPlatforms : accountPlatforms;
+
     const platformAccountMap: Record<string, string> = {};
     for (const acct of accounts) {
       platformAccountMap[acct.platform] = acct.id;
     }
-    const allPlatforms = [...new Set(accounts.map((a) => a.platform))];
 
     const durationDays = Math.round(
       (plan.endDate.getTime() - plan.startDate.getTime()) / (24 * 60 * 60 * 1000),
@@ -233,7 +238,7 @@ router.post("/:id/retry", auth, async (req: Request, res: Response, next: NextFu
 
     await db
       .update(marketingPlans)
-      .set({ status: "generating", updatedAt: new Date() })
+      .set({ status: "generating", failReason: null, updatedAt: new Date() })
       .where(eq(marketingPlans.id, plan.id));
 
     await queuePlanGeneration({
@@ -243,9 +248,9 @@ router.post("/:id/retry", auth, async (req: Request, res: Response, next: NextFu
       brandName: brand?.name ?? "",
       industry: brand?.industry ?? "",
       goals: plan.goals as string[],
-      platforms: allPlatforms,
+      platforms: retryPlatforms,
       agentId: plan.agentId,
-      socialAccountIds: allPlatforms.map((p) => platformAccountMap[p] ?? null),
+      socialAccountIds: retryPlatforms.map((p) => platformAccountMap[p] ?? null),
       durationDays,
       feedbackLoopEnabled: plan.feedbackLoopEnabled ?? false,
     });

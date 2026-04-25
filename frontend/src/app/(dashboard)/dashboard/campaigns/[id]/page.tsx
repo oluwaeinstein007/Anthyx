@@ -4,7 +4,7 @@ import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
-import { ArrowLeft, BarChart3, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
+import { ArrowLeft, BarChart3, CheckCircle2, XCircle, AlertCircle, Plus, FileText } from "lucide-react";
 
 interface CampaignAnalytics {
   campaign: { id: string; name: string; goals: string[]; budgetCapCents: number | null };
@@ -64,7 +64,7 @@ export default function CampaignDetailPage() {
     );
   }
 
-  const { campaign, totals, byPlatform } = data;
+  const { campaign, plans, totals, byPlatform } = data;
 
   return (
     <div className="space-y-8">
@@ -129,6 +129,45 @@ export default function CampaignDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Plans */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+            <FileText className="w-4 h-4 text-green-600" /> Plans in this campaign
+          </h2>
+          <Link
+            href={`/dashboard/plans?campaignId=${campaign.id}`}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-xs font-semibold transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" /> New plan
+          </Link>
+        </div>
+        {plans.length === 0 ? (
+          <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center">
+            <p className="text-sm text-gray-500">No plans assigned to this campaign yet.</p>
+            <Link
+              href={`/dashboard/plans?campaignId=${campaign.id}`}
+              className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-green-600 hover:underline"
+            >
+              <Plus className="w-3 h-3" /> Generate the first plan
+            </Link>
+          </div>
+        ) : (
+          <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden divide-y divide-gray-100">
+            {plans.map((plan) => (
+              <Link
+                key={plan.id}
+                href={`/dashboard/plans/${plan.id}`}
+                className="px-5 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
+              >
+                <span className="text-sm font-medium text-gray-800">{plan.name}</span>
+                <ArrowLeft className="w-4 h-4 text-gray-300 rotate-180" />
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -39,7 +39,11 @@ const STATUS_STYLES: Record<string, string> = {
   failed:         "bg-red-100 text-red-600 border border-red-200",
 };
 
-const PLATFORMS = ["x", "instagram", "linkedin", "facebook", "telegram", "tiktok"];
+const PLATFORMS = [
+  "x", "instagram", "linkedin", "facebook", "telegram", "tiktok",
+  "threads", "bluesky", "reddit", "youtube", "pinterest",
+  "mastodon", "discord", "whatsapp", "slack",
+];
 
 export default function PlansPage() {
   const qc = useQueryClient();

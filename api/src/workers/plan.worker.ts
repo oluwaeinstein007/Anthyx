@@ -95,7 +95,7 @@ worker.on("failed", async (job, err) => {
   if (job) {
     await db
       .update(marketingPlans)
-      .set({ status: "failed", updatedAt: new Date() })
+      .set({ status: "failed", failReason: err.message ?? "Unknown error", updatedAt: new Date() })
       .where(eq(marketingPlans.id, job.data.planId));
   }
   console.error(`[PlanWorker] Job ${job?.id} failed:`, err);

@@ -5,7 +5,28 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
-import { Pencil, X, Check, Trash2 } from "lucide-react";
+import { Pencil, X, Check, Trash2, AlertCircle, ChevronLeft, ChevronRight } from "lucide-react";
+
+const POSTS_PER_PAGE = 20;
+
+const PLATFORM_CHAR_LIMITS: Record<string, number | null> = {
+  x: 280,
+  instagram: 2200,
+  linkedin: 3000,
+  telegram: null,
+  facebook: 400,
+  tiktok: 2200,
+  discord: null,
+  whatsapp: 4096,
+  slack: null,
+  reddit: null,
+  threads: 500,
+  bluesky: 300,
+  mastodon: 500,
+  youtube: null,
+  pinterest: 500,
+  email: null,
+};
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 interface ScheduledPost {
@@ -29,6 +50,7 @@ interface MarketingPlan {
   startDate: string;
   endDate: string;
   goals: string[];
+  failReason: string | null;
   feedbackLoopEnabled: boolean;
   posts: ScheduledPost[];
 }
@@ -95,6 +117,11 @@ export default function PlanDetailPage() {
   const [editText, setEditText] = useState("");
   const [editHashtags, setEditHashtags] = useState("");
   const [editScheduledAt, setEditScheduledAt] = useState("");
+  const [postSaveError, setPostSaveError] = useState<string | null>(null);
+
+  // List view state
+  const [listPage, setListPage] = useState(0);
+  const [expandedPostId, setExpandedPostId] = useState<string | null>(null);
 
   const { data: plan, isLoading, isError, error } = useQuery<MarketingPlan>({
     queryKey: ["plan", id],
@@ -156,6 +183,10 @@ export default function PlanDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["plan", id] });
       setEditingPostId(null);
+      setPostSaveError(null);
+    },
+    onError: (err) => {
+      setPostSaveError(err instanceof Error ? err.message : "Failed to save post.");
     },
   });
 
@@ -374,6 +405,11 @@ export default function PlanDetailPage() {
                 {retry.isPending ? "Retrying..." : "Retry generation"}
               </button>
             )}
+            {retry.isError && (
+              <span className="text-xs text-red-500">
+                {retry.error instanceof Error ? retry.error.message : "Retry failed"}
+              </span>
+            )}
             {plan.status === "generating" && (
               <span className="text-xs text-blue-600 animate-pulse">Generating…</span>
             )}
@@ -388,6 +424,17 @@ export default function PlanDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Failure reason banner */}
+      {plan.status === "failed" && plan.failReason && (
+        <div className="flex items-start gap-2.5 p-3.5 bg-red-50 border border-red-200 rounded-xl">
+          <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-red-800">Generation failed</p>
+            <p className="text-xs text-red-600 mt-0.5">{plan.failReason}</p>
+          </div>
+        </div>
+      )}
 
       {/* Stats row */}
       <div className="grid grid-cols-5 gap-3">
@@ -555,146 +602,230 @@ export default function PlanDetailPage() {
       )}
 
       {/* List view */}
-      {view === "list" && (
-        <div className="space-y-2">
-          {plan.posts.length === 0 ? (
-            <div className="text-center py-12 bg-white border border-dashed border-gray-200 rounded-xl">
-              <p className="text-gray-400 text-sm">No posts generated yet.</p>
-            </div>
-          ) : (
-            plan.posts
-              .slice()
-              .sort(
-                (a, b) =>
-                  new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime(),
-              )
-              .map((post) => {
-                const isEditing = editingPostId === post.id;
-                const isEditableStatus = EDITABLE_STATUSES.has(post.status);
-                const displayText = post.contentText ?? post.caption ?? "";
-                const displayHashtags = post.contentHashtags ?? post.hashtags ?? [];
+      {view === "list" && (() => {
+        const sortedPosts = plan.posts
+          .slice()
+          .sort((a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime());
+        const totalPages = Math.ceil(sortedPosts.length / POSTS_PER_PAGE);
+        const pagePosts = sortedPosts.slice(listPage * POSTS_PER_PAGE, (listPage + 1) * POSTS_PER_PAGE);
 
-                return (
-                  <div
-                    key={post.id}
-                    className="p-4 bg-white border border-gray-200 rounded-xl space-y-2"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-xs text-gray-500">
-                        <span className="capitalize font-semibold text-gray-700">
-                          {post.platform}
-                        </span>
-                        {!post.socialAccountId && (
-                          <span
-                            className="text-orange-500 text-xs font-medium"
-                            title="Connect this platform in Accounts to enable publishing"
-                          >
-                            ⚠ no account linked
+        return (
+          <div className="space-y-2">
+            {plan.posts.length === 0 ? (
+              <div className="text-center py-12 bg-white border border-dashed border-gray-200 rounded-xl">
+                <p className="text-gray-400 text-sm">No posts generated yet.</p>
+              </div>
+            ) : (
+              <>
+                {pagePosts.map((post) => {
+                  const isEditing = editingPostId === post.id;
+                  const isEditableStatus = EDITABLE_STATUSES.has(post.status);
+                  const displayText = post.contentText ?? post.caption ?? "";
+                  const displayHashtags = post.contentHashtags ?? post.hashtags ?? [];
+                  const isExpanded = expandedPostId === post.id;
+                  const charLimit = PLATFORM_CHAR_LIMITS[post.platform] ?? null;
+                  const charCount = editText.length;
+                  const isOverLimit = isEditing && charLimit !== null && charCount > charLimit;
+
+                  return (
+                    <div
+                      key={post.id}
+                      className="p-4 bg-white border border-gray-200 rounded-xl space-y-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-xs text-gray-500">
+                          <span className="capitalize font-semibold text-gray-700">
+                            {post.platform}
                           </span>
-                        )}
-                        <span>·</span>
-                        <span>
-                          {new Date(post.scheduledAt).toLocaleDateString("en-US", {
-                            weekday: "short",
-                            month: "short",
-                            day: "numeric",
-                            hour: "numeric",
-                            minute: "2-digit",
-                          })}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full ${
-                            STATUS_DOT[post.status] ?? "bg-gray-300"
-                          }`}
-                        />
-                        <span className="text-xs text-gray-500">
-                          {STATUS_LABEL[post.status] ?? post.status}
-                        </span>
-                        {canEdit && isEditableStatus && !isEditing && (
-                          <button
-                            onClick={() => startEditPost(post)}
-                            className="flex items-center gap-1 px-2 py-0.5 text-xs text-gray-500 border border-gray-200 rounded-md hover:bg-gray-50 hover:text-gray-800 transition-colors"
-                            title="Edit post"
-                          >
-                            <Pencil className="w-3 h-3" /> Edit
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {isEditing ? (
-                      <div className="space-y-2 pt-1">
-                        <textarea
-                          rows={4}
-                          value={editText}
-                          onChange={(e) => setEditText(e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-green-500"
-                          placeholder="Post content…"
-                        />
-                        <input
-                          type="text"
-                          value={editHashtags}
-                          onChange={(e) => setEditHashtags(e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                          placeholder="Hashtags (comma separated, e.g. marketing, brand)"
-                        />
-                        <div>
-                          <label className="block text-xs font-medium text-gray-500 mb-1">Scheduled time</label>
-                          <input
-                            type="datetime-local"
-                            value={editScheduledAt}
-                            onChange={(e) => setEditScheduledAt(e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                          {!post.socialAccountId && (
+                            <span
+                              className="text-orange-500 text-xs font-medium"
+                              title="Connect this platform in Accounts to enable publishing"
+                            >
+                              ⚠ no account linked
+                            </span>
+                          )}
+                          <span>·</span>
+                          <span>
+                            {new Date(post.scheduledAt).toLocaleDateString("en-US", {
+                              weekday: "short",
+                              month: "short",
+                              day: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${
+                              STATUS_DOT[post.status] ?? "bg-gray-300"
+                            }`}
                           />
-                        </div>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => saveEditPost(post.id)}
-                            disabled={updatePost.isPending}
-                            className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                            {updatePost.isPending ? "Saving…" : "Save"}
-                          </button>
-                          <button
-                            onClick={() => setEditingPostId(null)}
-                            className="flex items-center gap-1 px-3 py-1.5 border border-gray-200 text-gray-600 text-xs rounded-lg hover:bg-gray-50"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                            Cancel
-                          </button>
+                          <span className="text-xs text-gray-500">
+                            {STATUS_LABEL[post.status] ?? post.status}
+                          </span>
+                          {canEdit && isEditableStatus && !isEditing && (
+                            <button
+                              onClick={() => { startEditPost(post); setPostSaveError(null); }}
+                              className="flex items-center gap-1 px-2 py-0.5 text-xs text-gray-500 border border-gray-200 rounded-md hover:bg-gray-50 hover:text-gray-800 transition-colors"
+                              title="Edit post"
+                            >
+                              <Pencil className="w-3 h-3" /> Edit
+                            </button>
+                          )}
                         </div>
                       </div>
-                    ) : (
-                      <>
-                        {post.status === "failed" ? (
-                          post.errorMessage && (
-                            <p className="text-sm text-red-500">{post.errorMessage}</p>
-                          )
-                        ) : (
-                          displayText && (
-                            <p className="text-sm text-gray-700 line-clamp-3">{displayText}</p>
-                          )
-                        )}
-                        {displayHashtags.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {displayHashtags.map((tag) => (
-                              <span key={tag} className="text-xs text-blue-500">
-                                #{tag}
-                              </span>
-                            ))}
+
+                      {isEditing ? (
+                        <div className="space-y-2 pt-1">
+                          <div className="relative">
+                            <textarea
+                              rows={5}
+                              value={editText}
+                              onChange={(e) => setEditText(e.target.value)}
+                              className={`w-full px-3 py-2 border rounded-lg text-sm resize-none focus:outline-none focus:ring-2 ${
+                                isOverLimit
+                                  ? "border-red-400 focus:ring-red-400"
+                                  : "border-gray-300 focus:ring-green-500"
+                              }`}
+                              placeholder="Post content…"
+                            />
+                            <span
+                              className={`absolute bottom-2 right-2 text-xs ${
+                                isOverLimit ? "text-red-500 font-medium" : "text-gray-400"
+                              }`}
+                            >
+                              {charLimit !== null
+                                ? `${charCount} / ${charLimit}`
+                                : charCount}
+                            </span>
                           </div>
-                        )}
-                      </>
-                    )}
+                          <input
+                            type="text"
+                            value={editHashtags}
+                            onChange={(e) => setEditHashtags(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                            placeholder="Hashtags (comma separated, e.g. marketing, brand)"
+                          />
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">Scheduled time</label>
+                            <input
+                              type="datetime-local"
+                              value={editScheduledAt}
+                              onChange={(e) => setEditScheduledAt(e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                            />
+                          </div>
+                          {postSaveError && (
+                            <p className="text-xs text-red-600 flex items-center gap-1">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {postSaveError}
+                            </p>
+                          )}
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => saveEditPost(post.id)}
+                              disabled={updatePost.isPending || isOverLimit}
+                              className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              {updatePost.isPending ? "Saving…" : "Save"}
+                            </button>
+                            <button
+                              onClick={() => { setEditingPostId(null); setPostSaveError(null); }}
+                              className="flex items-center gap-1 px-3 py-1.5 border border-gray-200 text-gray-600 text-xs rounded-lg hover:bg-gray-50"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {post.status === "failed" ? (
+                            post.errorMessage && (
+                              <p className="text-sm text-red-500">{post.errorMessage}</p>
+                            )
+                          ) : (
+                            displayText && (
+                              <div>
+                                <p
+                                  className={`text-sm text-gray-700 whitespace-pre-wrap ${
+                                    isExpanded ? "" : "line-clamp-3"
+                                  }`}
+                                >
+                                  {displayText}
+                                </p>
+                                {displayText.length > 200 && (
+                                  <button
+                                    onClick={() =>
+                                      setExpandedPostId(isExpanded ? null : post.id)
+                                    }
+                                    className="text-xs text-gray-400 hover:text-gray-600 mt-1 transition-colors"
+                                  >
+                                    {isExpanded ? "Show less ↑" : "Show more ↓"}
+                                  </button>
+                                )}
+                              </div>
+                            )
+                          )}
+                          {displayHashtags.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {displayHashtags.map((tag) => (
+                                <span key={tag} className="text-xs text-blue-500">
+                                  #{tag}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between pt-2">
+                    <p className="text-xs text-gray-400">
+                      {listPage * POSTS_PER_PAGE + 1}–{Math.min((listPage + 1) * POSTS_PER_PAGE, sortedPosts.length)} of {sortedPosts.length} posts
+                    </p>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setListPage((p) => Math.max(0, p - 1))}
+                        disabled={listPage === 0}
+                        className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      {Array.from({ length: totalPages }, (_, i) => (
+                        <button
+                          key={i}
+                          onClick={() => setListPage(i)}
+                          className={`w-7 h-7 text-xs rounded-lg font-medium transition-colors ${
+                            listPage === i
+                              ? "bg-gray-900 text-white"
+                              : "border border-gray-200 text-gray-500 hover:bg-gray-50"
+                          }`}
+                        >
+                          {i + 1}
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => setListPage((p) => Math.min(totalPages - 1, p + 1))}
+                        disabled={listPage === totalPages - 1}
+                        className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                );
-              })
-          )}
-        </div>
-      )}
+                )}
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {confirmDelete && (
         <ConfirmDialog

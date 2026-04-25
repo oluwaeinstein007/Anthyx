@@ -94,35 +94,213 @@ Generate an appropriate reply. Return ONLY valid JSON:
 }
 
 /**
- * Fetch recent comments/DMs from a platform and reply to unresponded ones.
- * Platform-specific implementations delegate to social-mcp functions.
+ * Fetch recent mentions/messages from a platform and generate brand-voice replies.
+ * Uses social-mcp services directly — each call is isolated with per-org credentials.
  */
 export async function fetchAndReplyToInbox(
   platform: string,
-  accessToken: string,
+  accessToken: string, // already decrypted
   accountId: string,
   organizationId: string,
   agentName: string,
   brandName: string,
   brandProfileId: string,
   dietInstructions: string,
+  platformConfig: Record<string, unknown> = {},
 ): Promise<{ replied: number; escalated: number; skipped: number }> {
-  // In production, call the platform's inbox/comment API to fetch recent messages.
-  // This stub simulates the workflow — integrate platform-specific fetch calls here.
+  const { createRequire } = await import("module");
+  const { pathToFileURL } = await import("url");
+  const { default: path } = await import("path");
+
+  const req = createRequire(__filename);
+  const distRoot = path.dirname(req.resolve("social-mcp"));
+  async function importSvc<T>(name: string): Promise<T> {
+    return import(pathToFileURL(path.join(distRoot, `services/${name}.js`)).href) as Promise<T>;
+  }
+
   console.log(`[AutoReply] Checking ${platform} inbox for ${accountId}`);
+
+  let messages: IncomingMessage[] = [];
+
+  try {
+    switch (platform) {
+      case "discord": {
+        const channelId = platformConfig["channelId"] as string | undefined;
+        if (!channelId) break;
+        const { DiscordService } = await importSvc<{
+          DiscordService: new (c: { botToken: string }) => {
+            getMessages(id: string, limit?: number): Promise<Array<{ id: string; content: string; timestamp: string }>>;
+          };
+        }>("discord-service");
+        const msgs = await new DiscordService({ botToken: accessToken }).getMessages(channelId, 20);
+        messages = msgs.map((m) => ({
+          platform,
+          messageId: m.id,
+          senderHandle: channelId,
+          messageType: "comment" as const,
+          text: m.content,
+          timestamp: m.timestamp,
+        }));
+        break;
+      }
+
+      case "slack": {
+        const channelId = platformConfig["channelId"] as string | undefined;
+        if (!channelId) break;
+        const { SlackService } = await importSvc<{
+          SlackService: new (c: { botToken: string }) => {
+            getMessages(id: string, limit?: number): Promise<Array<{ ts?: string; userId?: string; text?: string }>>;
+          };
+        }>("slack-service");
+        const msgs = await new SlackService({ botToken: accessToken }).getMessages(channelId, 20);
+        messages = msgs.map((m) => ({
+          platform,
+          messageId: m.ts ?? `slack_${Date.now()}`,
+          senderHandle: m.userId ?? "unknown",
+          messageType: "comment" as const,
+          text: m.text ?? "",
+          timestamp: m.ts ? new Date(parseFloat(m.ts) * 1000).toISOString() : new Date().toISOString(),
+        }));
+        break;
+      }
+
+      case "x": {
+        const handle = platformConfig["handle"] as string | undefined ?? accountId;
+        const res = await fetch(
+          `https://api.twitter.com/2/tweets/search/recent?query=%40${encodeURIComponent(handle)}&max_results=20&tweet.fields=author_id,created_at,text`,
+          { headers: { Authorization: `Bearer ${accessToken}` } },
+        );
+        if (res.ok) {
+          const data = (await res.json()) as {
+            data?: Array<{ id: string; text: string; author_id: string; created_at: string }>;
+          };
+          messages = (data.data ?? []).map((t) => ({
+            platform,
+            messageId: t.id,
+            senderHandle: t.author_id,
+            messageType: "comment" as const,
+            text: t.text,
+            timestamp: t.created_at,
+          }));
+        }
+        break;
+      }
+
+      case "mastodon": {
+        const instance = platformConfig["instance"] as string | undefined;
+        if (!instance) break;
+        const notifRes = await fetch(`https://${instance}/api/v1/notifications?types[]=mention&limit=20`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (notifRes.ok) {
+          const notifs = (await notifRes.json()) as Array<{
+            id: string;
+            status?: { id: string; content: string; created_at: string };
+            account?: { acct: string };
+          }>;
+          messages = notifs
+            .filter((n) => n.status)
+            .map((n) => ({
+              platform,
+              messageId: n.status!.id,
+              senderHandle: n.account?.acct ?? "unknown",
+              messageType: "comment" as const,
+              text: n.status!.content.replace(/<[^>]+>/g, ""),
+              timestamp: n.status!.created_at,
+            }));
+        }
+        break;
+      }
+
+      default:
+        console.log(`[AutoReply] Platform ${platform} not yet supported for auto-reply`);
+        return { replied: 0, escalated: 0, skipped: 0 };
+    }
+  } catch (err) {
+    console.error(`[AutoReply] Fetch error for ${platform}:`, err instanceof Error ? err.message : err);
+    return { replied: 0, escalated: 0, skipped: 0 };
+  }
 
   let replied = 0;
   let escalated = 0;
   let skipped = 0;
 
-  // Example: fetch comments from X, Instagram, LinkedIn, etc.
-  // const messages = await fetchPlatformMessages(platform, accessToken, accountId);
+  for (const message of messages) {
+    try {
+      const replyOutput = await runAutoReplyAgent({
+        organizationId,
+        agentName,
+        brandName,
+        brandProfileId,
+        dietInstructions,
+        message,
+      });
 
-  // For each message:
-  // const replyOutput = await runAutoReplyAgent({ ... message });
-  // if (replyOutput.escalate) { escalated++; notify human; }
-  // else if (replyOutput.shouldReply) { post reply via social-mcp; replied++; }
-  // else { skipped++; }
+      if (replyOutput.escalate) {
+        escalated++;
+        console.log(`[AutoReply] Escalated message ${message.messageId} — ${replyOutput.escalationReason}`);
+      } else if (replyOutput.shouldReply) {
+        // Post reply via the appropriate platform
+        await postReply(platform, accessToken, message.messageId, replyOutput.reply, platformConfig, accountId, importSvc);
+        replied++;
+      } else {
+        skipped++;
+      }
+    } catch (err) {
+      console.error(`[AutoReply] Error processing message ${message.messageId}:`, err instanceof Error ? err.message : err);
+      skipped++;
+    }
+  }
 
+  console.log(`[AutoReply] ${platform} — replied: ${replied}, escalated: ${escalated}, skipped: ${skipped}`);
   return { replied, escalated, skipped };
+}
+
+async function postReply(
+  platform: string,
+  accessToken: string,
+  messageId: string,
+  content: string,
+  cfg: Record<string, unknown>,
+  accountId: string,
+  importSvc: <T>(name: string) => Promise<T>,
+): Promise<void> {
+  switch (platform) {
+    case "discord": {
+      const channelId = cfg["channelId"] as string;
+      const { DiscordService } = await importSvc<{
+        DiscordService: new (c: { botToken: string }) => { sendMessage(id: string, c: string): Promise<unknown> };
+      }>("discord-service");
+      await new DiscordService({ botToken: accessToken }).sendMessage(channelId, content);
+      break;
+    }
+    case "slack": {
+      const channelId = cfg["channelId"] as string;
+      const { SlackService } = await importSvc<{
+        SlackService: new (c: { botToken: string }) => { sendMessage(id: string, c: string): Promise<unknown> };
+      }>("slack-service");
+      await new SlackService({ botToken: accessToken }).sendMessage(channelId, content);
+      break;
+    }
+    case "mastodon": {
+      const instance = cfg["instance"] as string;
+      const { MastodonService } = await importSvc<{
+        MastodonService: new (c: { accessToken: string; instanceUrl?: string }) => {
+          replyToPost(status: string, inReplyToId: string, visibility?: string): Promise<unknown>;
+        };
+      }>("mastodon-service");
+      await new MastodonService({ accessToken, instanceUrl: `https://${instance}` }).replyToPost(content, messageId, "public");
+      break;
+    }
+    case "x": {
+      await fetch("https://api.twitter.com/2/tweets", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ text: content, reply: { in_reply_to_tweet_id: messageId } }),
+      });
+      break;
+    }
+    default:
+      console.warn(`[AutoReply] No reply implementation for platform: ${platform}`);
+  }
 }

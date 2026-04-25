@@ -220,6 +220,8 @@ export const marketingPlans = pgTable("marketing_plans", {
   generationPrompt: text("generation_prompt"),
   industryContext: text("industry_context"),
   goals: text("goals").array(),
+  platforms: text("platforms").array(),
+  failReason: text("fail_reason"),
   feedbackLoopEnabled: boolean("feedback_loop_enabled").default(false),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

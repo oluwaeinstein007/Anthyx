@@ -28,6 +28,10 @@ const PLATFORM_RULES: Record<Platform, string> = {
     "500 character limit. Hashtags inline at end. Decentralised and privacy-conscious tone. Plain text preferred — markdown partially supported.",
   youtube:
     "Description: first 100 characters become the visible preview snippet — front-load the hook. Use 00:00 Chapter Name format for timestamps/chapters. Hashtags in body at end. Informative, value-first tone.",
+  pinterest:
+    "Pin description: 100–500 characters. Front-load keywords — Pinterest is a search engine. Include a clear CTA. No hashtags in description (they are not indexed). Visually descriptive language. Evergreen framing over time-sensitive.",
+  email:
+    "Subject line: 40–60 characters, curiosity-driven or benefit-first. Preview text: 80–100 characters continuing the subject hook. Body: conversational, one clear CTA per email. Plain text first, then HTML equivalent. No markdown — use line breaks for spacing. Avoid spam trigger words (free, urgent, click here). Sign off naturally.",
 };
 
 export function getPlatformConstraints(platform: Platform): string {
