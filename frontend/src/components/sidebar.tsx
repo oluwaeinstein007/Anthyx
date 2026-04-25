@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard, Building2, Bot, Link2, Calendar,
   ClipboardCheck, BarChart3, CreditCard, LogOut, Zap, Settings,
-  Megaphone, Users, Rss, Webhook, FileDown,
+  Megaphone, Users, Rss, Webhook, FileDown, FlaskConical, Inbox, Mail,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
@@ -17,6 +17,9 @@ const NAV = [
   { label: "Plans",        href: "/dashboard/plans",       icon: Calendar },
   { label: "Campaigns",    href: "/dashboard/campaigns",   icon: Megaphone },
   { label: "Review Queue", href: "/dashboard/review",      icon: ClipboardCheck },
+  { label: "A/B Tests",    href: "/dashboard/ab-tests",    icon: FlaskConical },
+  { label: "Inbox",        href: "/dashboard/inbox",       icon: Inbox },
+  { label: "Email",        href: "/dashboard/email",       icon: Mail },
   { label: "Analytics",    href: "/dashboard/analytics",   icon: BarChart3 },
   { label: "Repurpose",    href: "/dashboard/repurpose",   icon: Rss },
   { label: "Team",         href: "/dashboard/team",        icon: Users },

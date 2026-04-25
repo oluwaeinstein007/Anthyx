@@ -20,19 +20,18 @@ export class ReviewerRejectionError extends Error {
 export async function generateAndReviewPost(
   planItem: GeneratedPlanItem & { id?: string },
   agentId: string,
-  socialAccountId: string,
+  socialAccountId: string | null,
   brandProfileId: string,
   organizationId: string,
 ): Promise<{ content: string; hashtags: string[]; mediaPrompt: string | null }> {
   const [agent, brand, account] = await Promise.all([
     db.query.agents.findFirst({ where: eq(agents.id, agentId) }),
     db.query.brandProfiles.findFirst({ where: eq(brandProfiles.id, brandProfileId) }),
-    db.query.socialAccounts.findFirst({ where: eq(socialAccounts.id, socialAccountId) }),
+    socialAccountId ? db.query.socialAccounts.findFirst({ where: eq(socialAccounts.id, socialAccountId) }) : Promise.resolve(null),
   ]);
 
   if (!agent) throw new Error(`Agent ${agentId} not found`);
   if (!brand) throw new Error(`Brand ${brandProfileId} not found`);
-  if (!account) throw new Error(`Social account ${socialAccountId} not found`);
 
   const brandVoice = await retrieveBrandVoiceFromQdrant(brandProfileId, planItem.topic);
 
@@ -42,7 +41,7 @@ export async function generateAndReviewPost(
     brandName: brand.name,
     brandVoiceRules: brandVoice,
     dietInstructions: agent.dietInstructions ?? "",
-    platform: account.platform as Platform,
+    platform: (account?.platform ?? planItem.platform) as Platform,
     topic: planItem.topic,
     contentType: planItem.contentType,
     hook: planItem.hook,
@@ -58,7 +57,7 @@ export async function generateAndReviewPost(
     const review = await runReviewerAgent({
       postContent: currentContent,
       hashtags: currentHashtags,
-      platform: account.platform as Platform,
+      platform: (account?.platform ?? planItem.platform) as Platform,
       brandRules: brandVoice,
       dietInstructions: agent.dietInstructions ?? "",
     });

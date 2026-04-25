@@ -21,17 +21,115 @@ importers:
         specifier: ^5.4.0
         version: 5.9.3
 
-  apps/api:
+  admin:
+    dependencies:
+      '@anthyx/types':
+        specifier: workspace:*
+        version: link:../packages/types
+      '@tanstack/react-query':
+        specifier: ^5.28.0
+        version: 5.99.0(react@18.3.1)
+      lucide-react:
+        specifier: ^1.8.0
+        version: 1.8.0(react@18.3.1)
+      next:
+        specifier: 14.2.0
+        version: 14.2.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: ^18.3.0
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.0
+        version: 18.3.1(react@18.3.1)
+      recharts:
+        specifier: ^2.12.0
+        version: 2.15.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      zod:
+        specifier: ^3.22.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.39
+      '@types/react':
+        specifier: ^18.3.0
+        version: 18.3.28
+      '@types/react-dom':
+        specifier: ^18.3.0
+        version: 18.3.7(@types/react@18.3.28)
+      autoprefixer:
+        specifier: ^10.4.0
+        version: 10.5.0(postcss@8.5.10)
+      postcss:
+        specifier: ^8.4.0
+        version: 8.5.10
+      tailwindcss:
+        specifier: ^3.4.0
+        version: 3.4.19(tsx@4.21.0)
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+
+  affiliate:
+    dependencies:
+      '@anthyx/types':
+        specifier: workspace:*
+        version: link:../packages/types
+      '@tanstack/react-query':
+        specifier: ^5.28.0
+        version: 5.99.0(react@18.3.1)
+      lucide-react:
+        specifier: ^1.8.0
+        version: 1.8.0(react@18.3.1)
+      next:
+        specifier: 14.2.0
+        version: 14.2.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: ^18.3.0
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.0
+        version: 18.3.1(react@18.3.1)
+      recharts:
+        specifier: ^2.12.0
+        version: 2.15.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      zod:
+        specifier: ^3.22.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.39
+      '@types/react':
+        specifier: ^18.3.0
+        version: 18.3.28
+      '@types/react-dom':
+        specifier: ^18.3.0
+        version: 18.3.7(@types/react@18.3.28)
+      autoprefixer:
+        specifier: ^10.4.0
+        version: 10.5.0(postcss@8.5.10)
+      postcss:
+        specifier: ^8.4.0
+        version: 8.5.10
+      tailwindcss:
+        specifier: ^3.4.0
+        version: 3.4.19(tsx@4.21.0)
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+
+  api:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.36.0
         version: 0.36.3
       '@anthyx/config':
         specifier: workspace:*
-        version: link:../../packages/config
+        version: link:../packages/config
       '@anthyx/types':
         specifier: workspace:*
-        version: link:../../packages/types
+        version: link:../packages/types
       '@aws-sdk/client-s3':
         specifier: ^3.600.0
         version: 3.1030.0
@@ -99,8 +197,8 @@ importers:
         specifier: ^8.11.0
         version: 8.20.0
       social-mcp:
-        specifier: ^1.8.0
-        version: 1.8.0
+        specifier: ^1.8.1
+        version: 1.8.1
       stripe:
         specifier: ^15.0.0
         version: 15.12.0
@@ -156,61 +254,6 @@ importers:
       vitest:
         specifier: ^1.4.0
         version: 1.6.1(@types/node@20.19.39)
-
-  apps/dashboard:
-    dependencies:
-      '@anthyx/types':
-        specifier: workspace:*
-        version: link:../../packages/types
-      '@tanstack/react-query':
-        specifier: ^5.28.0
-        version: 5.99.0(react@18.3.1)
-      lucide-react:
-        specifier: ^1.8.0
-        version: 1.8.0(react@18.3.1)
-      next:
-        specifier: 14.2.0
-        version: 14.2.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      next-auth:
-        specifier: ^5.0.0-beta.16
-        version: 5.0.0-beta.31(next@14.2.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)
-      react:
-        specifier: ^18.3.0
-        version: 18.3.1
-      react-dom:
-        specifier: ^18.3.0
-        version: 18.3.1(react@18.3.1)
-      recharts:
-        specifier: ^2.12.0
-        version: 2.15.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      stripe:
-        specifier: ^15.0.0
-        version: 15.12.0
-      zod:
-        specifier: ^3.22.0
-        version: 3.25.76
-    devDependencies:
-      '@types/node':
-        specifier: ^20.0.0
-        version: 20.19.39
-      '@types/react':
-        specifier: ^18.3.0
-        version: 18.3.28
-      '@types/react-dom':
-        specifier: ^18.3.0
-        version: 18.3.7(@types/react@18.3.28)
-      autoprefixer:
-        specifier: ^10.4.0
-        version: 10.5.0(postcss@8.5.10)
-      postcss:
-        specifier: ^8.4.0
-        version: 8.5.10
-      tailwindcss:
-        specifier: ^3.4.0
-        version: 3.4.19(tsx@4.21.0)
-      typescript:
-        specifier: ^5.4.0
-        version: 5.9.3
 
   frontend:
     dependencies:
@@ -4052,8 +4095,8 @@ packages:
   sisteransi@1.0.5:
     resolution: {integrity: sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg==}
 
-  social-mcp@1.8.0:
-    resolution: {integrity: sha512-OIyzf+pDjSK87ghpLS3UH/Os2idwB+YeWDZGK5VwCfFL0ggAsjKZ/aLCZE5fPwHzDpmEnH/ZQTD7CB8VQMB+WQ==}
+  social-mcp@1.8.1:
+    resolution: {integrity: sha512-qQdIindDnI84SWEeeRJ2JWAZ4gXASgUzfwBlzbV2u8C2uZnKw6aV0Ygp00UKXqxXkpzf7bEYMt35lItrlQZQOg==}
     hasBin: true
 
   source-map-js@1.2.1:
@@ -8434,7 +8477,7 @@ snapshots:
 
   sisteransi@1.0.5: {}
 
-  social-mcp@1.8.0:
+  social-mcp@1.8.1:
     dependencies:
       '@atproto/api': 0.19.11
       '@slack/web-api': 7.15.1

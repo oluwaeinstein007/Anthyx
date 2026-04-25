@@ -489,7 +489,7 @@ Use the same `TOKEN_ENCRYPTION_KEY` env var — both Laravel and the Node.js pos
 **Runtime:** Node.js 22 + TypeScript  
 **Trigger:** BullMQ consumer on queue `anthyx-ingestor`
 
-This is a direct extraction of `apps/api/src/services/brand-ingestion/` + a BullMQ worker wrapper. The only change is swapping Claude for Gemini in `extractor.ts`.
+This is a direct extraction of `api/src/services/brand-ingestion/` + a BullMQ worker wrapper. The only change is swapping Claude for Gemini in `extractor.ts`.
 
 ### Entry point
 
@@ -791,7 +791,7 @@ console.log("[MCP] fastmcp server started on port 3100");
 
 ### Porting existing tools
 
-Each tool in `apps/api/src/mcp/tools/*.ts` maps directly. Change only the export shape:
+Each tool in `api/src/mcp/tools/*.ts` maps directly. Change only the export shape:
 
 ```typescript
 // Before (current pattern)
@@ -1266,9 +1266,9 @@ Each phase is independently deployable. Do not start a phase until the previous 
 | 1 | Extract frontend | ✅ Complete — `frontend/` in place |
 | 2 | Extract MCP server | ✅ Complete — `services/mcp/` running |
 | 3 | Extract Ingestor | ✅ Complete — `services/ingestor/` running |
-| 4 | Extract Agent Service | ⚠️ Partial — plan + content workers exist; post/analytics workers still in `apps/api`; disabled in compose |
+| 4 | Extract Agent Service | ⚠️ Partial — plan + content workers exist; post/analytics workers still in `api`; disabled in compose |
 | 5 | Laravel API | ❌ Not started |
-| 6 | Remove `apps/api` | ❌ Blocked on Phase 5 |
+| 6 | Remove `api` | ❌ Blocked on Phase 5 |
 
 ---
 
@@ -1284,7 +1284,7 @@ Each phase is independently deployable. Do not start a phase until the previous 
 
 **Goal:** MCP server runs as a standalone process.
 
-`services/mcp/` is deployed. `apps/api/src/mcp/server.ts` still registers in-process MCP routes for backwards compatibility.
+`services/mcp/` is deployed. `api/src/mcp/server.ts` still registers in-process MCP routes for backwards compatibility.
 
 ---
 
@@ -1302,12 +1302,12 @@ Each phase is independently deployable. Do not start a phase until the previous 
 
 **Done:** `services/agent/` exists with `plan.worker.ts` and `content.worker.ts`.  
 **Remaining:**
-1. Port `post.worker.ts` and `analytics.worker.ts` from `apps/api/src/workers/` → `services/agent/src/workers/`
+1. Port `post.worker.ts` and `analytics.worker.ts` from `api/src/workers/` → `services/agent/src/workers/`
 2. Enable the `agent` service in `docker-compose.yml`
-3. Remove agent/plan/content workers from `apps/api/src/workers/index.ts`
-4. Monitor `agent_logs` table for 1 billing cycle before removing `apps/api` workers
+3. Remove agent/plan/content workers from `api/src/workers/index.ts`
+4. Monitor `agent_logs` table for 1 billing cycle before removing `api` workers
 
-**Blocker:** `services/agent` is disabled in `docker-compose.yml` — it competes on the same BullMQ queues as the `apps/api` worker process. Re-enable once `apps/api` workers are removed.
+**Blocker:** `services/agent` is disabled in `docker-compose.yml` — it competes on the same BullMQ queues as the `api` worker process. Re-enable once `api` workers are removed.
 
 ---
 
@@ -1329,11 +1329,11 @@ Each phase is independently deployable. Do not start a phase until the previous 
 
 ---
 
-### Phase 6 — Remove apps/api (1 day)
+### Phase 6 — Remove api (1 day)
 
 1. Confirm all services are healthy for 1 full billing cycle
 2. Verify Stripe overage invoicing ran correctly (check Stripe dashboard)
-3. `rm -rf apps/api`
+3. `rm -rf api`
 4. Update `pnpm-workspace.yaml` to remove `apps/*`
 5. Archive the Drizzle schema — it's now the reference for Laravel migrations only
 
@@ -1412,7 +1412,7 @@ Route::get('/health', fn() => response()->json(['ok' => true, 'ts' => now()]));
 | `services/agent/src/copywriter.ts` | ✅ Gemini 1.5 Flash |
 | `services/agent/src/reviewer.ts` | ✅ Gemini 1.5 Flash-8B |
 | `services/ingestor/src/extractor.ts` | ✅ Gemini 1.5 Flash |
-| `apps/api/src/services/agent/llm-client.ts` | ✅ Gemini primary + Claude fallback |
+| `api/src/services/agent/llm-client.ts` | ✅ Gemini primary + Claude fallback |
 
 ### Rewrite (MCP library swap — COMPLETE for standalone service)
 
@@ -1420,7 +1420,7 @@ Route::get('/health', fn() => response()->json(['ok' => true, 'ts' => now()]));
 |------|--------|
 | `services/mcp/src/index.ts` | ✅ fastmcp SSE server |
 | `services/mcp/src/tools/*.ts` | ✅ Bare async functions (fastmcp pattern) |
-| `apps/api/src/mcp/server.ts` | Unchanged — still uses `@modelcontextprotocol/sdk` in-process |
+| `api/src/mcp/server.ts` | Unchanged — still uses `@modelcontextprotocol/sdk` in-process |
 
 ### Rewrite (Laravel — new code, same business logic)
 
@@ -1449,9 +1449,9 @@ Route::get('/health', fn() => response()->json(['ok' => true, 'ts' => now()]));
 
 These deletions are blocked on Phase 5. Do not delete until Laravel is in production:
 
-- `apps/api/src/index.ts` — replaced by Laravel
-- `apps/api/src/queue/` — queue config moves to each Node.js service individually
-- `apps/api/drizzle.config.ts` — replaced by Laravel migrations
+- `api/src/index.ts` — replaced by Laravel
+- `api/src/queue/` — queue config moves to each Node.js service individually
+- `api/drizzle.config.ts` — replaced by Laravel migrations
 - Root `config.ts` and `packages/config/src/product.ts` — replaced by `services/api/config/product.php`
 - `packages/config/src/schemas.ts` — request validation moves to Laravel Form Requests in PHP
 

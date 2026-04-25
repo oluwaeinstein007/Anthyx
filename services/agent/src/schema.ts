@@ -2,7 +2,11 @@ import {
   pgTable, uuid, text, timestamp, jsonb, boolean, integer, pgEnum,
 } from "drizzle-orm/pg-core";
 
-export const platformEnum = pgEnum("platform", ["x", "instagram", "linkedin", "facebook", "telegram", "tiktok"]);
+export const platformEnum = pgEnum("platform", [
+  "x", "instagram", "linkedin", "facebook", "telegram", "tiktok",
+  "discord", "whatsapp", "slack", "reddit", "threads", "bluesky",
+  "mastodon", "youtube", "pinterest", "email",
+]);
 export const postStatusEnum = pgEnum("post_status", ["draft", "pending_review", "approved", "scheduled", "published", "failed", "vetoed", "silenced"]);
 export const planStatusEnum = pgEnum("plan_status", ["generating", "pending_review", "active", "completed", "paused"]);
 
@@ -86,7 +90,7 @@ export const marketingPlans = pgTable("marketing_plans", {
 export const scheduledPosts = pgTable("scheduled_posts", {
   id: uuid("id").primaryKey().defaultRandom(),
   planId: uuid("plan_id").references(() => marketingPlans.id).notNull(),
-  socialAccountId: uuid("social_account_id").references(() => socialAccounts.id).notNull(),
+  socialAccountId: uuid("social_account_id").references(() => socialAccounts.id),
   agentId: uuid("agent_id").references(() => agents.id).notNull(),
   organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
   brandProfileId: uuid("brand_profile_id").references(() => brandProfiles.id).notNull(),

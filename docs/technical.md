@@ -234,7 +234,7 @@ Analytics Worker (triggered 30min post-publish)
 | Express.js                          | 4.x     | HTTP API server                                                       |
 | `@google/generative-ai`             | latest  | Primary LLM SDK — Gemini Pro, Flash, Flash-8B                         |
 | `fastmcp`                           | latest  | MCP SSE server (`services/mcp`) — Zod-first tool API                  |
-| `@modelcontextprotocol/sdk`         | latest  | MCP in-process server (`apps/api/src/mcp/server.ts`)                  |
+| `@modelcontextprotocol/sdk`         | latest  | MCP in-process server (`api/src/mcp/server.ts`)                  |
 | Anthropic SDK (`@anthropic-ai/sdk`) | latest  | Claude fallback via `llm-client.ts` `generateWithFallback()`          |
 | OpenAI SDK (`openai`)               | 4.x     | Embeddings (text-embedding-3-small) + DALL-E 3 image generation       |
 | BullMQ                              | 5.x     | Redis-backed job queue for scheduled posts                            |
@@ -304,7 +304,7 @@ See [docs/structure.md](structure.md) for the full annotated directory tree.
 
 ```
 anthyx/
-├── apps/api/          # Express API server + all in-process BullMQ workers (primary backend)
+├── api/          # Express API server + all in-process BullMQ workers (primary backend)
 ├── services/
 │   ├── ingestor/      # Standalone brand ingestion worker (BullMQ consumer)
 │   ├── agent/         # Standalone plan + content workers (disabled in compose — see note below)
@@ -318,7 +318,7 @@ anthyx/
 └── turbo.json
 ```
 
-> **Note on `services/agent`:** The standalone agent service exists but is commented out in `docker-compose.yml`. It competes with the `apps/api` worker process on the same BullMQ queues. Re-enable it only after migrating the `apps/api` workers to use it exclusively.
+> **Note on `services/agent`:** The standalone agent service exists but is commented out in `docker-compose.yml`. It competes with the `api` worker process on the same BullMQ queues. Re-enable it only after migrating the `api` workers to use it exclusively.
 
 ---
 
@@ -2442,7 +2442,7 @@ version: "3.9"
 
 services:
   api:
-    build: ./apps/api
+    build: ./api
     ports:
       - "4000:4000"
     environment:
@@ -2453,10 +2453,10 @@ services:
       - redis
       - qdrant
     volumes:
-      - ./apps/api/src:/app/src
+      - ./api/src:/app/src
 
   worker:
-    build: ./apps/api
+    build: ./api
     command: node dist/workers/index.js
     env_file: .env
     depends_on:
@@ -2555,14 +2555,14 @@ npm install        # installs all packages (Turborepo)
 docker-compose up postgres redis qdrant -d
 
 # 3. Run migrations
-cd apps/api
+cd api
 npx drizzle-kit migrate
 
 # 4. Seed Qdrant collections (creates empty collections)
 npm run seed:qdrant
 
 # 5. Start API + workers
-npm run dev        # from apps/api — starts Express + worker processes
+npm run dev        # from api — starts Express + worker processes
 
 # 6. Start dashboard
 cd apps/dashboard

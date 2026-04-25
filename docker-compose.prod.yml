@@ -36,6 +36,32 @@ services:
       restart_policy:
         condition: on-failure
 
+  admin:
+    image: ${REGISTRY}/anthyx-admin:${TAG:-latest}
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+    env_file: .env
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  affiliate:
+    image: ${REGISTRY}/anthyx-affiliate:${TAG:-latest}
+    ports:
+      - "3002:3002"
+    environment:
+      NODE_ENV: production
+      PORT: 3002
+    env_file: .env
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
   dashboard:
     image: ${REGISTRY}/anthyx-dashboard:${TAG:-latest}
     ports:

@@ -94,6 +94,7 @@ export default function PlanDetailPage() {
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [editHashtags, setEditHashtags] = useState("");
+  const [editScheduledAt, setEditScheduledAt] = useState("");
 
   const { data: plan, isLoading, isError, error } = useQuery<MarketingPlan>({
     queryKey: ["plan", id],
@@ -178,6 +179,12 @@ export default function PlanDetailPage() {
     setEditingPostId(post.id);
     setEditText(post.contentText ?? post.caption ?? "");
     setEditHashtags((post.contentHashtags ?? post.hashtags ?? []).join(", "));
+    // datetime-local expects "YYYY-MM-DDTHH:mm" in local time
+    const d = new Date(post.scheduledAt);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    setEditScheduledAt(
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+    );
   }
 
   function saveEditPost(postId: string) {
@@ -190,6 +197,7 @@ export default function PlanDetailPage() {
       body: {
         contentText: editText,
         ...(hashtags.length > 0 && { contentHashtags: hashtags }),
+        ...(editScheduledAt && { scheduledAt: new Date(editScheduledAt).toISOString() }),
       },
     });
   }
@@ -632,6 +640,15 @@ export default function PlanDetailPage() {
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                           placeholder="Hashtags (comma separated, e.g. marketing, brand)"
                         />
+                        <div>
+                          <label className="block text-xs font-medium text-gray-500 mb-1">Scheduled time</label>
+                          <input
+                            type="datetime-local"
+                            value={editScheduledAt}
+                            onChange={(e) => setEditScheduledAt(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                          />
+                        </div>
                         <div className="flex gap-2">
                           <button
                             onClick={() => saveEditPost(post.id)}

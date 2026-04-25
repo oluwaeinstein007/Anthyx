@@ -214,7 +214,7 @@ All paid tiers support usage-based overage ($0.04/post, $8/account, $25/brand).
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-The production compose file runs `apps/api` and `apps/dashboard` as separate containers behind a shared network.
+The production compose file runs `api` and `apps/dashboard` as separate containers behind a shared network.
 
 ---
 

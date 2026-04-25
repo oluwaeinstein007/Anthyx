@@ -1,5 +1,7 @@
 packages:
-  - "apps/*"
+  - "api"
+  - "admin"
+  - "affiliate"
   - "services/*"
   - "frontend"
   - "packages/*"

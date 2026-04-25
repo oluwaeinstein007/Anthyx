@@ -13,6 +13,9 @@ import {
   ChevronDown,
   ChevronUp,
   RefreshCw,
+  Pencil,
+  X,
+  Check,
 } from "lucide-react";
 
 interface Agent {
@@ -109,6 +112,11 @@ export default function AgentDetailPage() {
   const [silencing, setSilencing] = useState(false);
   const [silenceReason, setSilenceReason] = useState("");
   const [confirmName, setConfirmName] = useState("");
+  const [editingAgent, setEditingAgent] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editDiet, setEditDiet] = useState("");
+  const [editSystemPrompt, setEditSystemPrompt] = useState("");
   const LIMIT = 50;
 
   const { data: agent, isLoading: agentLoading } = useQuery<Agent>({
@@ -149,6 +157,24 @@ export default function AgentDetailPage() {
     mutationFn: () => api.post(`/agents/${id}/resume`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["agent", id] }),
   });
+
+  const updateAgent = useMutation({
+    mutationFn: (body: { name?: string; description?: string; dietInstructions?: string; systemPromptOverride?: string }) =>
+      api.put(`/agents/${id}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["agent", id] });
+      setEditingAgent(false);
+    },
+  });
+
+  const startEditAgent = () => {
+    if (!agent) return;
+    setEditName(agent.name);
+    setEditDescription(agent.description ?? "");
+    setEditDiet(agent.dietInstructions ?? "");
+    setEditSystemPrompt(agent.systemPromptOverride ?? "");
+    setEditingAgent(true);
+  };
 
   const getBrandName = (brandId: string) =>
     brands.find((b) => b.id === brandId)?.name ?? brandId;
@@ -278,38 +304,123 @@ export default function AgentDetailPage() {
       {/* Overview tab */}
       {tab === "overview" && (
         <div className="space-y-4">
-          <div className="bg-white border border-gray-200 rounded-2xl divide-y divide-gray-100">
-            {agent.description && (
-              <div className="px-5 py-4">
-                <p className="text-xs font-medium text-gray-400 mb-1">Description</p>
-                <p className="text-sm text-gray-700">{agent.description}</p>
+          {editingAgent ? (
+            <div className="bg-white border border-gray-200 rounded-2xl p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-gray-900">Edit agent</h3>
+                <button onClick={() => setEditingAgent(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-            )}
-            {agent.dietInstructions && (
-              <div className="px-5 py-4">
-                <p className="text-xs font-medium text-gray-400 mb-1">Diet instructions</p>
-                <p className="text-sm text-gray-700 whitespace-pre-wrap">{agent.dietInstructions}</p>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Name *</label>
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Description</label>
+                  <input
+                    type="text"
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    placeholder="What this agent focuses on"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Diet instructions</label>
+                  <textarea
+                    rows={3}
+                    value={editDiet}
+                    onChange={(e) => setEditDiet(e.target.value)}
+                    placeholder="Topics or content types to avoid"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-green-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">System prompt override</label>
+                  <textarea
+                    rows={4}
+                    value={editSystemPrompt}
+                    onChange={(e) => setEditSystemPrompt(e.target.value)}
+                    placeholder="Custom system prompt (advanced)"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-green-400"
+                  />
+                </div>
               </div>
-            )}
-            {agent.systemPromptOverride && (
-              <div className="px-5 py-4">
-                <p className="text-xs font-medium text-gray-400 mb-1">System prompt override</p>
-                <pre className="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 p-3 rounded-lg">
-                  {agent.systemPromptOverride}
-                </pre>
+              {updateAgent.isError && (
+                <p className="text-sm text-red-600">{(updateAgent.error as Error).message}</p>
+              )}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => updateAgent.mutate({
+                    name: editName.trim() || undefined,
+                    description: editDescription.trim() || undefined,
+                    dietInstructions: editDiet.trim() || undefined,
+                    systemPromptOverride: editSystemPrompt.trim() || undefined,
+                  })}
+                  disabled={!editName.trim() || updateAgent.isPending}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  {updateAgent.isPending ? "Saving…" : "Save changes"}
+                </button>
+                <button
+                  onClick={() => setEditingAgent(false)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 text-xs rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Cancel
+                </button>
               </div>
-            )}
-            <div className="px-5 py-4">
-              <p className="text-xs font-medium text-gray-400 mb-1">Created</p>
-              <p className="text-sm text-gray-700">
-                {new Date(agent.createdAt).toLocaleDateString("en-US", {
-                  month: "long",
-                  day: "numeric",
-                  year: "numeric",
-                })}
-              </p>
             </div>
-          </div>
+          ) : (
+            <div className="bg-white border border-gray-200 rounded-2xl divide-y divide-gray-100">
+              <div className="px-5 py-3 flex justify-end">
+                <button
+                  onClick={startEditAgent}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-gray-800 transition-colors"
+                >
+                  <Pencil className="w-3 h-3" /> Edit agent
+                </button>
+              </div>
+              {agent.description && (
+                <div className="px-5 py-4">
+                  <p className="text-xs font-medium text-gray-400 mb-1">Description</p>
+                  <p className="text-sm text-gray-700">{agent.description}</p>
+                </div>
+              )}
+              {agent.dietInstructions && (
+                <div className="px-5 py-4">
+                  <p className="text-xs font-medium text-gray-400 mb-1">Diet instructions</p>
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{agent.dietInstructions}</p>
+                </div>
+              )}
+              {agent.systemPromptOverride && (
+                <div className="px-5 py-4">
+                  <p className="text-xs font-medium text-gray-400 mb-1">System prompt override</p>
+                  <pre className="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 p-3 rounded-lg">
+                    {agent.systemPromptOverride}
+                  </pre>
+                </div>
+              )}
+              <div className="px-5 py-4">
+                <p className="text-xs font-medium text-gray-400 mb-1">Created</p>
+                <p className="text-sm text-gray-700">
+                  {new Date(agent.createdAt).toLocaleDateString("en-US", {
+                    month: "long",
+                    day: "numeric",
+                    year: "numeric",
+                  })}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

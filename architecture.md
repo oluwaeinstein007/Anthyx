@@ -14,7 +14,7 @@ Anthyx is a multi-tenant AI social media management SaaS. A Turborepo monorepo w
                         └────────┬─────────────┬──────────────┘
                                  │             │
                     ┌────────────▼──┐   ┌──────▼──────────────┐
-                    │  frontend/    │   │   apps/api           │
+                    │  frontend/    │   │   api           │
                     │  Next.js :3000│   │   Express :4000      │
                     └───────────────┘   └──────┬───────────────┘
                                                │  HTTP / queues
@@ -216,7 +216,7 @@ POST /v1/plans/:id/generate
 Dashboard: approve post
   → POST /v1/posts/:id/approve
   → services/mcp/tools/schedule-post.ts dispatches BullMQ job with ±3min jitter
-  → apps/api post.worker.ts
+  → api post.worker.ts
   → posting/executor.ts → social-mcp.ts → platform API
   → analytics.worker.ts fetches metrics 30min post-publish
 ```
@@ -237,9 +237,9 @@ Nightly:  overage.worker.ts (node-cron 2am) → calculateAndInvoiceOverage()
 | `anthyx-ingestor`           | brands route     | services/ingestor worker          |
 | `anthyx-plan-generation`    | plans route      | services/agent plan.worker.ts     |
 | `anthyx-content-generation` | plan worker      | services/agent content.worker.ts  |
-| `anthyx-post-execution`     | schedule-post    | apps/api post.worker.ts           |
-| `anthyx-analytics`          | post worker      | apps/api analytics.worker.ts      |
-| `anthyx-asset-generation`   | plans route      | apps/api (not yet implemented)    |
+| `anthyx-post-execution`     | schedule-post    | api post.worker.ts           |
+| `anthyx-analytics`          | post worker      | api analytics.worker.ts      |
+| `anthyx-asset-generation`   | plans route      | api (not yet implemented)    |
 
 ---
 
@@ -268,7 +268,7 @@ Nightly:  overage.worker.ts (node-cron 2am) → calculateAndInvoiceOverage()
 
 | Service           | Needs                                       | Independent? |
 |-------------------|---------------------------------------------|--------------|
-| `apps/api`        | Postgres, Redis, env vars                   | ✅ Yes        |
+| `api`        | Postgres, Redis, env vars                   | ✅ Yes        |
 | `frontend/`       | `NEXT_PUBLIC_API_URL` env var               | ✅ Yes        |
 | `services/mcp`    | Postgres, Redis, Qdrant, `GEMINI_API_KEY`   | ✅ Yes        |
 | `services/ingestor`| Postgres, Redis, Qdrant, `GEMINI_API_KEY`  | ✅ Yes        |
@@ -278,11 +278,11 @@ All services share the same Postgres database and Redis instance but have **no d
 - You can scale `services/agent` independently (more workers = more plan generations)
 - You can deploy `services/ingestor` on a beefy machine for fast PDF processing
 - `services/mcp` can run on a separate machine accessible only to the agent service
-- `apps/api` remains thin and stateless — no LLM calls, no heavy processing
+- `api` remains thin and stateless — no LLM calls, no heavy processing
 
 **What's not isolated yet:**
-- `apps/api/src/workers/` — plan/content workers still run in-process. Once `services/agent` is confirmed stable, these can be removed from the API process.
-- `apps/api/src/mcp/server.ts` — MCP SSE routes are still registered in Express. Can be removed once `services/mcp` is confirmed stable.
+- `api/src/workers/` — plan/content workers still run in-process. Once `services/agent` is confirmed stable, these can be removed from the API process.
+- `api/src/mcp/server.ts` — MCP SSE routes are still registered in Express. Can be removed once `services/mcp` is confirmed stable.
 - `apps/dashboard` and `frontend/` are currently duplicated. Pick one as canonical and remove the other.
 
 ---

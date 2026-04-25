@@ -2,7 +2,9 @@
   "name": "anthyx",
   "private": true,
   "workspaces": [
-    "apps/*",
+    "api",
+    "admin",
+    "affiliate",
     "services/*",
     "frontend",
     "packages/*"
@@ -14,9 +16,9 @@
     "test:integration": "turbo run test:integration",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
-    "db:migrate": "cd apps/api && npx drizzle-kit migrate",
-    "db:generate": "cd apps/api && npx drizzle-kit generate",
-    "db:studio": "cd apps/api && npx drizzle-kit studio",
+    "db:migrate": "cd api && npx drizzle-kit migrate",
+    "db:generate": "cd api && npx drizzle-kit generate",
+    "db:studio": "cd api && npx drizzle-kit studio",
     "setup:paystack": "node scripts/setup-paystack-plans.mjs"
   },
   "devDependencies": {

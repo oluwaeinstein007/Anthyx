@@ -1,6 +1,8 @@
 # Anthyx — Improvement & Roadmap
 
 > Status as of April 2026. Covers what needs to be built, updated, or fixed across the full stack.
+>
+> **Last updated:** See git log. Items marked ✅ are fully implemented.
 
 ---
 

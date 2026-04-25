@@ -19,7 +19,7 @@ services:
     image: anthyx-api
     build:
       context: .
-      dockerfile: apps/api/Dockerfile
+      dockerfile: api/Dockerfile
     ports:
       - "4000:4000"
     environment:
@@ -39,6 +39,34 @@ services:
       <<: *app-env
     env_file: .env
     depends_on: *app-depends
+    restart: unless-stopped
+
+  # ── Admin Dashboard ───────────────────────────────────────────────────────────
+  admin:
+    build:
+      context: .
+      dockerfile: admin/Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+    env_file: .env
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # ── Affiliate Dashboard ───────────────────────────────────────────────────────
+  affiliate:
+    build:
+      context: .
+      dockerfile: affiliate/Dockerfile
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+    env_file: .env
+    depends_on:
+      - api
     restart: unless-stopped
 
   # ── Dashboard / Frontend ──────────────────────────────────────────────────────

@@ -60,7 +60,7 @@ export function EmailConnectModal({ onClose, existing }: Props) {
   const [mailgunDomain, setMailgunDomain] = useState(prevCfg.domain ?? "");
 
   const canSubmit = (() => {
-    if (!fromAddress.trim() || !recipients.trim()) return false;
+    if (!fromAddress.trim()) return false;
     if (mailer === "smtp") {
       if (!isEdit) return !!(host.trim() && username.trim() && password.trim());
       return !!(host.trim() && username.trim()); // password optional on edit
@@ -254,7 +254,9 @@ export function EmailConnectModal({ onClose, existing }: Props) {
 
           {/* Recipients */}
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Recipients <span className="text-red-400">*</span></label>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              Recipients <span className="text-gray-400 font-normal">(optional — can be added after connecting)</span>
+            </label>
             <textarea
               className={`${inputCls} h-24 resize-none font-mono text-xs`}
               placeholder={"alice@example.com, bob@example.com,\ncarol@example.com"}
