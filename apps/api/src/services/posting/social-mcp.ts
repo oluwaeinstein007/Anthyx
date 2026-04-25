@@ -5,8 +5,8 @@
  */
 
 import type { Platform } from "@anthyx/types";
-import type { Agent } from "https-proxy-agent";
-import nodemailer from "nodemailer"; // SMTP engine — same dep social-mcp ships internally
+import type { HttpsProxyAgent } from "https-proxy-agent";
+import nodemailer from "nodemailer";
 
 export interface PublishPayload {
   platform: Platform;
@@ -15,7 +15,7 @@ export interface PublishPayload {
   hashtags?: string[];
   mediaUrls?: string[];
   accountId?: string;
-  proxyAgent?: Agent;
+  proxyAgent?: HttpsProxyAgent<string>;
   userAgent?: string;
   // Reddit-specific
   subreddit?: string;
@@ -27,8 +27,15 @@ export interface PublishPayload {
   blueskyDid?: string;
   // Pinterest-specific
   pinterestBoardId?: string;
-  // Email-specific (credentials come from server process.env, same pattern as Telegram)
+  // Email — per-org credentials stored in DB (accessToken = secret, platformConfig = rest)
   emailTo?: string[];
+  emailMailer?: "smtp" | "sendgrid" | "mailgun";
+  emailFrom?: string;
+  emailSmtpHost?: string;
+  emailSmtpPort?: number;
+  emailSmtpUsername?: string;
+  emailSmtpEncryption?: string;
+  emailMailgunDomain?: string;
 }
 
 export interface PublishResult {
@@ -543,16 +550,10 @@ async function publishToPinterest(p: PublishPayload): Promise<PublishResult> {
 
 async function publishToEmail(p: PublishPayload): Promise<PublishResult> {
   if (!p.emailTo?.length) throw new Error("Email requires recipient list");
+  if (!p.emailMailer) throw new Error("Email mailer not configured for this account");
+  if (!p.emailFrom) throw new Error("Email from address not configured for this account");
 
-  // Read server-level credentials from process.env at call time (same pattern as publishToTelegram
-  // reading TELEGRAM_BOT_TOKEN). Operator sets MAIL_MAILER + credentials in .env; users only
-  // configure their recipient list.
-  const mailer = process.env["MAIL_MAILER"] ?? "smtp";
-  const fromAddress = process.env["MAIL_FROM_ADDRESS"] ?? "";
-  const fromName = process.env["MAIL_FROM_NAME"] ?? "";
-  const from = fromName ? `${fromName} <${fromAddress}>` : fromAddress;
-
-  if (!fromAddress) throw new Error("Server email not configured — set MAIL_FROM_ADDRESS in environment");
+  const from = p.emailFrom;
 
   // First line → subject (strip optional "Subject: " prefix), rest → HTML body
   const newlineIdx = p.content.indexOf("\n");
@@ -561,13 +562,13 @@ async function publishToEmail(p: PublishPayload): Promise<PublishResult> {
     .trim();
   const htmlBody = newlineIdx > -1 ? p.content.slice(newlineIdx + 1).trim() : p.content;
 
-  if (mailer === "smtp") {
-    const host = process.env["MAIL_HOST"] ?? "";
-    const port = parseInt(process.env["MAIL_PORT"] ?? "587", 10);
-    const username = process.env["MAIL_USERNAME"] ?? "";
-    const password = process.env["MAIL_PASSWORD"] ?? "";
-    const encryption = process.env["MAIL_ENCRYPTION"] ?? "tls";
-    if (!host || !username || !password) throw new Error("SMTP not configured — set MAIL_HOST, MAIL_USERNAME, MAIL_PASSWORD");
+  if (p.emailMailer === "smtp") {
+    const host = p.emailSmtpHost ?? "";
+    const port = p.emailSmtpPort ?? 587;
+    const username = p.emailSmtpUsername ?? "";
+    const password = p.accessToken; // decrypted by oauthProxy in the worker
+    const encryption = p.emailSmtpEncryption ?? "tls";
+    if (!host || !username || !password) throw new Error("SMTP credentials incomplete for this account");
 
     const transport = nodemailer.createTransport({
       host, port,
@@ -584,15 +585,15 @@ async function publishToEmail(p: PublishPayload): Promise<PublishResult> {
     return { postId: firstOk?.value.messageId ?? `smtp_${Date.now()}` };
   }
 
-  if (mailer === "sendgrid") {
-    const apiKey = process.env["SENDGRID_API_KEY"] ?? "";
-    if (!apiKey) throw new Error("SendGrid not configured — set SENDGRID_API_KEY");
+  if (p.emailMailer === "sendgrid") {
+    const apiKey = p.accessToken;
+    if (!apiKey) throw new Error("SendGrid API key not stored for this account");
     const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         personalizations: p.emailTo.map((email) => ({ to: [{ email }] })),
-        from: { email: fromAddress, ...(fromName ? { name: fromName } : {}) },
+        from: { email: from.replace(/.*<(.+)>/, "$1").trim() || from },
         subject,
         content: [{ type: "text/html", value: htmlBody }],
       }),
@@ -601,10 +602,10 @@ async function publishToEmail(p: PublishPayload): Promise<PublishResult> {
     return { postId: `sg_${Date.now()}` };
   }
 
-  if (mailer === "mailgun") {
-    const apiKey = process.env["MAILGUN_API_KEY"] ?? "";
-    const domain = process.env["MAILGUN_DOMAIN"] ?? "";
-    if (!apiKey || !domain) throw new Error("Mailgun not configured — set MAILGUN_API_KEY and MAILGUN_DOMAIN");
+  if (p.emailMailer === "mailgun") {
+    const apiKey = p.accessToken;
+    const domain = p.emailMailgunDomain ?? "";
+    if (!apiKey || !domain) throw new Error("Mailgun credentials incomplete for this account");
     const results = await Promise.allSettled(
       p.emailTo.map((to) => {
         const body = new URLSearchParams({ from, to, subject, html: htmlBody });
@@ -620,5 +621,5 @@ async function publishToEmail(p: PublishPayload): Promise<PublishResult> {
     return { postId: firstId };
   }
 
-  throw new Error(`Unsupported MAIL_MAILER: "${mailer}". Supported: smtp, sendgrid, mailgun`);
+  throw new Error(`Unsupported mailer: "${p.emailMailer}". Supported: smtp, sendgrid, mailgun`);
 }

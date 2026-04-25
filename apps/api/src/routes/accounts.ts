@@ -631,58 +631,265 @@ router.post("/pinterest", auth, async (req, res) => {
   return res.json({ id: account!.id, platform: "pinterest", accountHandle: handle, isActive: true });
 });
 
-// POST /accounts/email — connect an email list (credentials are server-level env vars,
-// same pattern as Telegram: operator sets MAIL_MAILER+credentials in .env, users just
-// configure their recipient list and a display name)
+// POST /accounts/email — connect an email account with per-org credentials
 router.post("/email", auth, async (req, res) => {
-  const { displayName, recipients } = req.body as {
-    displayName?: string;
-    recipients?: string;
-  };
+  try {
+    const {
+      mailer = "smtp",
+      displayName,
+      fromAddress,
+      fromName,
+      recipients,
+      // SMTP
+      host,
+      port,
+      username,
+      password,
+      encryption = "tls",
+      // SendGrid
+      apiKey,
+      // Mailgun
+      mailgunApiKey,
+      mailgunDomain,
+    } = req.body as Record<string, string>;
 
-  if (!recipients?.trim()) {
-    return res.status(400).json({ error: "At least one recipient email address is required" });
+    if (!fromAddress?.trim()) return res.status(400).json({ error: "From address is required" });
+    if (!recipients?.trim()) return res.status(400).json({ error: "At least one recipient is required" });
+
+    const recipientList = recipients
+      .split(/[\s,]+/)
+      .map((r) => r.trim())
+      .filter((r) => r.includes("@"));
+    if (recipientList.length === 0) return res.status(400).json({ error: "No valid recipient email addresses found" });
+
+    let secret: string;
+    let cfg: Record<string, unknown>;
+
+    if (mailer === "smtp") {
+      if (!host?.trim() || !username?.trim() || !password?.trim()) {
+        return res.status(400).json({ error: "SMTP host, username and password are required" });
+      }
+      const smtpPort = parseInt(port ?? "587", 10);
+      const smtpEncryption = encryption ?? "tls";
+
+      const { default: nodemailer } = await import("nodemailer");
+      const transport = nodemailer.createTransport({
+        host: host.trim(), port: smtpPort,
+        secure: smtpEncryption === "ssl",
+        requireTLS: smtpEncryption === "tls",
+        auth: { user: username.trim(), pass: password.trim() },
+        connectionTimeout: 10_000,
+      });
+      try {
+        await transport.verify();
+        transport.close();
+      } catch (err) {
+        return res.status(400).json({ error: `SMTP connection failed: ${(err as Error).message}` });
+      }
+
+      secret = password.trim();
+      cfg = {
+        mailer: "smtp",
+        host: host.trim(),
+        port: smtpPort,
+        username: username.trim(),
+        encryption: smtpEncryption,
+        fromAddress: fromAddress.trim(),
+        fromName: fromName?.trim() ?? "",
+        recipients: recipientList,
+      };
+    } else if (mailer === "sendgrid") {
+      if (!apiKey?.trim()) return res.status(400).json({ error: "SendGrid API key is required" });
+      const valRes = await fetch("https://api.sendgrid.com/v3/scopes", {
+        headers: { Authorization: `Bearer ${apiKey.trim()}` },
+      });
+      if (!valRes.ok) return res.status(400).json({ error: "Invalid SendGrid API key" });
+
+      secret = apiKey.trim();
+      cfg = {
+        mailer: "sendgrid",
+        fromAddress: fromAddress.trim(),
+        fromName: fromName?.trim() ?? "",
+        recipients: recipientList,
+      };
+    } else if (mailer === "mailgun") {
+      if (!mailgunApiKey?.trim() || !mailgunDomain?.trim()) {
+        return res.status(400).json({ error: "Mailgun API key and domain are required" });
+      }
+      const valRes = await fetch(`https://api.mailgun.net/v3/domains/${mailgunDomain.trim()}`, {
+        headers: { Authorization: `Basic ${Buffer.from(`api:${mailgunApiKey.trim()}`).toString("base64")}` },
+      });
+      if (!valRes.ok) return res.status(400).json({ error: "Invalid Mailgun credentials or domain" });
+
+      secret = mailgunApiKey.trim();
+      cfg = {
+        mailer: "mailgun",
+        domain: mailgunDomain.trim(),
+        fromAddress: fromAddress.trim(),
+        fromName: fromName?.trim() ?? "",
+        recipients: recipientList,
+      };
+    } else {
+      return res.status(400).json({ error: `Unsupported mailer: "${mailer}"` });
+    }
+
+    await PlanLimitsEnforcer.check(req.user.orgId, "account");
+
+    const handle = displayName?.trim() || fromAddress.trim();
+
+    const [account] = await db
+      .insert(socialAccounts)
+      .values({
+        organizationId: req.user.orgId,
+        platform: "email",
+        accountHandle: handle,
+        accountId: handle,
+        accessToken: encryptToken(secret),
+        platformConfig: cfg,
+        isActive: true,
+      })
+      .onConflictDoUpdate({
+        target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [typeof socialAccounts.organizationId, typeof socialAccounts.platform, typeof socialAccounts.accountHandle],
+        set: { accessToken: encryptToken(secret), platformConfig: cfg, updatedAt: new Date() },
+      })
+      .returning();
+
+    await backfillPlanPosts(req.user.orgId, account!.id, "email");
+    return res.json({ id: account!.id, platform: "email", accountHandle: handle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] email connect error:", err);
+    return res.status(500).json({ error: "Failed to connect email account" });
   }
+});
 
-  // Validate that the server email provider is configured (like Telegram checks its bot token)
-  const mailer = process.env["MAIL_MAILER"] ?? "smtp";
-  const fromAddress = process.env["MAIL_FROM_ADDRESS"];
-  if (!fromAddress) {
-    return res.status(500).json({ error: "Server email not configured. Set MAIL_FROM_ADDRESS in environment." });
+// PUT /accounts/email/:id — edit an existing email account (leave secret blank to keep current)
+router.put("/email/:id", auth, async (req, res) => {
+  try {
+    const existing = await db.query.socialAccounts.findFirst({
+      where: and(
+        eq(socialAccounts.id, req.params.id!),
+        eq(socialAccounts.organizationId, req.user.orgId),
+        eq(socialAccounts.platform, "email" as any),
+      ),
+    });
+    if (!existing) return res.status(404).json({ error: "Email account not found" });
+
+    const {
+      mailer = ((existing.platformConfig as Record<string, unknown>)?.["mailer"] as string) ?? "smtp",
+      displayName,
+      fromAddress,
+      fromName,
+      recipients,
+      // SMTP
+      host,
+      port,
+      username,
+      password,
+      encryption,
+      // SendGrid
+      apiKey,
+      // Mailgun
+      mailgunApiKey,
+      mailgunDomain,
+    } = req.body as Record<string, string>;
+
+    if (!fromAddress?.trim()) return res.status(400).json({ error: "From address is required" });
+    if (!recipients?.trim()) return res.status(400).json({ error: "At least one recipient is required" });
+
+    const recipientList = recipients
+      .split(/[\s,]+/)
+      .map((r) => r.trim())
+      .filter((r) => r.includes("@"));
+    if (recipientList.length === 0) return res.status(400).json({ error: "No valid recipient email addresses found" });
+
+    let secret: string | null = null; // null means keep existing
+    let cfg: Record<string, unknown>;
+
+    if (mailer === "smtp") {
+      const smtpPort = parseInt(port ?? "587", 10);
+      const smtpEncryption = encryption ?? "tls";
+
+      if (password?.trim()) {
+        if (!host?.trim() || !username?.trim()) {
+          return res.status(400).json({ error: "SMTP host and username are required when changing password" });
+        }
+        const { default: nodemailer } = await import("nodemailer");
+        const transport = nodemailer.createTransport({
+          host: host.trim(), port: smtpPort,
+          secure: smtpEncryption === "ssl",
+          requireTLS: smtpEncryption === "tls",
+          auth: { user: username.trim(), pass: password.trim() },
+          connectionTimeout: 10_000,
+        });
+        try {
+          await transport.verify();
+          transport.close();
+        } catch (err) {
+          return res.status(400).json({ error: `SMTP connection failed: ${(err as Error).message}` });
+        }
+        secret = password.trim();
+      }
+
+      cfg = {
+        mailer: "smtp",
+        host: (host?.trim() || (existing.platformConfig as any)?.["host"]) ?? "",
+        port: smtpPort,
+        username: (username?.trim() || (existing.platformConfig as any)?.["username"]) ?? "",
+        encryption: smtpEncryption,
+        fromAddress: fromAddress.trim(),
+        fromName: fromName?.trim() ?? "",
+        recipients: recipientList,
+      };
+    } else if (mailer === "sendgrid") {
+      if (apiKey?.trim()) {
+        const valRes = await fetch("https://api.sendgrid.com/v3/scopes", {
+          headers: { Authorization: `Bearer ${apiKey.trim()}` },
+        });
+        if (!valRes.ok) return res.status(400).json({ error: "Invalid SendGrid API key" });
+        secret = apiKey.trim();
+      }
+      cfg = {
+        mailer: "sendgrid",
+        fromAddress: fromAddress.trim(),
+        fromName: fromName?.trim() ?? "",
+        recipients: recipientList,
+      };
+    } else if (mailer === "mailgun") {
+      const domain = mailgunDomain?.trim() || ((existing.platformConfig as any)?.["domain"] as string) || "";
+      if (mailgunApiKey?.trim()) {
+        if (!domain) return res.status(400).json({ error: "Mailgun domain is required" });
+        const valRes = await fetch(`https://api.mailgun.net/v3/domains/${domain}`, {
+          headers: { Authorization: `Basic ${Buffer.from(`api:${mailgunApiKey.trim()}`).toString("base64")}` },
+        });
+        if (!valRes.ok) return res.status(400).json({ error: "Invalid Mailgun credentials or domain" });
+        secret = mailgunApiKey.trim();
+      }
+      cfg = {
+        mailer: "mailgun",
+        domain,
+        fromAddress: fromAddress.trim(),
+        fromName: fromName?.trim() ?? "",
+        recipients: recipientList,
+      };
+    } else {
+      return res.status(400).json({ error: `Unsupported mailer: "${mailer}"` });
+    }
+
+    const handle = displayName?.trim() || fromAddress.trim();
+    const updateSet: Record<string, unknown> = { platformConfig: cfg, updatedAt: new Date() };
+    if (secret !== null) updateSet["accessToken"] = encryptToken(secret);
+
+    const [account] = await db
+      .update(socialAccounts)
+      .set(updateSet as any)
+      .where(and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)))
+      .returning();
+
+    return res.json({ id: account!.id, platform: "email", accountHandle: account!.accountHandle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] email update error:", err);
+    return res.status(500).json({ error: "Failed to update email account" });
   }
-  if (mailer === "smtp" && (!process.env["MAIL_HOST"] || !process.env["MAIL_USERNAME"] || !process.env["MAIL_PASSWORD"])) {
-    return res.status(500).json({ error: "SMTP not configured. Set MAIL_HOST, MAIL_USERNAME, MAIL_PASSWORD in environment." });
-  }
-  if (mailer === "sendgrid" && !process.env["SENDGRID_API_KEY"]) {
-    return res.status(500).json({ error: "SendGrid not configured. Set SENDGRID_API_KEY in environment." });
-  }
-  if (mailer === "mailgun" && (!process.env["MAILGUN_API_KEY"] || !process.env["MAILGUN_DOMAIN"])) {
-    return res.status(500).json({ error: "Mailgun not configured. Set MAILGUN_API_KEY and MAILGUN_DOMAIN in environment." });
-  }
-
-  await PlanLimitsEnforcer.check(req.user.orgId, "account");
-
-  const recipientList = recipients.split(",").map((r) => r.trim()).filter(Boolean);
-  const handle = displayName?.trim() || `list_${recipientList.length}_recipients`;
-
-  const [account] = await db
-    .insert(socialAccounts)
-    .values({
-      organizationId: req.user.orgId,
-      platform: "email",
-      accountHandle: handle,
-      accountId: handle,
-      platformConfig: { recipients: recipientList, mailer },
-      isActive: true,
-    })
-    .onConflictDoUpdate({
-      target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [typeof socialAccounts.organizationId, typeof socialAccounts.platform, typeof socialAccounts.accountHandle],
-      set: { platformConfig: { recipients: recipientList, mailer }, updatedAt: new Date() },
-    })
-    .returning();
-
-  await backfillPlanPosts(req.user.orgId, account!.id, "email");
-  return res.json({ id: account!.id, platform: "email", accountHandle: handle, isActive: true });
 });
 
 // GET /accounts

@@ -22,6 +22,7 @@ interface SocialAccount {
   isActive: boolean;
   tokenExpiresAt: string | null;
   createdAt: string;
+  platformConfig?: Record<string, unknown>;
 }
 
 interface PlatformMeta {
@@ -64,6 +65,7 @@ export default function AccountsPage() {
   const qc = useQueryClient();
   const [connecting, setConnecting] = useState<string | null>(null);
   const [openModal, setOpenModal] = useState<ModalPlatform>(null);
+  const [editingEmail, setEditingEmail] = useState<SocialAccount | null>(null);
 
   const { data: accounts = [], isLoading } = useQuery<SocialAccount[]>({
     queryKey: ["accounts"],
@@ -153,13 +155,23 @@ export default function AccountsPage() {
                       </div>
                     )}
                   </div>
-                  <button
-                    onClick={() => disconnect.mutate(account.id)}
-                    disabled={disconnect.isPending}
-                    className="text-xs text-red-500 hover:text-red-700 font-medium disabled:opacity-50 transition-colors"
-                  >
-                    Disconnect
-                  </button>
+                  <div className="flex items-center gap-3 shrink-0">
+                    {account.platform === "email" && (
+                      <button
+                        onClick={() => setEditingEmail(account)}
+                        className="text-xs text-amber-600 hover:text-amber-800 font-medium transition-colors"
+                      >
+                        Edit
+                      </button>
+                    )}
+                    <button
+                      onClick={() => disconnect.mutate(account.id)}
+                      disabled={disconnect.isPending}
+                      className="text-xs text-red-500 hover:text-red-700 font-medium disabled:opacity-50 transition-colors"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -232,6 +244,16 @@ export default function AccountsPage() {
       {openModal === "mastodon" && <MastodonConnectModal onClose={() => setOpenModal(null)} />}
       {openModal === "pinterest" && <PinterestConnectModal onClose={() => setOpenModal(null)} />}
       {openModal === "email" && <EmailConnectModal onClose={() => setOpenModal(null)} />}
+      {editingEmail && (
+        <EmailConnectModal
+          onClose={() => setEditingEmail(null)}
+          existing={{
+            id: editingEmail.id,
+            accountHandle: editingEmail.accountHandle,
+            platformConfig: (editingEmail.platformConfig ?? {}) as any,
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -28,6 +28,13 @@ export async function publishToplatform(params: PublishParams): Promise<PublishR
   // Format content and hashtags for the target platform before publishing
   const formatted = formatPostForPlatform(params.platform, params.content, params.hashtags);
 
+  // Build email "from" string from stored config
+  const emailFromAddress = cfg["fromAddress"] as string | undefined;
+  const emailFromName = cfg["fromName"] as string | undefined;
+  const emailFrom = emailFromName && emailFromAddress
+    ? `${emailFromName} <${emailFromAddress}>`
+    : (emailFromAddress ?? undefined);
+
   const result = await publishPost({
     platform: params.platform,
     accessToken: params.accessToken,
@@ -43,8 +50,15 @@ export async function publishToplatform(params: PublishParams): Promise<PublishR
     blueskyDid: (cfg["did"] as string | undefined) ?? params.accountId,
     // Pinterest
     pinterestBoardId: cfg["boardId"] as string | undefined,
-    // Email — credentials are server-level env vars (MAIL_MAILER etc.), only recipients are per-org
+    // Email — per-org credentials from DB
     emailTo: cfg["recipients"] as string[] | undefined,
+    emailMailer: cfg["mailer"] as "smtp" | "sendgrid" | "mailgun" | undefined,
+    emailFrom,
+    emailSmtpHost: cfg["host"] as string | undefined,
+    emailSmtpPort: cfg["port"] as number | undefined,
+    emailSmtpUsername: cfg["username"] as string | undefined,
+    emailSmtpEncryption: cfg["encryption"] as string | undefined,
+    emailMailgunDomain: cfg["domain"] as string | undefined,
   });
 
   return { ...result, truncated: formatted.truncated };
