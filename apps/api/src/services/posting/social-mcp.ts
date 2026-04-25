@@ -6,7 +6,34 @@
 
 import type { Platform } from "@anthyx/types";
 import type { HttpsProxyAgent } from "https-proxy-agent";
-import nodemailer from "nodemailer";
+import { createRequire } from "module";
+import { pathToFileURL } from "url";
+import path from "path";
+
+// ── social-mcp email delegation ───────────────────────────────────────────────
+// social-mcp's EmailService uses a singleton config object. We serialize all
+// email sends through a mutex so config patching doesn't race across concurrent
+// BullMQ workers, then delegate the actual send to social-mcp's implementation.
+
+let _emailMutex = Promise.resolve();
+
+function acquireEmailMutex(): Promise<() => void> {
+  let release!: () => void;
+  const prev = _emailMutex;
+  _emailMutex = new Promise<void>((res) => { release = res; });
+  return prev.then(() => release);
+}
+
+// Resolved lazily on first call — social-mcp's package root relative to its main export
+let _smcpRoot: string | undefined;
+function smcpDistRoot(): string {
+  if (!_smcpRoot) {
+    const req = createRequire(__filename);
+    // resolve the main entry, then go up one level (dist/index.js → dist/)
+    _smcpRoot = path.dirname(req.resolve("social-mcp"));
+  }
+  return _smcpRoot!;
+}
 
 export interface PublishPayload {
   platform: Platform;
@@ -553,73 +580,60 @@ async function publishToEmail(p: PublishPayload): Promise<PublishResult> {
   if (!p.emailMailer) throw new Error("Email mailer not configured for this account");
   if (!p.emailFrom) throw new Error("Email from address not configured for this account");
 
-  const from = p.emailFrom;
-
-  // First line → subject (strip optional "Subject: " prefix), rest → HTML body
+  // First line → subject (strip optional "Subject: " prefix), rest → body
   const newlineIdx = p.content.indexOf("\n");
   const subject = (newlineIdx > -1 ? p.content.slice(0, newlineIdx) : p.content.slice(0, 100))
     .replace(/^Subject:\s*/i, "")
     .trim();
-  const htmlBody = newlineIdx > -1 ? p.content.slice(newlineIdx + 1).trim() : p.content;
+  const body = newlineIdx > -1 ? p.content.slice(newlineIdx + 1).trim() : p.content;
 
-  if (p.emailMailer === "smtp") {
-    const host = p.emailSmtpHost ?? "";
-    const port = p.emailSmtpPort ?? 587;
-    const username = p.emailSmtpUsername ?? "";
-    const password = p.accessToken; // decrypted by oauthProxy in the worker
-    const encryption = p.emailSmtpEncryption ?? "tls";
-    if (!host || !username || !password) throw new Error("SMTP credentials incomplete for this account");
+  // Parse "Name <addr>" → separate name and address for social-mcp's config shape
+  const addrMatch = p.emailFrom.match(/^(.*?)\s*<(.+)>$/);
+  const fromAddress = addrMatch ? addrMatch[2]!.trim() : p.emailFrom.trim();
+  const fromName = addrMatch ? addrMatch[1]!.replace(/^"|"$/g, "").trim() : "";
 
-    const transport = nodemailer.createTransport({
-      host, port,
-      secure: encryption === "ssl",
-      requireTLS: encryption === "tls",
-      auth: { user: username, pass: password },
-    });
-    // Send individually — each recipient gets a separate email, no address leakage
-    const results = await Promise.allSettled(
-      p.emailTo.map((to) => transport.sendMail({ from, to, subject, html: htmlBody })),
-    );
-    transport.close();
-    const firstOk = results.find((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof transport.sendMail>>> => r.status === "fulfilled");
-    return { postId: firstOk?.value.messageId ?? `smtp_${Date.now()}` };
+  // Acquire mutex — social-mcp's EmailService reads from a singleton config object,
+  // so we serialize all sends to avoid one org's credentials bleeding into another.
+  const release = await acquireEmailMutex();
+  try {
+    const distRoot = smcpDistRoot();
+    const configUrl = pathToFileURL(path.join(distRoot, "lib/config.js")).href;
+    const svcUrl = pathToFileURL(path.join(distRoot, "services/email-service.js")).href;
+
+    // Dynamic import works in CJS context for ESM modules; cached by URL so we get
+    // the same module instance each call — which is exactly what we want for patching.
+    const { config } = await import(configUrl) as { config: Record<string, any> };
+    const { EmailService } = await import(svcUrl) as { EmailService: new () => { send(to: string | string[], subject: string, text: string, html?: string): Promise<void> } };
+
+    // Inject this org's credentials into the shared config
+    config["email"].mailer = p.emailMailer;
+    config["email"].fromAddress = fromAddress;
+    config["email"].fromName = fromName;
+
+    if (p.emailMailer === "smtp") {
+      if (!p.emailSmtpHost || !p.emailSmtpUsername || !p.accessToken) {
+        throw new Error("SMTP credentials incomplete for this account");
+      }
+      config["email"].smtp.host = p.emailSmtpHost;
+      config["email"].smtp.port = p.emailSmtpPort ?? 587;
+      config["email"].smtp.username = p.emailSmtpUsername;
+      config["email"].smtp.password = p.accessToken; // decrypted by oauthProxy
+      config["email"].smtp.encryption = p.emailSmtpEncryption ?? "tls";
+    } else if (p.emailMailer === "sendgrid") {
+      if (!p.accessToken) throw new Error("SendGrid API key not stored for this account");
+      config["email"].sendgrid.apiKey = p.accessToken;
+    } else if (p.emailMailer === "mailgun") {
+      if (!p.accessToken || !p.emailMailgunDomain) throw new Error("Mailgun credentials incomplete for this account");
+      config["email"].mailgun.apiKey = p.accessToken;
+      config["email"].mailgun.domain = p.emailMailgunDomain;
+    }
+
+    const service = new EmailService();
+    // Send to each recipient separately — prevents address leakage between recipients
+    await Promise.all(p.emailTo.map((to) => service.send(to, subject, body, body)));
+
+    return { postId: `email_${Date.now()}` };
+  } finally {
+    release();
   }
-
-  if (p.emailMailer === "sendgrid") {
-    const apiKey = p.accessToken;
-    if (!apiKey) throw new Error("SendGrid API key not stored for this account");
-    const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        personalizations: p.emailTo.map((email) => ({ to: [{ email }] })),
-        from: { email: from.replace(/.*<(.+)>/, "$1").trim() || from },
-        subject,
-        content: [{ type: "text/html", value: htmlBody }],
-      }),
-    });
-    if (!res.ok) throw new Error(`SendGrid send failed: ${res.status} - ${await res.text()}`);
-    return { postId: `sg_${Date.now()}` };
-  }
-
-  if (p.emailMailer === "mailgun") {
-    const apiKey = p.accessToken;
-    const domain = p.emailMailgunDomain ?? "";
-    if (!apiKey || !domain) throw new Error("Mailgun credentials incomplete for this account");
-    const results = await Promise.allSettled(
-      p.emailTo.map((to) => {
-        const body = new URLSearchParams({ from, to, subject, html: htmlBody });
-        return fetch(`https://api.mailgun.net/v3/${domain}/messages`, {
-          method: "POST",
-          headers: { Authorization: `Basic ${Buffer.from(`api:${apiKey}`).toString("base64")}` },
-          body,
-        });
-      }),
-    );
-    const firstOk = results.find((r): r is PromiseFulfilledResult<Response> => r.status === "fulfilled" && r.value.ok);
-    const firstId = firstOk ? ((await firstOk.value.json()) as { id?: string }).id ?? `mg_${Date.now()}` : `mg_${Date.now()}`;
-    return { postId: firstId };
-  }
-
-  throw new Error(`Unsupported mailer: "${p.emailMailer}". Supported: smtp, sendgrid, mailgun`);
 }

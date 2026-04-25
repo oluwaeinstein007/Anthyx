@@ -7,7 +7,21 @@ import { encryptToken } from "../services/oauth-proxy/crypto";
 import { PlanLimitsEnforcer } from "../services/billing/limits";
 import type { Platform } from "@anthyx/types";
 import { randomBytes, createHash } from "crypto";
+import { createConnection } from "net";
 import { redisConnection } from "../queue/client";
+
+// Basic TCP reachability check for SMTP (no nodemailer needed at connect time)
+function verifySMTPConnectivity(host: string, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host, port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`Cannot reach ${host}:${port} — connection timed out`));
+    }, 10_000);
+    socket.once("connect", () => { clearTimeout(timer); socket.destroy(); resolve(); });
+    socket.once("error", (e) => { clearTimeout(timer); reject(new Error(`Cannot connect to SMTP server: ${e.message}`)); });
+  });
+}
 
 const router = Router();
 
@@ -672,17 +686,8 @@ router.post("/email", auth, async (req, res) => {
       const smtpPort = parseInt(port ?? "587", 10);
       const smtpEncryption = encryption ?? "tls";
 
-      const { default: nodemailer } = await import("nodemailer");
-      const transport = nodemailer.createTransport({
-        host: host.trim(), port: smtpPort,
-        secure: smtpEncryption === "ssl",
-        requireTLS: smtpEncryption === "tls",
-        auth: { user: username.trim(), pass: password.trim() },
-        connectionTimeout: 10_000,
-      });
       try {
-        await transport.verify();
-        transport.close();
+        await verifySMTPConnectivity(host.trim(), smtpPort);
       } catch (err) {
         return res.status(400).json({ error: `SMTP connection failed: ${(err as Error).message}` });
       }
@@ -813,17 +818,8 @@ router.put("/email/:id", auth, async (req, res) => {
         if (!host?.trim() || !username?.trim()) {
           return res.status(400).json({ error: "SMTP host and username are required when changing password" });
         }
-        const { default: nodemailer } = await import("nodemailer");
-        const transport = nodemailer.createTransport({
-          host: host.trim(), port: smtpPort,
-          secure: smtpEncryption === "ssl",
-          requireTLS: smtpEncryption === "tls",
-          auth: { user: username.trim(), pass: password.trim() },
-          connectionTimeout: 10_000,
-        });
         try {
-          await transport.verify();
-          transport.close();
+          await verifySMTPConnectivity(host.trim(), smtpPort);
         } catch (err) {
           return res.status(400).json({ error: `SMTP connection failed: ${(err as Error).message}` });
         }
