@@ -7,6 +7,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers: { "Content-Type": "application/json", ...options.headers },
   });
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== "undefined") {
+      window.location.href = "/login";
+    }
     const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
     throw new Error(err.error ?? `Request failed: ${res.status}`);
   }

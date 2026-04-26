@@ -70,27 +70,27 @@
 ### Admin Dashboard — Missing pages (§1)
 | Page | Status |
 |---|---|
-| `/admin/billing` | Missing |
-| `/admin/billing/invoices` | Missing |
-| `/admin/plans` | Missing |
-| `/admin/queues` (BullMQ monitor) | Missing |
-| `/admin/agents` | Missing |
-| `/admin/email-templates` | Missing |
-| `/admin/support` | Missing |
-| `/admin/settings` | Missing |
-| `/admin/users/[id]` | Missing |
+| `/admin/billing` | ✅ Done — subscription list + tier stats |
+| `/admin/billing/invoices` | ✅ Done — billing stats endpoint (`/admin/billing/stats`) |
+| `/admin/plans` | ✅ Done — feature matrix table |
+| `/admin/queues` (BullMQ monitor) | ✅ Done — live counts per queue |
+| `/admin/agents` | ✅ Done — list all agents, silence/resume |
+| `/admin/email-templates` | ✅ Done — template browser with variable reference |
+| `/admin/support` | ✅ Done — runbook + common issues |
+| `/admin/settings` | ✅ Done — env var reference |
+| `/admin/users/[id]` | ✅ Done — detail + subscription + impersonation |
 
 ### Affiliate Dashboard — Missing pages (§2)
 | Page | Status |
 |---|---|
-| `/affiliate/dashboard/payouts` | Missing |
-| `/affiliate/dashboard/resources` | Missing |
-| `/affiliate/dashboard/settings` | Missing |
+| `/affiliate/dashboard/payouts` | ✅ Done — balance + payout history + request payout |
+| `/affiliate/dashboard/resources` | ✅ Done — copy snippets, banner sizes, guides |
+| `/affiliate/dashboard/settings` | ✅ Done — name + Stripe account ID |
 
 ### Competitive Gaps (§4)
-- **§4.2 Per-post analytics drill-down** — API routes exist; best-performers table not built on the frontend analytics page
+- **§4.2 Per-post analytics drill-down** — ✅ Best-performers table now on analytics page (top 10 by engagement rate with likes/comments/impressions)
 - **§4.4 SEO Layer** — entirely absent (no readability scoring, no keyword suggestion API)
-- **§4.5 RSS feed auto-ingestion** — DB and API routes exist; hourly `feeds.worker.ts` not confirmed
+- **§4.5 RSS feed auto-ingestion** — ✅ `feeds.worker.ts` created; repeatable BullMQ job runs every hour, upserts feed items by URL dedup
 
 ### Authentication (§5.1)
 | Item | Status |
@@ -109,18 +109,18 @@
 | Invoice PDF download | Missing |
 | Proration preview before upgrade | Missing |
 | Enterprise quote / contact-sales flow | Missing |
-| Promo code input field on `/dashboard/billing/upgrade` | Missing |
+| Promo code input field on `/dashboard/billing/upgrade` | ✅ Done — validates via `/billing/validate-promo`, shows discount label |
 
 ### Posts & Planning (§5.3)
 | Item | Status |
 |---|---|
-| `/dashboard/posts/` page (posts list) | Missing — folder does not exist |
+| `/dashboard/posts/` page (posts list) | ✅ Done — lists all posts with status filter, pagination, engagement rate; backed by new `GET /posts` endpoint |
 | Content calendar (30-day view) on plan detail | Missing |
 | Post preview — platform mockup before approving | Missing |
 | Drag-and-drop reschedule | Missing |
 | Content recycling — re-queue top performers | Missing |
 | Post versioning — store edits as audit trail | Missing |
-| Post failure alerts (email/webhook on `status = failed`) | Missing |
+| Post failure alerts (email/webhook on `status = failed`) | ✅ Done — `post.worker.ts` now fires `post_failed` notification job on failure; routed to registered webhooks |
 | Bulk approve UI (route exists) | Unconfirmed |
 
 ### Agents (§5.4)

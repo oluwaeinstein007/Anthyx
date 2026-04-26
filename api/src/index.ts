@@ -38,9 +38,17 @@ app.use(
 );
 
 // ── Standard middleware ───────────────────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  process.env["DASHBOARD_URL"] ?? "http://localhost:3000",
+  process.env["ADMIN_URL"] ?? "http://localhost:3001",
+  process.env["AFFILIATE_URL"] ?? "http://localhost:3002",
+];
 app.use(
   cors({
-    origin: process.env["DASHBOARD_URL"] ?? "http://localhost:3000",
+    origin: (origin, callback) => {
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) callback(null, true);
+      else callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   }),
 );

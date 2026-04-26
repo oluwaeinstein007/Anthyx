@@ -5,20 +5,28 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard, Building2, Users, CreditCard, BarChart3,
   Tag, Flag, ListChecks, Inbox, LogOut, Shield, Handshake,
+  Bot, Layers, Activity, Mail, HeadphonesIcon, Settings,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
 const NAV = [
-  { label: "Overview",      href: "/dashboard",                  icon: LayoutDashboard },
-  { label: "Organizations", href: "/dashboard/organizations",    icon: Building2 },
-  { label: "Users",         href: "/dashboard/users",            icon: Users },
-  { label: "Subscriptions", href: "/dashboard/subscriptions",    icon: CreditCard },
-  { label: "Promo Codes",   href: "/dashboard/promo-codes",      icon: Tag },
-  { label: "Feature Flags", href: "/dashboard/feature-flags",    icon: Flag },
-  { label: "Affiliates",    href: "/dashboard/affiliates",       icon: Handshake },
-  { label: "Posts",         href: "/dashboard/posts",            icon: ListChecks },
-  { label: "Audit Log",     href: "/dashboard/audit-log",        icon: Inbox },
-  { label: "Analytics",     href: "/dashboard/analytics",        icon: BarChart3 },
+  { label: "Overview",        href: "/dashboard",                   icon: LayoutDashboard },
+  { label: "Organizations",   href: "/dashboard/organizations",     icon: Building2 },
+  { label: "Users",           href: "/dashboard/users",             icon: Users },
+  { label: "Subscriptions",   href: "/dashboard/subscriptions",     icon: CreditCard },
+  { label: "Billing",         href: "/dashboard/billing",           icon: CreditCard },
+  { label: "Plans",           href: "/dashboard/plans",             icon: Layers },
+  { label: "Promo Codes",     href: "/dashboard/promo-codes",       icon: Tag },
+  { label: "Feature Flags",   href: "/dashboard/feature-flags",     icon: Flag },
+  { label: "Affiliates",      href: "/dashboard/affiliates",        icon: Handshake },
+  { label: "Agents",          href: "/dashboard/agents",            icon: Bot },
+  { label: "Posts",           href: "/dashboard/posts",             icon: ListChecks },
+  { label: "Queues",          href: "/dashboard/queues",            icon: Activity },
+  { label: "Email Templates", href: "/dashboard/email-templates",   icon: Mail },
+  { label: "Support",         href: "/dashboard/support",           icon: HeadphonesIcon },
+  { label: "Audit Log",       href: "/dashboard/audit-log",         icon: Inbox },
+  { label: "Analytics",       href: "/dashboard/analytics",         icon: BarChart3 },
+  { label: "Settings",        href: "/dashboard/settings",          icon: Settings },
 ];
 
 export function AdminSidebar() {

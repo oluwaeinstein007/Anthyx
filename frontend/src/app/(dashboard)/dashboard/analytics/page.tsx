@@ -3,17 +3,46 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import { BarChart3, Globe, TrendingUp } from "lucide-react";
+import { BarChart3, Globe, TrendingUp, Trophy, Heart, MessageSquare, Eye } from "lucide-react";
 
 interface AnalyticsData {
   totalPublished: number;
   byPlatform: Record<string, { posts: number; avgRate: number }>;
 }
 
+interface PostWithAnalytics {
+  id: string;
+  platform: string;
+  contentText: string;
+  publishedAt: string | null;
+  analytics: {
+    likes: number;
+    reposts: number;
+    comments: number;
+    impressions: number;
+    engagementRate: string | null;
+  } | null;
+}
+
+interface BestPostsResponse {
+  posts: PostWithAnalytics[];
+}
+
+const PLATFORM_EMOJI: Record<string, string> = {
+  x: "𝕏", instagram: "📸", linkedin: "💼", facebook: "📘",
+  tiktok: "🎵", discord: "💬", threads: "🧵", bluesky: "🦋",
+  mastodon: "🐘", youtube: "▶️", pinterest: "📌",
+};
+
 export default function AnalyticsPage() {
   const { data, isLoading } = useQuery<AnalyticsData>({
     queryKey: ["analytics"],
     queryFn: () => api.get<AnalyticsData>("/analytics"),
+  });
+
+  const { data: bestPosts } = useQuery<BestPostsResponse>({
+    queryKey: ["analytics-best-posts"],
+    queryFn: () => api.get<BestPostsResponse>("/analytics/posts?limit=10"),
   });
 
   if (isLoading) {
@@ -119,6 +148,68 @@ export default function AnalyticsPage() {
               </BarChart>
             </ResponsiveContainer>
           </div>
+
+          {/* Best performers table */}
+          {(bestPosts?.posts?.length ?? 0) > 0 && (
+            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+              <div className="flex items-center gap-2 px-6 py-4 border-b border-gray-100">
+                <Trophy className="w-4 h-4 text-amber-500" />
+                <h2 className="text-sm font-semibold text-gray-900">Top performing posts</h2>
+              </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">#</th>
+                    <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Post</th>
+                    <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Platform</th>
+                    <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
+                      <div className="flex items-center gap-1"><Heart className="w-3 h-3" />Likes</div>
+                    </th>
+                    <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
+                      <div className="flex items-center gap-1"><MessageSquare className="w-3 h-3" />Comments</div>
+                    </th>
+                    <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
+                      <div className="flex items-center gap-1"><Eye className="w-3 h-3" />Impressions</div>
+                    </th>
+                    <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Engagement</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bestPosts!.posts.map((post, i) => {
+                    const rate = post.analytics?.engagementRate
+                      ? `${(parseFloat(post.analytics.engagementRate) * 100).toFixed(2)}%`
+                      : "—";
+                    return (
+                      <tr key={post.id} className="border-b border-gray-100 last:border-0">
+                        <td className="px-6 py-3">
+                          <span className={`text-xs font-bold ${i === 0 ? "text-amber-500" : i === 1 ? "text-gray-400" : i === 2 ? "text-orange-400" : "text-gray-300"}`}>
+                            #{i + 1}
+                          </span>
+                        </td>
+                        <td className="px-6 py-3 max-w-xs">
+                          <p className="text-gray-900 line-clamp-2 text-sm">{post.contentText}</p>
+                          {post.publishedAt && (
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {new Date(post.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-6 py-3 capitalize text-gray-600">
+                          {PLATFORM_EMOJI[post.platform] ?? ""} {post.platform}
+                        </td>
+                        <td className="px-6 py-3 text-gray-700">{post.analytics?.likes?.toLocaleString() ?? "—"}</td>
+                        <td className="px-6 py-3 text-gray-700">{post.analytics?.comments?.toLocaleString() ?? "—"}</td>
+                        <td className="px-6 py-3 text-gray-700">{post.analytics?.impressions?.toLocaleString() ?? "—"}</td>
+                        <td className="px-6 py-3">
+                          <span className="font-semibold text-green-600">{rate}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>

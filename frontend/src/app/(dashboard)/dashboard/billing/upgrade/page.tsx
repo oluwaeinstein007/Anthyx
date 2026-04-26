@@ -5,18 +5,109 @@ import { useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PLAN_TIER_CONFIGS } from "@anthyx/types";
 import { useSearchParams } from "next/navigation";
-import { Check, Zap } from "lucide-react";
+import { Check, Zap, Tag, CheckCircle2, XCircle } from "lucide-react";
+
+interface PromoValidation {
+  valid: boolean;
+  discountType: string;
+  discountValue: number;
+  applicableTiers: string[] | null;
+}
+
+function PromoCodeInput({ tier, onApplied }: { tier: string | null; onApplied: (promo: PromoValidation | null) => void }) {
+  const [code, setCode] = useState("");
+  const [result, setResult] = useState<PromoValidation | null>(null);
+  const [error, setError] = useState("");
+  const [checking, setChecking] = useState(false);
+
+  async function handleApply() {
+    if (!code.trim()) return;
+    setChecking(true);
+    setError("");
+    setResult(null);
+    try {
+      const r = await api.post<PromoValidation>("/billing/validate-promo", { code: code.trim(), tier: tier ?? undefined });
+      setResult(r);
+      onApplied(r);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Invalid code";
+      setError(msg);
+      onApplied(null);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  function handleClear() {
+    setCode("");
+    setResult(null);
+    setError("");
+    onApplied(null);
+  }
+
+  const discountLabel = result
+    ? result.discountType === "percent"
+      ? `${result.discountValue}% off`
+      : `$${(result.discountValue / 100).toFixed(2)} off`
+    : null;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1 max-w-xs">
+          <Tag className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Promo code"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            onKeyDown={(e) => e.key === "Enter" && handleApply()}
+            disabled={!!result}
+            className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-400 disabled:bg-gray-50 disabled:text-gray-400 font-mono uppercase"
+          />
+        </div>
+        {result ? (
+          <button onClick={handleClear} className="flex items-center gap-1 px-3 py-2 text-sm text-red-500 hover:text-red-700 transition-colors">
+            <XCircle className="w-4 h-4" /> Remove
+          </button>
+        ) : (
+          <button
+            onClick={handleApply}
+            disabled={!code.trim() || checking}
+            className="px-4 py-2 text-sm bg-gray-900 hover:bg-gray-800 text-white rounded-xl disabled:opacity-50 font-medium transition-colors"
+          >
+            {checking ? "Checking…" : "Apply"}
+          </button>
+        )}
+      </div>
+      {result && (
+        <div className="flex items-center gap-1.5 text-sm text-green-600 font-medium">
+          <CheckCircle2 className="w-4 h-4" />
+          Code applied — {discountLabel}
+        </div>
+      )}
+      {error && <p className="text-sm text-red-500">{error}</p>}
+    </div>
+  );
+}
 
 const UPGRADEABLE_TIERS = ["starter", "growth", "agency", "scale"] as const;
 
 function UpgradePageInner() {
   const [billingInterval, setBillingInterval] = useState<"monthly" | "annual">("monthly");
+  const [appliedPromo, setAppliedPromo] = useState<PromoValidation | null>(null);
+  const [selectedTier, setSelectedTier] = useState<string | null>(null);
   const searchParams = useSearchParams();
   const cancelled = searchParams.get("cancelled");
 
   const subscribe = useMutation({
     mutationFn: ({ tier, interval }: { tier: string; interval: string }) =>
-      api.post<{ checkoutUrl: string }>("/billing/subscribe", { tier, interval, provider: "paystack" }),
+      api.post<{ checkoutUrl: string }>("/billing/subscribe", {
+        tier,
+        interval,
+        provider: "paystack",
+        promoCode: appliedPromo ? undefined : undefined,
+      }),
     onSuccess: (data) => { window.location.href = data.checkoutUrl; },
   });
 
@@ -111,7 +202,7 @@ function UpgradePageInner() {
               </ul>
 
               <button
-                onClick={() => subscribe.mutate({ tier, interval: billingInterval })}
+                onClick={() => { setSelectedTier(tier); subscribe.mutate({ tier, interval: billingInterval }); }}
                 disabled={subscribe.isPending}
                 className={`w-full py-2.5 text-sm font-semibold rounded-xl transition-colors disabled:opacity-50 ${
                   isPopular
@@ -119,11 +210,30 @@ function UpgradePageInner() {
                     : "bg-gray-900 hover:bg-gray-800 text-white"
                 }`}
               >
-                {subscribe.isPending ? "Redirecting…" : `Get ${config.displayName}`}
+                {subscribe.isPending && selectedTier === tier ? "Redirecting…" : `Get ${config.displayName}`}
               </button>
             </div>
           );
         })}
+      </div>
+
+      {/* Promo code */}
+      <div className="border-t border-gray-100 pt-6">
+        <p className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-1.5">
+          <Tag className="w-4 h-4 text-gray-400" />
+          Have a promo code?
+        </p>
+        <PromoCodeInput tier={selectedTier} onApplied={setAppliedPromo} />
+        {appliedPromo && (
+          <p className="text-xs text-gray-500 mt-2">
+            Discount will be applied at checkout.
+            {appliedPromo.applicableTiers && appliedPromo.applicableTiers.length > 0 && (
+              <span className="ml-1">
+                Valid for: {appliedPromo.applicableTiers.join(", ")}
+              </span>
+            )}
+          </p>
+        )}
       </div>
 
       <p className="text-xs text-gray-400 text-center">

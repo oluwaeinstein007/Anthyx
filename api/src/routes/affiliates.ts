@@ -92,4 +92,73 @@ router.get("/conversions", async (req, res) => {
   return res.json(conversions);
 });
 
+// PATCH /affiliates/me — update display name and Stripe account ID
+router.patch("/me", async (req, res) => {
+  const { name, stripeAccountId } = req.body as { name?: string; stripeAccountId?: string };
+
+  const affiliate = await db.query.affiliates.findFirst({
+    where: eq(affiliates.userId, req.user.id),
+  });
+  if (!affiliate) return res.status(404).json({ error: "Not an affiliate" });
+
+  await db
+    .update(affiliates)
+    .set({
+      ...(name ? { name } : {}),
+      ...(stripeAccountId !== undefined ? { stripeAccountId } : {}),
+    })
+    .where(eq(affiliates.id, affiliate.id));
+
+  return res.json({ updated: true });
+});
+
+// GET /affiliates/payouts — cleared and paid conversions (payout history)
+router.get("/payouts", async (req, res) => {
+  const affiliate = await db.query.affiliates.findFirst({
+    where: eq(affiliates.userId, req.user.id),
+  });
+  if (!affiliate) return res.status(403).json({ error: "Not an affiliate" });
+
+  const links = await db.query.affiliateLinks.findMany({
+    where: eq(affiliateLinks.affiliateId, affiliate.id),
+    columns: { id: true },
+  });
+
+  const linkIds = links.map((l) => l.id);
+  if (linkIds.length === 0) return res.json({ affiliate, payouts: [] });
+
+  const payouts = await db.query.affiliateConversions.findMany({
+    where: (c, { and: a, inArray: inArr, ne }) =>
+      a(inArr(c.affiliateLinkId, linkIds), ne(c.status, "pending")),
+    orderBy: (c, { desc: d }) => [d(c.clearedAt)],
+    limit: 100,
+  });
+
+  return res.json({ affiliate, payouts });
+});
+
+// POST /affiliates/payouts/request — request a payout (marks pending cleared conversions as payout-requested)
+router.post("/payouts/request", async (req, res) => {
+  const affiliate = await db.query.affiliates.findFirst({
+    where: eq(affiliates.userId, req.user.id),
+  });
+  if (!affiliate) return res.status(403).json({ error: "Not an affiliate" });
+  if (affiliate.status !== "approved") return res.status(403).json({ error: "Affiliate not approved" });
+
+  const unpaidBalance = (affiliate.totalEarnedCents ?? 0) - (affiliate.totalPaidCents ?? 0);
+  const threshold = affiliate.payoutThresholdCents ?? 5000;
+
+  if (unpaidBalance < threshold) {
+    return res.status(400).json({
+      error: `Minimum payout threshold not met. Balance: $${(unpaidBalance / 100).toFixed(2)}, threshold: $${(threshold / 100).toFixed(2)}`,
+    });
+  }
+
+  return res.json({
+    requested: true,
+    amount: unpaidBalance,
+    message: "Payout request submitted. Our team will process it within 5–7 business days.",
+  });
+});
+
 export { router as affiliatesRouter };

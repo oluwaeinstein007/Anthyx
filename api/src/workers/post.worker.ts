@@ -151,6 +151,10 @@ const worker = new Worker<PostJobData>(
 
 worker.on("failed", async (job, err) => {
   if (job) {
+    const post = await db.query.scheduledPosts.findFirst({
+      where: eq(scheduledPosts.id, job.data.postId),
+    });
+
     await db
       .update(scheduledPosts)
       .set({
@@ -159,6 +163,19 @@ worker.on("failed", async (job, err) => {
         updatedAt: new Date(),
       })
       .where(eq(scheduledPosts.id, job.data.postId));
+
+    if (post) {
+      await notificationQueue.add("post-failed", {
+        organizationId: post.organizationId,
+        type: "post_failed",
+        payload: {
+          postId: job.data.postId,
+          platform: post.platform,
+          scheduledAt: post.scheduledAt,
+          error: err.message,
+        },
+      });
+    }
   }
 });
 

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, sql } from "drizzle-orm";
 import { db } from "../db/client";
 import {
   organizations,
@@ -9,8 +9,17 @@ import {
   promoCodes,
   featureFlags,
   affiliates,
+  agents,
 } from "../db/schema";
 import { auth, issueToken } from "../middleware/auth";
+import {
+  postExecutionQueue,
+  planGenerationQueue,
+  contentGenerationQueue,
+  analyticsQueue,
+  ingestorQueue,
+  notificationQueue,
+} from "../queue/client";
 
 const router = Router();
 
@@ -270,6 +279,123 @@ router.get("/posts", async (req, res) => {
     limit: 100,
   });
   return res.json(posts);
+});
+
+// ── Billing (admin view) ───────────────────────────────────────────────────────
+
+// GET /admin/billing — list all subscriptions with org info
+router.get("/billing", async (_req, res) => {
+  const subs = await db.query.subscriptions.findMany({
+    orderBy: [desc(subscriptions.createdAt)],
+    limit: 200,
+  });
+
+  // Attach org names
+  const orgIds = [...new Set(subs.map((s) => s.organizationId))];
+  const orgs = orgIds.length > 0
+    ? await db.query.organizations.findMany({
+        where: (o, { inArray }) => inArray(o.id, orgIds),
+      })
+    : [];
+
+  const orgMap = new Map(orgs.map((o) => [o.id, o]));
+
+  const result = subs.map((s) => ({
+    ...s,
+    organization: orgMap.get(s.organizationId) ?? null,
+  }));
+
+  return res.json(result);
+});
+
+// GET /admin/billing/invoices — aggregate billing stats
+router.get("/billing/stats", async (_req, res) => {
+  const [total, byTier] = await Promise.all([
+    db.select({ count: sql<number>`count(*)` }).from(subscriptions),
+    db
+      .select({ tier: subscriptions.tier, count: sql<number>`count(*)` })
+      .from(subscriptions)
+      .groupBy(subscriptions.tier),
+  ]);
+
+  return res.json({ total: total[0]?.count ?? 0, byTier });
+});
+
+// ── Queues (BullMQ) ────────────────────────────────────────────────────────────
+
+// GET /admin/queues — BullMQ queue health stats
+router.get("/queues", async (_req, res) => {
+  const queueDefs = [
+    { name: "post-execution", queue: postExecutionQueue },
+    { name: "plan-generation", queue: planGenerationQueue },
+    { name: "content-generation", queue: contentGenerationQueue },
+    { name: "analytics", queue: analyticsQueue },
+    { name: "ingestor", queue: ingestorQueue },
+    { name: "notifications", queue: notificationQueue },
+  ];
+
+  const stats = await Promise.all(
+    queueDefs.map(async ({ name, queue }) => {
+      const [waiting, active, completed, failed, delayed] = await Promise.all([
+        queue.getWaitingCount(),
+        queue.getActiveCount(),
+        queue.getCompletedCount(),
+        queue.getFailedCount(),
+        queue.getDelayedCount(),
+      ]);
+      return { name, waiting, active, completed, failed, delayed };
+    }),
+  );
+
+  return res.json(stats);
+});
+
+// ── Agents (admin view) ────────────────────────────────────────────────────────
+
+// GET /admin/agents — list all agents across all orgs
+router.get("/agents", async (req, res) => {
+  const { orgId } = req.query as { orgId?: string };
+
+  const allAgents = orgId
+    ? await db.query.agents.findMany({
+        where: eq(agents.organizationId, orgId),
+        orderBy: [desc(agents.createdAt)],
+        limit: 100,
+      })
+    : await db.query.agents.findMany({
+        orderBy: [desc(agents.createdAt)],
+        limit: 200,
+      });
+
+  // Attach org names
+  const orgIds = [...new Set(allAgents.map((a) => a.organizationId))];
+  const orgs = orgIds.length > 0
+    ? await db.query.organizations.findMany({
+        where: (o, { inArray }) => inArray(o.id, orgIds),
+      })
+    : [];
+  const orgMap = new Map(orgs.map((o) => [o.id, o.name]));
+
+  return res.json(allAgents.map((a) => ({ ...a, organizationName: orgMap.get(a.organizationId) ?? null })));
+});
+
+// PUT /admin/agents/:id/silence
+router.put("/agents/:id/silence", async (req, res) => {
+  const { reason } = req.body as { reason?: string };
+  await db
+    .update(agents)
+    .set({ isActive: false, silencedAt: new Date(), silenceReason: reason ?? "Silenced by admin", updatedAt: new Date() })
+    .where(eq(agents.id, req.params.id!));
+  return res.json({ silenced: true });
+});
+
+// PUT /admin/agents/:id/resume
+router.put("/agents/:id/resume", async (req, res) => {
+  await db
+    .update(agents)
+    .set({ isActive: true, silencedAt: null, silenceReason: null, updatedAt: new Date() })
+    .where(eq(agents.id, req.params.id!));
+  return res.json({ resumed: true });
 });
 
 export { router as adminRouter };

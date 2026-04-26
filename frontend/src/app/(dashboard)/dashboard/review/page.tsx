@@ -88,6 +88,7 @@ export default function ReviewQueuePage() {
   const [imagePromptId, setImagePromptId] = useState<string | null>(null);
   const [editPrompt, setEditPrompt] = useState("");
   const [imageError, setImageError] = useState<string | null>(null);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
 
   const queryParams = new URLSearchParams();
   if (filterBrand) queryParams.set("brandProfileId", filterBrand);
@@ -146,6 +147,21 @@ export default function ReviewQueuePage() {
       setImageError(err instanceof Error ? err.message : "Image generation failed.");
     },
   });
+
+  async function uploadMedia(postId: string, file: File) {
+    setUploadingId(postId);
+    setImageError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      await api.upload(`/posts/${postId}/upload-media`, form);
+      qc.invalidateQueries({ queryKey: ["posts-review"] });
+    } catch (err) {
+      setImageError(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setUploadingId(null);
+    }
+  }
 
   const toggleSelect = (id: string) =>
     setSelectedIds((prev) => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
@@ -494,13 +510,25 @@ export default function ReviewQueuePage() {
                           </button>
                           <button
                             onClick={() => generateImage.mutate({ id: post.id })}
-                            disabled={generateImage.isPending}
+                            disabled={generateImage.isPending || uploadingId === post.id}
                             className="flex items-center gap-1 px-2 py-1 text-xs text-purple-600 hover:text-purple-800 bg-white border border-purple-200 rounded-lg hover:bg-purple-50 transition-colors disabled:opacity-50"
                             title="Generate image from prompt"
                           >
                             <Image className="w-3 h-3" />
                             {generateImage.isPending ? "…" : "Generate"}
                           </button>
+                          <label
+                            className="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 hover:text-gray-800 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer"
+                            title="Upload your own image or video"
+                          >
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime"
+                              className="hidden"
+                              onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMedia(post.id, f); e.target.value = ""; }}
+                            />
+                            {uploadingId === post.id ? "…" : "Upload"}
+                          </label>
                         </div>
                       </div>
                     )}

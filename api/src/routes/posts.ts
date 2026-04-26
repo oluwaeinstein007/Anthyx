@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { eq, and, inArray, type SQL } from "drizzle-orm";
+import multer from "multer";
 import { db } from "../db/client";
 import { scheduledPosts, postAnalytics, abTests } from "../db/schema";
 import { auth } from "../middleware/auth";
@@ -16,6 +17,45 @@ import { schedulePostJob } from "../queue/jobs";
 import { generateAbVariants, evaluateAndPromoteWinner } from "../services/agent/ab-tester";
 
 const router = Router();
+const mediaUpload = multer({ dest: "/tmp/anthyx-uploads/", limits: { fileSize: 50 * 1024 * 1024 } });
+
+// GET /posts — list all posts for the org
+// Query params: status, platform, brandProfileId, limit, offset
+router.get("/", auth, async (req, res) => {
+  const { status, platform, brandProfileId, limit: limitStr, offset: offsetStr } = req.query as Record<string, string | undefined>;
+  const limit = Math.min(parseInt(limitStr ?? "50"), 200);
+  const offset = parseInt(offsetStr ?? "0");
+
+  const filters: SQL[] = [eq(scheduledPosts.organizationId, req.user.orgId)];
+  if (status) filters.push(eq(scheduledPosts.status, status as never));
+  if (platform) filters.push(eq(scheduledPosts.platform, platform as never));
+  if (brandProfileId) filters.push(eq(scheduledPosts.brandProfileId, brandProfileId));
+
+  const posts = await db.query.scheduledPosts.findMany({
+    where: and(...filters),
+    orderBy: (p, { desc: d }) => [d(p.scheduledAt)],
+    limit,
+    offset,
+  });
+
+  const postIds = posts.map((p) => p.id);
+  const analyticsData =
+    postIds.length > 0
+      ? await db.query.postAnalytics.findMany({
+          where: inArray(postAnalytics.postId, postIds),
+        })
+      : [];
+
+  return res.json({
+    posts: posts.map((p) => ({
+      ...p,
+      analytics: analyticsData.find((a) => a.postId === p.id) ?? null,
+    })),
+    total: posts.length,
+    limit,
+    offset,
+  });
+});
 
 // GET /posts/review — posts pending human review, with filter support
 // Query params: brandProfileId, platform, contentType, limit, offset
@@ -68,9 +108,14 @@ router.get("/review/buffer", auth, async (req, res) => {
 
 // PUT /posts/:id
 router.put("/:id", auth, validate(UpdatePostSchema), async (req, res) => {
+  const { scheduledAt, ...rest } = req.body as { scheduledAt?: string; contentText?: string; contentHashtags?: string[] };
   const [updated] = await db
     .update(scheduledPosts)
-    .set({ ...req.body, updatedAt: new Date() })
+    .set({
+      ...rest,
+      ...(scheduledAt !== undefined && { scheduledAt: new Date(scheduledAt) }),
+      updatedAt: new Date(),
+    })
     .where(
       and(
         eq(scheduledPosts.id, req.params.id!),
@@ -274,35 +319,81 @@ router.post("/ab-tests/:abTestId/promote", auth, async (req, res) => {
 
 // POST /posts/:id/regenerate-image — regenerate AI image for a draft/pending post
 router.post("/:id/regenerate-image", auth, async (req, res) => {
-  const post = await db.query.scheduledPosts.findFirst({
-    where: and(
-      eq(scheduledPosts.id, req.params.id!),
-      eq(scheduledPosts.organizationId, req.user.orgId),
-    ),
-  });
-  if (!post) return res.status(404).json({ error: "Not found" });
-  if (!["draft", "pending_review"].includes(post.status!)) {
-    return res.status(400).json({ error: "Can only regenerate image for draft or pending_review posts" });
+  try {
+    const post = await db.query.scheduledPosts.findFirst({
+      where: and(
+        eq(scheduledPosts.id, req.params.id!),
+        eq(scheduledPosts.organizationId, req.user.orgId),
+      ),
+    });
+    if (!post) return res.status(404).json({ error: "Not found" });
+    if (!["draft", "pending_review"].includes(post.status!)) {
+      return res.status(400).json({ error: "Can only regenerate image for draft or pending_review posts" });
+    }
+
+    const prompt = (req.body as { prompt?: string }).prompt ?? post.suggestedMediaPrompt;
+    if (!prompt) return res.status(400).json({ error: "No media prompt — provide one in the request body" });
+
+    const { generateAssetForPost } = await import("../services/assets/generator");
+    const mediaUrl = await generateAssetForPost({
+      contentText: post.contentText ?? "",
+      suggestedMediaPrompt: prompt,
+      assetTrack: "ai",
+    });
+
+    if (!mediaUrl) return res.status(500).json({ error: "Image generation returned no result" });
+
+    await db
+      .update(scheduledPosts)
+      .set({ mediaUrls: [mediaUrl], suggestedMediaPrompt: prompt, updatedAt: new Date() })
+      .where(eq(scheduledPosts.id, post.id));
+
+    return res.json({ mediaUrl });
+  } catch (err) {
+    console.error("[regenerate-image]", err);
+    const message = err instanceof Error ? err.message : "Image generation failed";
+    return res.status(500).json({ error: message });
   }
+});
 
-  const prompt = (req.body as { prompt?: string }).prompt ?? post.suggestedMediaPrompt;
-  if (!prompt) return res.status(400).json({ error: "No media prompt — provide one in the request body" });
+// POST /posts/:id/upload-media — upload user-provided image/video as post media
+router.post("/:id/upload-media", auth, mediaUpload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file provided" });
 
-  const { generateAssetForPost } = await import("../services/assets/generator");
-  const mediaUrl = await generateAssetForPost({
-    contentText: post.contentText,
-    suggestedMediaPrompt: prompt,
-    assetTrack: "ai",
-  });
+    const allowed = ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/quicktime"];
+    if (!allowed.includes(req.file.mimetype)) {
+      return res.status(400).json({ error: "Unsupported file type. Allowed: JPEG, PNG, GIF, WebP, MP4, MOV" });
+    }
 
-  if (!mediaUrl) return res.status(500).json({ error: "Image generation returned no result" });
+    const post = await db.query.scheduledPosts.findFirst({
+      where: and(
+        eq(scheduledPosts.id, req.params.id!),
+        eq(scheduledPosts.organizationId, req.user.orgId),
+      ),
+    });
+    if (!post) return res.status(404).json({ error: "Not found" });
 
-  await db
-    .update(scheduledPosts)
-    .set({ mediaUrls: [mediaUrl], suggestedMediaPrompt: prompt, updatedAt: new Date() })
-    .where(eq(scheduledPosts.id, post.id));
+    const fs = await import("fs/promises");
+    const buffer = await fs.readFile(req.file.path);
+    await fs.unlink(req.file.path).catch(() => {});
 
-  return res.json({ mediaUrl });
+    const { uploadBufferToCDN } = await import("../services/assets/cdn");
+    const ext = req.file.mimetype.split("/")[1]!.replace("quicktime", "mov");
+    const filename = `assets/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+    const mediaUrl = await uploadBufferToCDN(buffer, req.file.mimetype, filename);
+
+    await db
+      .update(scheduledPosts)
+      .set({ mediaUrls: [mediaUrl], updatedAt: new Date() })
+      .where(eq(scheduledPosts.id, post.id));
+
+    return res.json({ mediaUrl });
+  } catch (err) {
+    console.error("[upload-media]", err);
+    const message = err instanceof Error ? err.message : "Upload failed";
+    return res.status(500).json({ error: message });
+  }
 });
 
 export { router as postsRouter };

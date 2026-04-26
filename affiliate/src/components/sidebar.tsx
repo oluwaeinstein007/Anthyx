@@ -2,14 +2,17 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutDashboard, Link2, TrendingUp, DollarSign, LogOut, Handshake } from "lucide-react";
+import { LayoutDashboard, Link2, TrendingUp, DollarSign, LogOut, Handshake, Wallet, BookOpen, Settings } from "lucide-react";
 import { api } from "@/lib/api";
 
 const NAV = [
-  { label: "Overview",    href: "/dashboard",             icon: LayoutDashboard },
-  { label: "Links",       href: "/dashboard/links",       icon: Link2 },
-  { label: "Conversions", href: "/dashboard/conversions", icon: TrendingUp },
-  { label: "Earnings",    href: "/dashboard/earnings",    icon: DollarSign },
+  { label: "Overview",    href: "/dashboard",              icon: LayoutDashboard },
+  { label: "Links",       href: "/dashboard/links",        icon: Link2 },
+  { label: "Conversions", href: "/dashboard/conversions",  icon: TrendingUp },
+  { label: "Earnings",    href: "/dashboard/earnings",     icon: DollarSign },
+  { label: "Payouts",     href: "/dashboard/payouts",      icon: Wallet },
+  { label: "Resources",   href: "/dashboard/resources",    icon: BookOpen },
+  { label: "Settings",    href: "/dashboard/settings",     icon: Settings },
 ];
 
 export function AffiliateSidebar() {

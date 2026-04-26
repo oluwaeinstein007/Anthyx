@@ -26,6 +26,22 @@ async function request<T>(
   return res.json() as Promise<T>;
 }
 
+async function upload<T>(path: string, body: FormData): Promise<T> {
+  const res = await fetch(`${API_URL}/v1${path}`, {
+    method: "POST",
+    credentials: "include",
+    body,
+    // No Content-Type header — browser sets it automatically with multipart boundary
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
+    throw new Error(error.error ?? `Upload failed: ${res.status}`);
+  }
+
+  return res.json() as Promise<T>;
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>
@@ -35,4 +51,5 @@ export const api = {
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  upload: <T>(path: string, body: FormData) => upload<T>(path, body),
 };

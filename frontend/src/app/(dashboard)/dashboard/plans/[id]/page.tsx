@@ -118,6 +118,7 @@ export default function PlanDetailPage() {
   const [editHashtags, setEditHashtags] = useState("");
   const [editScheduledAt, setEditScheduledAt] = useState("");
   const [postSaveError, setPostSaveError] = useState<string | null>(null);
+  const [uploadingPostId, setUploadingPostId] = useState<string | null>(null);
 
   // List view state
   const [listPage, setListPage] = useState(0);
@@ -216,6 +217,21 @@ export default function PlanDetailPage() {
     setEditScheduledAt(
       `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
     );
+  }
+
+  async function uploadPostMedia(postId: string, file: File) {
+    setUploadingPostId(postId);
+    setPostSaveError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      await api.upload(`/posts/${postId}/upload-media`, form);
+      qc.invalidateQueries({ queryKey: ["plan", id] });
+    } catch (err) {
+      setPostSaveError(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setUploadingPostId(null);
+    }
   }
 
   function saveEditPost(postId: string) {
@@ -716,6 +732,18 @@ export default function PlanDetailPage() {
                               onChange={(e) => setEditScheduledAt(e.target.value)}
                               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                             />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">Media (image / video)</label>
+                            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 cursor-pointer transition-colors">
+                              <input
+                                type="file"
+                                accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime"
+                                className="hidden"
+                                onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPostMedia(post.id, f); e.target.value = ""; }}
+                              />
+                              {uploadingPostId === post.id ? "Uploading…" : "Upload image / video"}
+                            </label>
                           </div>
                           {postSaveError && (
                             <p className="text-xs text-red-600 flex items-center gap-1">
