@@ -133,6 +133,92 @@ Seed the following accounts with password `12345678` (marked `must_change_passwo
 
 ---
 
+## Brand & Brand Ingestion
+
+### Brand List Page
+- Show a richer brand card: brand logo/avatar, platform icons for connected accounts, last-activity timestamp ("last post 2 days ago")
+- Add search and filter controls (by industry, tone, creation date) for users managing many brands
+- Quick-stat strip on each card: total posts generated, pending review count, engagement score
+- Allow drag-to-reorder so users can prioritise their primary brand
+- "Duplicate brand" action — spin up a new brand pre-filled from an existing one, useful for sub-brands or regional variants
+- Archive / unarchive instead of hard delete, with a confirmation modal
+
+### Brand Profile Page (Detail View)
+- **Logo / avatar upload** — replace the generic icon with an upload or AI-generate option
+- **Brand health score** — a computed badge (e.g. 78 / 100) based on profile completeness (voice, pillars, audience, knowledge, identity) with a checklist of what's missing
+- **Platform connections panel** — show which social accounts are linked, their connection status, and a "Connect" CTA for unlinked platforms
+- **Edit mode** — a single "Edit brand" flow that opens all sections in one form with save / cancel, rather than scattered inline edits
+- **Version history** — track changes to voice, tone, and positioning over time with the ability to roll back to a previous version
+- **Brand activity feed** — timeline of recent events: posts generated, documents ingested, tone updates, campaigns started
+- **Export brand profile** — download a PDF or JSON snapshot for sharing with a team or agency
+- **Duplicate / clone** — accessible from the profile header, same as the list-page action
+
+### New Brand Attributes to Add
+
+#### Brand Identity
+- **Logo** — upload primary logo, alternate logo, and favicon; store light and dark variants
+- **Color palette** — primary, secondary, and accent colors with hex codes; auto-extract from uploaded logo or ingested docs (the ingest description already says this is extracted — surface it visibly in the profile)
+- **Typography** — primary and secondary font names; heading vs. body font distinction
+- **Tagline / slogan** — short phrase used across all content
+- **Brand emojis** — a curated set the brand uses consistently across platforms
+
+#### Brand Story & Values
+- **Mission statement** — what the brand does and for whom
+- **Vision statement** — the long-term ambition
+- **Core values** — tag-based list (e.g. Transparency, Innovation, Community) with a one-line description per value
+- **Brand origin story** — a short paragraph about how and why the brand was started; used to humanise AI-generated content
+- **Brand stage** — Idea / Startup / Growth / Established / Enterprise; helps AI calibrate tone and confidence level
+
+#### Content Strategy
+- **Content do's and don'ts** — explicit rules the AI must follow (e.g. "never use corporate jargon", "always include a CTA")
+- **Banned words / phrases** — a blocklist the AI is prohibited from using
+- **Call-to-action preferences** — preferred CTAs per platform (e.g. "Follow for more" on Instagram, "Subscribe" on LinkedIn)
+- **Hashtag strategy** — brand hashtags, campaign hashtags, and community hashtags; mark each as always-use, rotate, or avoid
+- **Posting language(s)** — primary language and any secondary languages for multilingual brands
+- **Content ratio** — preferred mix of educational / promotional / entertaining / conversational content (e.g. 40 / 20 / 30 / 10)
+
+#### Audience & Market
+- **Primary audience personas** — structured cards with name, age range, job title, pain points, goals, and platform preference
+- **Geographic focus** — countries or regions the brand targets; used to tailor references, currency, and cultural context
+- **Languages** — distinct from posting language; what language(s) the audience speaks
+- **Competitor shortlist** — a lightweight list of 3–5 key competitors linked directly to the Competitive Intelligence workspace
+
+#### Social & Contact
+- **Social handles** — per-platform handles stored in one place (Twitter/X, Instagram, LinkedIn, TikTok, YouTube, Threads)
+- **Website URL** — primary site; used as the default link-in-bio reference
+- **Brand email** — public-facing contact email used in email campaigns as the sender address
+
+### Voice & Tone Section
+- Allow users to add custom personality traits beyond predefined tags — free-text input with a suggestion dropdown
+- **Tone preview** — given current traits and descriptors, show an AI-generated sample paragraph so users can validate tone before generating real content
+- **Tone test** — paste any piece of existing content and get a score for how closely it matches the configured tone
+- **Competitor tone contrast** — compare this brand's configured tone against a tracked competitor's detected tone
+- **Voice examples** — let users paste 2–3 sample posts they love; the AI learns directly from these rather than just from abstract trait tags
+
+### Products & Services Section
+- Group products into categories (e.g. Core Offering, Add-ons, Coming Soon)
+- Attach a short description, target audience, and key benefit to each product tag
+- Link products to content pillars so the AI knows which pillar maps to which product
+- Mark products as active, discontinued, or beta so the AI doesn't promote the wrong ones
+
+### Brand Knowledge Section
+- Structured knowledge blocks beyond free-text audience notes: FAQs, objection handling, pricing rationale, case studies, brand story
+- **Knowledge gaps indicator** — AI flags topics that surface in generated content but have no supporting knowledge entry
+- Mark individual knowledge entries as "high priority" so the AI weights them more heavily
+- Set an expiry date on time-sensitive knowledge entries (e.g. a seasonal promotion) so they are automatically deprioritised after the date passes
+
+### Brand Ingestion (already has PDF / URL / TEXT — improvements needed)
+- **Ingestion progress indicator** — live status steps ("Parsing…", "Extracting voice signals…", "Updating brand memory…") instead of a silent background process
+- **Ingestion summary** — after each ingest, show a diff: what new facts were added, which existing facts were updated, what was ignored
+- **Multi-file upload** — batch upload multiple PDFs at once (style guides, past campaigns, product docs, competitor teardowns)
+- **Social post ingestion** — pull in the brand's existing posts from connected platforms as additional voice training data
+- **Ingestion history log** — table of all previously ingested sources (file name or URL, date, type) with the option to remove a source from memory
+- **Re-ingest / refresh** — re-upload an updated document and merge the delta rather than starting fresh
+- **Ingestion quality score** — confidence score per extracted attribute (voice, tone, audience, colors) so users know how much each document contributed
+- **Manual override** — after ingestion, let users review AI-extracted values and accept, edit, or reject individual facts before committing them to the brand profile
+
+---
+
 ## Affiliate Portal
 
 ### 1. Account Creation Flow
