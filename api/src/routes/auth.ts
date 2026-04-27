@@ -1,13 +1,15 @@
 import { Router } from "express";
-import { eq } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
 import { db } from "../db/client";
-import { users, organizations, subscriptions } from "../db/schema";
+import { users, organizations, subscriptions, adminInvites } from "../db/schema";
 import { issueToken } from "../middleware/auth";
 import { redisConnection } from "../queue/client";
 import { z } from "zod";
 import { productConfig } from "@anthyx/config";
+
+const ANTHYX_INTERNAL_ORG_ID = "00000000-0000-0000-0000-000000000001";
 
 const RESET_TTL = 3600; // 1 hour
 
@@ -504,6 +506,81 @@ router.get("/google/callback", async (req, res) => {
     console.error("[AUTH] Google OAuth error:", err);
     return res.redirect(`${dashboardUrl}/login?error=oauth_failed`);
   }
+});
+
+// GET /auth/admin/invite — verify token is valid and return invite details (pre-flight)
+router.get("/admin/invite", async (req, res) => {
+  const { token } = req.query as { token?: string };
+  if (!token) return res.status(400).json({ error: "token is required" });
+
+  const invite = await db.query.adminInvites.findFirst({
+    where: and(eq(adminInvites.token, token), isNull(adminInvites.revokedAt)),
+  });
+
+  if (!invite) return res.status(404).json({ error: "Invite not found or revoked" });
+  if (invite.acceptedAt) return res.status(409).json({ error: "Invite already accepted" });
+  if (new Date() > invite.expiresAt) return res.status(410).json({ error: "Invite has expired" });
+
+  return res.json({ email: invite.email, role: invite.role, expiresAt: invite.expiresAt });
+});
+
+// POST /auth/admin/accept-invite — set password + create admin user from invite token
+router.post("/admin/accept-invite", async (req, res) => {
+  const { token, name, password } = req.body as { token?: string; name?: string; password?: string };
+
+  if (!token || !name || !password) {
+    return res.status(400).json({ error: "token, name, and password are required" });
+  }
+  if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+
+  const invite = await db.query.adminInvites.findFirst({
+    where: and(eq(adminInvites.token, token), isNull(adminInvites.revokedAt)),
+  });
+
+  if (!invite) return res.status(404).json({ error: "Invite not found or revoked" });
+  if (invite.acceptedAt) return res.status(409).json({ error: "Invite already accepted" });
+  if (new Date() > invite.expiresAt) return res.status(410).json({ error: "Invite has expired" });
+
+  // Check user doesn't already exist
+  const existing = await db.query.users.findFirst({ where: eq(users.email, invite.email) });
+  if (existing) return res.status(409).json({ error: "Account already exists for this email" });
+
+  const passwordHash = await bcrypt.hash(password, 10);
+
+  const [newUser] = await db
+    .insert(users)
+    .values({
+      organizationId: ANTHYX_INTERNAL_ORG_ID,
+      email: invite.email,
+      name,
+      passwordHash,
+      role: invite.role,
+      isSuperAdmin: true,
+      emailVerified: true,
+      mustChangePassword: false,
+    })
+    .returning();
+
+  // Mark invite as accepted
+  await db
+    .update(adminInvites)
+    .set({ acceptedAt: new Date() })
+    .where(eq(adminInvites.id, invite.id));
+
+  // Issue admin token
+  const adminToken = issueToken(
+    { id: newUser.id, email: newUser.email, orgId: ANTHYX_INTERNAL_ORG_ID, role: newUser.role },
+    "admin",
+  );
+
+  res.cookie("admin_token", adminToken, {
+    httpOnly: true,
+    secure: process.env["NODE_ENV"] === "production",
+    sameSite: "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+
+  return res.json({ user: { id: newUser.id, email: newUser.email, name: newUser.name, role: newUser.role } });
 });
 
 export { router as authRouter };

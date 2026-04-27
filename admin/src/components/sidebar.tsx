@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard, Building2, Users, CreditCard, BarChart3,
   Tag, Flag, ListChecks, Inbox, LogOut, Shield, Handshake,
-  Bot, Layers, Activity, Mail, HeadphonesIcon, Settings,
+  Bot, Layers, Activity, Mail, HeadphonesIcon, Settings, UserPlus,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
@@ -27,6 +27,7 @@ const NAV = [
   { label: "Audit Log",       href: "/dashboard/audit-log",         icon: Inbox },
   { label: "Analytics",       href: "/dashboard/analytics",         icon: BarChart3 },
   { label: "Settings",        href: "/dashboard/settings",          icon: Settings },
+  { label: "Team Invites",    href: "/dashboard/invites",           icon: UserPlus },
 ];
 
 export function AdminSidebar() {

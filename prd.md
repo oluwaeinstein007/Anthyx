@@ -1,7 +1,7 @@
 # Product Requirements Document
 
 **Product:** Anthyx (working title)
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Active Development
 **Last Updated:** 2026-04-27
 **Author:** Olanrewaju Sanni
@@ -28,11 +28,12 @@
    - 7.9 [Team Collaboration & RBAC](#79-team-collaboration--rbac)
    - 7.10 [Campaigns](#710-campaigns)
    - 7.11 [Content Repurposing](#711-content-repurposing)
-   - 7.12 [Email Marketing](#712-email-marketing)
+   - 7.12 [Email Marketing & Mailing Lists](#712-email-marketing--mailing-lists)
    - 7.13 [RSS Feed Integration](#713-rss-feed-integration)
    - 7.14 [Unified Inbox](#714-unified-inbox)
    - 7.15 [Webhooks & Integrations](#715-webhooks--integrations)
    - 7.16 [Reporting & Exports](#716-reporting--exports)
+   - 7.17 [Competitive Intelligence](#717-competitive-intelligence)
 8. [Admin Panel](#8-admin-panel)
 9. [Affiliate Program](#9-affiliate-program)
 10. [Billing & Pricing](#10-billing--pricing)
@@ -210,6 +211,15 @@ All long-running operations are processed asynchronously via BullMQ. No synchron
 
 All data is scoped to an `organizationId`. The Qdrant vector store uses per-brand collections named `brand_{brandProfileId}` and every query is filtered by `brandProfileId`, ensuring complete tenant isolation at the semantic search layer. PostgreSQL row-level data is scoped by `organizationId` throughout.
 
+### 6.5 Auth Token Architecture
+
+Anthyx issues JWTs with distinct `aud` claims to prevent cross-service token abuse:
+
+- `aud: "user"` — issued on regular user login; accepted by all `auth` middleware; rejected by `adminAuth`
+- `aud: "admin"` — issued on admin login and admin invite acceptance; accepted only by `adminAuth` middleware; rejected by all user-facing routes
+
+Tokens are stored in HTTP-only cookies (`auth_token` for users, `admin_token` for admins). Cookie names differ, ensuring no accidental cross-submission.
+
 ---
 
 ## 7. Core Feature Areas
@@ -222,28 +232,57 @@ A **Brand Profile** is the central configuration object in Anthyx. It stores eve
 
 | Category | Fields |
 |---|---|
-| Identity | Name, industry, logo URL, primary/secondary colors, typography (font stack) |
-| Voice & Tone | Voice traits (e.g., professional, witty, authoritative), tone descriptors (free text), content pillars |
-| Audience | Audience notes (free text), geographic focus, language |
-| Content Strategy | Competitors list, banner bear template UID for asset generation |
-| Knowledge | Embedded documents (source files metadata) |
+| **Identity** | Name, industry, logo URL, tagline, primary/secondary colors, typography (font stack), brand emojis, website URL, brand email |
+| **Brand Stage** | `idea` / `startup` / `growth` / `established` / `enterprise` |
+| **Brand Story & Values** | Mission statement, vision statement, core values (label + description pairs), origin story |
+| **Voice & Tone** | Voice traits (structured JSON), tone descriptors (string array), voice examples (positive training samples), content pillars |
+| **Content Strategy** | Content dos, content don'ts, banned words, CTA preferences per platform, hashtag strategy (always/rotate/avoid), posting languages, content mix ratios (educational/promotional/entertaining/conversational) |
+| **Audience & Market** | Audience personas (structured: name, age range, job title, pain points, goals, platforms), audience notes (free text), geographic focus, target market |
+| **Social & Contact** | Social handles per platform (Twitter, Instagram, LinkedIn, TikTok, YouTube, Threads), website URL, brand email |
+| **Knowledge** | Embedded documents (Qdrant), ingest history (source name, type, date, summary), brand context (statements, competitors, products, value proposition) |
+
+#### Brand Health Score
+
+Every brand profile displays a computed health score (0–100) based on the completeness of 14 key fields: industry, tagline, mission statement, vision statement, core values, voice traits, tone descriptors, voice examples, primary colors, content pillars, content guidelines, website URL, logo URL, and audience information. Missing fields are listed with guidance prompts to help users improve the score.
+
+#### Brand Lifecycle
+
+| Action | Behavior |
+|---|---|
+| **Archive** | Soft-archive via `archivedAt` timestamp; hidden from workspace by default; fully reversible |
+| **Unarchive** | Clears `archivedAt`; brand reappears in workspace |
+| **Duplicate** | Clones all profile fields (new name `"... (copy)"`); excludes ingest state and vector data; respects brand plan limits |
+| **Tone Preview** | AI (Gemini Flash) generates a sample 2–4 sentence social post demonstrating current voice config; regenerable on demand |
+
+#### Brand List Features
+
+- Search by name or industry
+- Filter by industry (auto-populated dropdown from existing brands)
+- Show/hide archived brands toggle
+- Per-card quick stats: total posts generated, pending review count, website link
+- Per-card actions: view profile, duplicate, archive/unarchive (with inline confirm)
+- Brand avatar: shows logo if available, else colored initials from primary brand color
 
 #### Brand Ingestion Pipeline
 
-Users can upload brand knowledge in three formats: PDF documents, plain text, or a URL (web page). The ingestion pipeline:
+Users can upload brand knowledge in three formats: multiple PDF files, plain text, or a URL. The ingestion pipeline:
 
-1. Parses the source into plain text (PDF via pdfparse; HTML via URL fetch)
-2. Calls Gemini 1.5 Flash for structured extraction: industry, voice traits, tone descriptors, colors, typography, brand statements, audience notes, content pillars, and competitor names
-3. Generates 768-dimensional vector embeddings via Gemini `text-embedding-004`
-4. Upserts embeddings into the brand's Qdrant collection with diff detection (incremental re-ingestion supported)
-5. Updates the brand profile record in PostgreSQL with extracted attributes
+1. Accepts up to 10 files simultaneously; queues one `anthyx-ingestor` job per file
+2. Parses the source into plain text (PDF via pdfparse; HTML via URL fetch; markdown passthrough)
+3. Emits real-time progress updates via `job.updateProgress()`: **Parsing → Extracting → Embedding → Done**
+4. Calls Gemini 1.5 Flash for structured extraction: industry, voice traits, tone descriptors, colors, typography, brand statements, audience notes, content pillars, and competitor names
+5. Generates 768-dimensional vector embeddings via Gemini `text-embedding-004`
+6. Upserts embeddings into the brand's Qdrant collection with diff detection (incremental re-ingestion supported)
+7. Updates the brand profile record in PostgreSQL with extracted attributes
+8. Appends an entry to `ingest_history` (JSONB array on brand profile): source type, source name, ingest timestamp, and summary
 
-All ingestion jobs are async (BullMQ `anthyx-ingestor` queue). The API returns `202 Accepted` immediately; the frontend polls for completion.
+The frontend ingestion page polls `GET /brands/:id/ingest-job/:jobId` every 2 seconds and renders a step-progress bar per job (Parse / Extract / Embed / Done). On completion, the ingestion history log is displayed with a collapsible history panel showing all previous ingestions.
 
 #### Limits
 
 - Max brands per organization: enforced per plan tier (1 on Sandbox/Starter, 3 on Growth, 15 on Agency, unlimited on Scale/Enterprise)
-- Brand deletion is permanent; archived state is a planned enhancement
+- Max files per ingest request: 10
+- Max file size: 50 MB per file
 
 ---
 
@@ -274,6 +313,7 @@ For each `PlanItem`, the Copywriter generates the final post content. Input incl
 
 - Persona name and diet instructions
 - Brand voice rules retrieved from Qdrant (semantic search, filtered by `brandProfileId`)
+- Veto learning context: recent vetoed post patterns and reasons fed back as negative examples
 - Platform-specific constraints (character limits, hashtag counts, markup rules)
 - Topic, hook, CTA from the Strategist output
 - Target locale for multilingual support (es-MX, fr-FR, pt-BR, etc.)
@@ -295,6 +335,10 @@ Output: `{ verdict: "pass" | "fail" | "rewrite", issues[], revisedContent, revis
 If the verdict is `rewrite`, the Reviewer provides a revised version and the cycle retries (max 2 retries). After 2 failed rewrites, the post status is set to `failed` and escalated to human review. A `pass` verdict advances the post to `pending_review` status.
 
 All three stages log every action to the `agent_logs` table with the full payload for auditability.
+
+#### Veto Learning
+
+When a user vetoes a post with a reason, the veto learner records the pattern (content type, tone, structure, reasoning) as a negative training signal. On subsequent Copywriter calls for the same brand, up to 5 recent veto patterns are injected as explicit negative examples in the system prompt. A **Quality Improvement** dashboard widget on the brand profile shows the trend: approval rate over time, most common veto reasons, and an improvement score computed over a configurable 30–180 day window.
 
 #### Agent Actions
 
@@ -340,10 +384,16 @@ generating → pending_review → active → completed
 
 ```
 draft → pending_review → approved → scheduled → published
-                      ↘ vetoed
+                      ↘ vetoed  ──→ approved  (reversible)
                       ↘ failed
                       ↘ silenced  (agent silenced after post was scheduled)
 ```
+
+Status transitions (e.g., `vetoed → approved`) are supported with a confirmation dialog and a mandatory reason field. All transitions are recorded in `post_status_logs` with `actorId`, `fromStatus`, `toStatus`, `reason`, and timestamp.
+
+#### Self-Created Posts
+
+Users can manually create posts alongside AI-generated ones. The manual post editor enforces per-platform constraints (character limits, hashtag count), allows scheduling with the same dispatch mechanism as AI-generated posts, and routes through the same HITL queue (unless auto-approved).
 
 #### Shadow-Ban Protection
 
@@ -363,6 +413,7 @@ The Human-in-the-Loop (HITL) review queue is the primary interface between the A
 | Inline editing | Edit `contentText`, `contentHashtags`, and `scheduledAt` directly in the review UI |
 | Approve | Moves post to `approved`; dispatches BullMQ job with ±3 min jitter |
 | Veto | Moves post to `vetoed`; requires a reason; creates `post_status_logs` entry |
+| Un-veto | Moves post from `vetoed` back to `approved`; confirmation dialog + reason required |
 | Bulk approve | Up to 50 posts in a single request; enforces plan limits |
 | Buffer view | Next 5 pending posts per agent, pre-loaded for batching |
 | Regenerate | Requeues copywriter + reviewer for a fresh generation attempt |
@@ -592,9 +643,19 @@ The repurpose feature takes a long-form blog article URL and transforms it into 
 
 ---
 
-### 7.12 Email Marketing
+### 7.12 Email Marketing & Mailing Lists
 
-Anthyx includes a lightweight email campaign module for organizations that want to send broadcast emails to their audience alongside their social content.
+Anthyx includes a lightweight email campaign module and subscriber list management for broadcast emails alongside social content.
+
+#### Mailing Lists
+
+| Feature | Description |
+|---|---|
+| Create lists | Named lists with optional description and tags |
+| Add subscribers | Single-add or bulk CSV import (email, first name, last name, tags) |
+| Subscriber status | `active` / `unsubscribed` per subscriber |
+| Segmentation | Filter by tags; merge lists; export to CSV |
+| Archive | Soft-archive lists without deleting subscriber history |
 
 #### Email Campaign Fields
 
@@ -604,7 +665,7 @@ Anthyx includes a lightweight email campaign module for organizations that want 
 | `previewText` | Preview text shown in inbox before opening |
 | `htmlBody` | Full HTML email body |
 | `plainText` | Plain text fallback |
-| `recipientList[]` | Array of recipient email addresses |
+| `recipientList[]` | Subscriber emails or mailing list ID |
 | `status` | draft → scheduled → sent |
 | `scheduledAt` | Scheduled send time |
 
@@ -616,6 +677,10 @@ Anthyx includes a lightweight email campaign module for organizations that want 
 | `POST /email-campaigns` | Create draft |
 | `PATCH /email-campaigns/:id` | Update campaign |
 | `POST /email-campaigns/:id/send` | Schedule send via Resend |
+| `GET /mailing-lists` | List subscriber lists |
+| `POST /mailing-lists` | Create list |
+| `POST /mailing-lists/:id/subscribers` | Add single subscriber |
+| `POST /mailing-lists/:id/import` | Bulk CSV import |
 
 ---
 
@@ -688,6 +753,46 @@ Reports include per-post metrics (content, platform, published date, likes, repo
 
 ---
 
+### 7.17 Competitive Intelligence
+
+A dedicated Competitive Intelligence workspace per brand provides AI-generated market analysis and competitor tracking.
+
+#### Competitor Management
+
+| Feature | Description |
+|---|---|
+| Track competitors | Add by name, URL, or social handle; classify as Direct / Indirect / Aspirational |
+| Platform detection | Auto-detect active social platforms per competitor |
+| Status tracking | Active / inactive / new classification |
+
+#### AI Analysis
+
+The `competitor-analyst` service generates structured competitive intelligence reports stored in `competitor_analyses`. Each analysis covers:
+
+| Section | Content |
+|---|---|
+| **Industry Overview** | Market size, growth rate, key trends, major players |
+| **Content Analysis** | Posting cadence, theme breakdown, format mix (video/image/text/carousel), best-performing types |
+| **Engagement Benchmarks** | Average metrics per competitor; follower growth trends |
+| **Gap Analysis** | Topics competitors don't cover; posting time gaps; hashtag and keyword opportunities |
+| **Share of Voice** | Industry conversation ownership breakdown by platform and date range |
+| **Sentiment Analysis** | Overall sentiment score per competitor; topic-level drill-down |
+
+Analyses are on-demand (triggered by user action) and cached per brand. Users can view historical analyses and compare snapshots over time.
+
+#### Competitive Intelligence API
+
+| Endpoint | Description |
+|---|---|
+| `GET /competitive/:brandId/competitors` | List tracked competitors |
+| `POST /competitive/:brandId/competitors` | Add competitor |
+| `PUT /competitive/:brandId/competitors/:id` | Update competitor |
+| `DELETE /competitive/:brandId/competitors/:id` | Remove competitor |
+| `POST /competitive/:brandId/analyze` | Trigger AI analysis |
+| `GET /competitive/:brandId/analyses` | List historical analyses |
+
+---
+
 ## 8. Admin Panel
 
 The Admin Panel is a separate Next.js application (port 3001) accessible only to users with `isSuperAdmin: true`. It provides internal visibility and control over the entire platform.
@@ -701,7 +806,6 @@ The Admin Panel is a separate Next.js application (port 3001) accessible only to
 | **Users** | Search all users, view subscription, generate impersonation token |
 | **Subscriptions** | Tier matrix with revenue stats per tier |
 | **Billing** | Transaction history (Stripe + Paystack); billing metrics |
-| **Posts** | Global post search and filter by status/platform |
 | **Plans** | All marketing plans; regenerate or view logs |
 | **Agents** | All agents across all orgs; silence/resume; view logs |
 | **Affiliates** | Approve/suspend affiliate applications; view payout records |
@@ -709,10 +813,34 @@ The Admin Panel is a separate Next.js application (port 3001) accessible only to
 | **Feature Flags** | Toggle features globally or per-org without code deploys |
 | **Queues** | BullMQ job counts per queue (live monitoring) |
 | **Audit Log** | Stream of `activity_events` across the platform |
-| **Email Templates** | Reference view for transactional email template variables |
+| **Email Templates** | Edit transactional email templates (subject, HTML body, plain text) with live preview |
+| **Plans (Pricing)** | Update plan tier pricing (applies to new subscribers only); change log |
 | **Support** | Internal runbook and common issue resolution guides |
+| **Team Invites** | Invite new admin-panel users via one-time secure links; assign roles; revoke pending invites |
 
-### 8.2 Feature Flags
+### 8.2 Admin RBAC & Invite Flow
+
+Super admins can invite new internal users to the admin panel without sharing credentials. The invite system:
+
+1. Super admin creates invite via `POST /admin/invites` with target email and role
+2. System generates a cryptographically secure token (48 chars, base64url), valid for 7 days
+3. Super admin copies the invite link and sends it to the invitee (out of band)
+4. Invitee visits `/accept-invite?token=...` on the admin app
+5. Invitee sets their name and password — account created in the `anthyx-internal` org with `isSuperAdmin: true`
+6. Token marked as `acceptedAt`; user redirected to the admin dashboard
+
+#### Admin Roles
+
+| Role | Access Level |
+|---|---|
+| **Owner** | Full platform access; can invite and manage other admins |
+| **Admin** | Manage orgs, users, billing, subscriptions, and feature flags |
+| **Support** | Read-only access to all platform data |
+| **Billing** | Billing, subscription, and invoice access only |
+
+All roles are enforced by `adminAuth` middleware (requires `aud: "admin"` JWT) at the route layer.
+
+### 8.3 Feature Flags
 
 Feature flags in Anthyx are runtime toggles that enable or disable specific functionality without a code deploy. They can be applied globally (`enabledGlobally`), per-org allowlist (`enabledForOrgs[]`), or per-org blocklist (`disabledForOrgs[]`).
 
@@ -721,6 +849,18 @@ Use cases:
 - Emergency kill switch for a broken feature
 - A/B testing new UX flows at the infrastructure level
 - Granting early access to enterprise features during evaluation
+
+### 8.4 Seeded Admin Accounts
+
+Three internal accounts are seeded automatically via migration `0017_seed_admin_accounts.sql` into the `anthyx-internal` organization:
+
+| Email | Role | `isSuperAdmin` |
+|---|---|---|
+| `superadmin@anthyx.com` | owner | true |
+| `lanre@anthyx.com` | admin | true |
+| `support@anthyx.com` | member | false |
+
+All seeded accounts have `mustChangePassword: true` and require a password change on first login.
 
 ---
 
@@ -731,7 +871,7 @@ Anthyx operates a first-party affiliate program enabling partners to earn commis
 ### 9.1 Affiliate Lifecycle
 
 ```
-Registration (pending) → Admin approval → Active affiliate
+Self-registration (pending) → Admin approval → Active affiliate → Invited to portal
 ```
 
 ### 9.2 Core Entities
@@ -752,7 +892,17 @@ Registration (pending) → Admin approval → Active affiliate
 - `commissionCents` — computed from the plan tier's price × commission rate
 - Status: `pending` → `cleared` (after refund window) → `paid`
 
-### 9.3 Affiliate Portal
+### 9.3 Affiliate Self-Registration
+
+Affiliates apply via a public registration form on the affiliate portal (`/apply`). The form collects name, email, website, and promotional method. On submission:
+
+1. Account created with `status: pending`
+2. Welcome email sent via Resend
+3. Admin notified of new pending application
+4. Admin approves or rejects via the admin panel
+5. Affiliate receives approval email with portal access link
+
+### 9.4 Affiliate Portal
 
 The Affiliate Portal is a separate Next.js application (port 3002) providing:
 
@@ -766,7 +916,7 @@ The Affiliate Portal is a separate Next.js application (port 3002) providing:
 | Resources | Marketing copy, banner assets, brand guidelines |
 | Settings | Affiliate account details; Stripe account ID |
 
-### 9.4 Payout Flow
+### 9.5 Payout Flow
 
 Payouts are processed via Stripe Connect. Affiliates must connect a Stripe account before requesting disbursement. A minimum balance threshold applies before payout is available (default: $50, configurable per affiliate).
 
@@ -784,6 +934,8 @@ Payouts are processed via Stripe Connect. Affiliates must connect a Stripe accou
 | **Agency** | $399 | $319/mo | 15 | Unlimited | 50 | 2,500 |
 | **Scale** | $999 | $799/mo | Unlimited | Unlimited | 100 | 10,000 |
 | **Enterprise** | Custom | Custom | Unlimited | Unlimited | Unlimited | Unlimited |
+
+Plan pricing is editable by super admins via the admin panel (`PUT /admin/plans/:tier`). Price changes apply to new subscribers only; existing subscriptions are not retroactively affected.
 
 ### 10.2 Feature Gating by Tier
 
@@ -861,9 +1013,10 @@ Promo codes are validated client-side (`POST /billing/validate-promo`) before ch
 
 | Requirement | Implementation |
 |---|---|
-| Authentication | JWT (RS256/HS256); HTTP-only cookies; `SameSite: Strict` |
+| Authentication | JWT with `aud` claims (`user` vs `admin`); HTTP-only cookies; `SameSite: Lax` |
+| Token scope enforcement | `adminAuth` middleware rejects `aud: "user"` tokens; `auth` middleware rejects `aud: "admin"` tokens |
 | OAuth tokens | AES-256-GCM encryption at rest; per-org key derivation |
-| Admin route protection | Dual middleware: standard `auth` + `adminAuth` (checks `isSuperAdmin`) |
+| Admin invite tokens | 48-char cryptographically random, base64url; 7-day expiry; single-use |
 | Webhook payloads | HMAC-SHA256 signature on all outbound webhook payloads |
 | SQL injection | Drizzle ORM with parameterized queries; no raw SQL string interpolation |
 | XSS | Next.js default CSP; no `dangerouslySetInnerHTML` in user-facing apps |
@@ -884,6 +1037,7 @@ Promo codes are validated client-side (`POST /billing/validate-promo`) before ch
 - **Queue monitoring:** BullMQ dashboard available via admin panel (`GET /admin/queues`)
 - **Audit trail:** `activity_events` table captures all agent and human actions with actor, entity, event type, and diff
 - **Agent logs:** `agent_logs` table captures every AI action with full JSON payload
+- **Ingestion progress:** Real-time step updates via BullMQ job progress events; polled by the frontend every 2 seconds
 
 ---
 
@@ -897,7 +1051,6 @@ Promo codes are validated client-side (`POST /billing/validate-promo`) before ch
 | **Database** | PostgreSQL | 15+ |
 | **Queue** | BullMQ + IORedis | Latest |
 | **Frontend** | Next.js | 14 (App Router) |
-| **Auth (frontend)** | next-auth | v5 |
 | **Data fetching** | TanStack React Query | v5 |
 | **Styling** | Tailwind CSS | v3 |
 | **Charts** | Recharts | Latest |
@@ -907,6 +1060,7 @@ Promo codes are validated client-side (`POST /billing/validate-promo`) before ch
 | **LLM — Copywriter** | Claude Sonnet 4.6 | Anthropic SDK |
 | **LLM — Reviewer** | Claude Haiku 4.5 | Anthropic SDK |
 | **LLM — Extraction** | Gemini 1.5 Flash | google-generativeai SDK |
+| **LLM — Tone Preview** | Gemini 1.5 Flash | google-generativeai SDK |
 | **Embeddings** | Gemini text-embedding-004 | 768 dimensions |
 | **Vector Store** | Qdrant | Cloud-hosted |
 | **Image Generation** | DALL-E 3 | OpenAI SDK |
@@ -924,60 +1078,37 @@ Promo codes are validated client-side (`POST /billing/validate-promo`) before ch
 
 The following features have been scoped and are planned for future development cycles. They are documented here to communicate product direction and inform architectural decisions made today.
 
-### 13.1 Auth & Security
+### 13.1 Brand Management
 
-- **Separate token audiences** — issue JWTs with distinct `aud` claims (`user` vs `admin`) so tokens are rejected by the wrong service class at the middleware level
-- **Admin RBAC invite flow** — super admin sends invite link; invitee sets password on first login; roles: Super Admin, Admin, Support, Billing; per-role permission scopes
-
-### 13.2 Brand Management
-
-- **Brand health score** — computed badge (e.g., 78/100) based on profile completeness across voice, pillars, audience, knowledge, and identity
 - **Version history** — track changes to voice, tone, and brand positioning over time with rollback capability
 - **Brand activity feed** — timeline of recent events: posts generated, documents ingested, tone updates, campaigns started
 - **Export brand profile** — PDF or JSON snapshot for sharing with team or agency
-- **Tone preview** — AI-generated sample paragraph from current voice configuration, so users can validate before generating real content
 - **Tone test** — paste existing content, get a score for how closely it matches the configured tone
-- **Ingestion progress indicator** — live status steps instead of silent background processing
-- **Ingestion summary** — diff view of what was added, updated, or ignored after each ingest
-- **Multi-file upload** — batch upload multiple PDFs in one operation
-- **Ingestion history log** — table of all previously ingested sources with option to remove from memory
+- **Ingestion diff view** — after each ingest, show what attributes were added, updated, or left unchanged
 - **Manual override after ingestion** — review and accept/edit/reject AI-extracted values before committing
 
-### 13.3 User Content Features
+### 13.2 Content & Review
 
-- **Self-created posts** — let users manually create posts alongside AI-generated ones, with per-platform guidelines enforced in the editor
-- **AI learning from vetoed content** — capture veto reasons and feed them back into generation context as negative training signals; surface a "Quality Improvement" indicator over time
-- **Content status toggling** — allow status transitions such as Vetoed → Approved and vice versa, with confirmation dialog and audit trail
 - **Image lightbox and full-screen post view** — click image for full-screen overlay with zoom/pan; full-screen post detail mode
+- **Bulk veto** — veto multiple posts at once with a shared reason
+- **Post scheduling calendar** — calendar view of all scheduled and published posts across brands
 
-### 13.4 Competitive Intelligence
+### 13.3 Competitive Intelligence Enhancements
 
-A dedicated Competitive Intelligence workspace per brand comprising:
-
-- **Industry overview** — AI-generated summary of market size, growth rate, key trends, and major players; refreshable on demand
-- **Competitor tracking** — add competitors by name, URL, or social handle; auto-detect active platforms; tier classification (Direct, Indirect, Aspirational)
-- **Content analysis** — posting cadence, content theme breakdown, format mix (video/image/text/carousel), best-performing types per competitor
-- **Engagement benchmarks** — average engagement metrics per competitor; follower growth trends over 30/90/180 days; virality score
-- **Gap analysis** — topics competitors are not covering; posting time gaps; hashtag and keyword opportunities; platform gaps
-- **Share of voice** — visual breakdown of industry conversation ownership; filterable by platform and date range
-- **Sentiment analysis** — overall sentiment score per competitor; topic-level drill-down; comment sentiment on top posts; brand perception word cloud
-- **Campaign tracker** — detect when a competitor runs a new campaign (posting cadence spike); timeline view; annotation notes
-- **Alerts** — real-time alerts for above-cadence posting, follower count thresholds, new content categories, weekly digest email
+- **Automated monitoring** — polling-based competitor detection (new campaigns, posting cadence spikes)
+- **Real-time alerts** — notifications for competitor activity thresholds; weekly digest email
 - **Benchmarking dashboard** — single-view scorecard comparing the brand against all tracked competitors; exportable as branded PDF
 
-### 13.5 Email Campaign Management
+### 13.4 Analytics Enhancements
 
-- **Full email campaign creation flow** — subject, body, audience segment selection, and scheduling
-- **Mailing list management** — create and manage subscriber lists with CSV import/export; tagging and segmentation; merge and archive actions
+- **Cross-brand performance comparison** — side-by-side engagement metrics for multi-brand workspaces
+- **Predictive best-time analysis** — ML model trained on org-specific engagement data to recommend posting times per platform
 
-### 13.6 Admin Panel Enhancements
+### 13.5 Admin Panel Enhancements
 
-- **Editable email templates** — admin UI for editing transactional email templates with live variable preview and version rollback
-- **Plan price editing** — allow admins to update plan pricing (applies to new subscribers only); confirmation prompt and change log
-
-### 13.7 Affiliate Portal Enhancements
-
-- **Self-serve registration** — full sign-up flow with email verification; pending approval queue visible to admins; welcome email on approval
+- **Email template version rollback** — restore previous versions of edited transactional email templates
+- **Audit log filtering** — filter activity events by actor, event type, date range, and entity
+- **Org suspension flow** — suspend an org with reason; auto-cancels active posts and agents
 
 ---
 

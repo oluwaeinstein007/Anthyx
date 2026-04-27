@@ -1,5 +1,5 @@
 import { Worker, type Job } from "bullmq";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "../db/client";
 import { brandProfiles } from "../db/schema";
 import { redisConnection } from "../queue/client";
@@ -17,6 +17,11 @@ interface IngestJobData {
   sourceName?: string;
 }
 
+export type IngestProgress = {
+  step: "parsing" | "extracting" | "embedding" | "done" | "failed";
+  message: string;
+};
+
 const worker = new Worker<IngestJobData>(
   "anthyx-ingestor",
   async (job: Job<IngestJobData>) => {
@@ -28,6 +33,9 @@ const worker = new Worker<IngestJobData>(
       .update(brandProfiles)
       .set({ ingestStatus: "processing", updatedAt: new Date() })
       .where(eq(brandProfiles.id, brandId));
+
+    // Step 1: Parse
+    await job.updateProgress({ step: "parsing", message: "Parsing document…" } satisfies IngestProgress);
 
     let text: string;
 
@@ -46,7 +54,21 @@ const worker = new Worker<IngestJobData>(
       throw new Error("Invalid ingest job: missing source content");
     }
 
+    // Step 2: Extract
+    await job.updateProgress({ step: "extracting", message: "Extracting brand identity…" } satisfies IngestProgress);
     const extraction = await extractBrandData(text);
+
+    // Step 3: Embed
+    await job.updateProgress({ step: "embedding", message: "Embedding into knowledge base…" } satisfies IngestProgress);
+    await ingestBrandDocument(text, brandId, organizationId, sourceName ?? "document", extraction);
+
+    // Persist extracted data + append to ingest_history
+    const historyEntry = {
+      sourceType,
+      sourceName: sourceName ?? "document",
+      ingestedAt: new Date().toISOString(),
+      summary: extraction.valueProposition ?? `Extracted ${extraction.toneDescriptors?.length ?? 0} tone descriptors`,
+    };
 
     await db
       .update(brandProfiles)
@@ -68,11 +90,12 @@ const worker = new Worker<IngestJobData>(
         },
         qdrantCollectionId: `brand_${brandId}`,
         ingestStatus: "done",
+        ingestHistory: sql`COALESCE(ingest_history, '[]'::jsonb) || ${JSON.stringify([historyEntry])}::jsonb`,
         updatedAt: new Date(),
       })
       .where(eq(brandProfiles.id, brandId));
 
-    await ingestBrandDocument(text, brandId, organizationId, sourceName ?? "document", extraction);
+    await job.updateProgress({ step: "done", message: "Ingestion complete" } satisfies IngestProgress);
 
     console.log(`[IngestorWorker] Ingestion complete for brand ${brandId}`);
   },

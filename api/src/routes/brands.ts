@@ -1,25 +1,58 @@
 import { Router } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, count } from "drizzle-orm";
 import multer from "multer";
 import * as path from "path";
 import { db } from "../db/client";
-import { brandProfiles } from "../db/schema";
+import { brandProfiles, scheduledPosts } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { requireLimit } from "../middleware/plan-limits";
 import { CreateBrandSchema } from "@anthyx/config";
 import { ingestorQueue } from "../queue/client";
 import { computeQualityImprovement } from "../services/agent/veto-learner";
+import type { IngestProgress } from "../workers/ingestor.worker";
 
 const router = Router();
-const upload = multer({ dest: "/tmp/anthyx-uploads/" });
+const upload = multer({ dest: "/tmp/anthyx-uploads/", limits: { fileSize: 50 * 1024 * 1024 } });
 
-// GET /brands
+// GET /brands?includeArchived=true
 router.get("/", auth, async (req, res) => {
+  const includeArchived = req.query["includeArchived"] === "true";
+
   const brands = await db.query.brandProfiles.findMany({
-    where: eq(brandProfiles.organizationId, req.user.orgId),
+    where: and(
+      eq(brandProfiles.organizationId, req.user.orgId),
+      includeArchived ? undefined : isNull(brandProfiles.archivedAt),
+    ),
+    orderBy: (b, { desc }) => [desc(b.createdAt)],
   });
-  return res.json(brands);
+
+  // Attach quick-stats: total posts generated + pending review count
+  const brandIds = brands.map((b) => b.id);
+  const stats = await Promise.all(
+    brandIds.map(async (bid) => {
+      const [total, pending] = await Promise.all([
+        db.select({ c: count() }).from(scheduledPosts)
+          .where(and(eq(scheduledPosts.brandProfileId, bid), eq(scheduledPosts.organizationId, req.user.orgId)))
+          .then((r) => r[0]?.c ?? 0),
+        db.select({ c: count() }).from(scheduledPosts)
+          .where(and(
+            eq(scheduledPosts.brandProfileId, bid),
+            eq(scheduledPosts.organizationId, req.user.orgId),
+            eq(scheduledPosts.status, "pending_review"),
+          ))
+          .then((r) => r[0]?.c ?? 0),
+      ]);
+      return { brandId: bid, totalPosts: Number(total), pendingReview: Number(pending) };
+    }),
+  );
+
+  const statsMap = new Map(stats.map((s) => [s.brandId, s]));
+
+  return res.json(brands.map((b) => ({
+    ...b,
+    _stats: statsMap.get(b.id) ?? { brandId: b.id, totalPosts: 0, pendingReview: 0 },
+  })));
 });
 
 // POST /brands
@@ -78,11 +111,11 @@ router.delete("/:id", auth, async (req, res) => {
   return res.json({ ok: true });
 });
 
-// POST /brands/:id/ingest
+// POST /brands/:id/ingest — supports single file, multiple files, URL, or text
 router.post(
   "/:id/ingest",
   auth,
-  upload.single("file"),
+  upload.array("files", 10),
   async (req, res) => {
     const brand = await db.query.brandProfiles.findFirst({
       where: and(
@@ -92,40 +125,68 @@ router.post(
     });
     if (!brand) return res.status(404).json({ error: "Brand not found" });
 
-    let sourceType: "pdf" | "markdown" | "url" | "plaintext";
-    let filePath: string | undefined;
-    let url: string | undefined;
-    let sourceName: string | undefined;
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
 
-    if (req.file) {
-      const ext = path.extname(req.file.originalname).toLowerCase();
-      sourceType = ext === ".pdf" ? "pdf" : "markdown";
-      filePath = req.file.path;
-      sourceName = req.file.originalname;
-    } else if (req.body.url) {
-      sourceType = "url";
-      url = req.body.url as string;
-      sourceName = url;
-    } else if (req.body.text) {
-      sourceType = "plaintext";
-      sourceName = "raw-text";
-    } else {
-      return res.status(400).json({ error: "Provide a file, URL, or text" });
+    // Multi-file: queue one job per file
+    if (files.length > 0) {
+      const jobs = await Promise.all(
+        files.map((file) => {
+          const ext = path.extname(file.originalname).toLowerCase();
+          const sourceType = ext === ".pdf" ? "pdf" : "markdown";
+          return ingestorQueue.add("ingest-brand", {
+            brandId: brand.id,
+            organizationId: req.user.orgId,
+            sourceType,
+            filePath: file.path,
+            sourceName: file.originalname,
+          });
+        }),
+      );
+      return res.status(202).json({ jobs: jobs.map((j) => ({ jobId: j.id, status: "queued" })) });
     }
 
-    const job = await ingestorQueue.add("ingest-brand", {
-      brandId: brand.id,
-      organizationId: req.user.orgId,
-      sourceType,
-      filePath,
-      url,
-      rawText: req.body.text as string | undefined,
-      sourceName,
-    });
+    // URL or plaintext
+    if (req.body.url) {
+      const job = await ingestorQueue.add("ingest-brand", {
+        brandId: brand.id,
+        organizationId: req.user.orgId,
+        sourceType: "url",
+        url: req.body.url as string,
+        sourceName: req.body.url as string,
+      });
+      return res.status(202).json({ jobs: [{ jobId: job.id, status: "queued" }] });
+    }
 
-    return res.status(202).json({ jobId: job.id, status: "queued" });
+    if (req.body.text) {
+      const job = await ingestorQueue.add("ingest-brand", {
+        brandId: brand.id,
+        organizationId: req.user.orgId,
+        sourceType: "plaintext",
+        rawText: req.body.text as string,
+        sourceName: "raw-text",
+      });
+      return res.status(202).json({ jobs: [{ jobId: job.id, status: "queued" }] });
+    }
+
+    return res.status(400).json({ error: "Provide files, URL, or text" });
   },
 );
+
+// GET /brands/:id/ingest-job/:jobId — poll a queued ingestion job's progress
+router.get("/:id/ingest-job/:jobId", auth, async (req, res) => {
+  const job = await ingestorQueue.getJob(req.params.jobId!);
+  if (!job) return res.status(404).json({ error: "Job not found" });
+
+  const state = await job.getState();
+  const progress = (job.progress ?? null) as IngestProgress | null;
+
+  return res.json({
+    jobId: job.id,
+    state,   // waiting | active | completed | failed | delayed | unknown
+    progress,
+    failedReason: job.failedReason ?? null,
+  });
+});
 
 // POST /brands/:id/archive — soft-archive a brand
 router.post("/:id/archive", auth, async (req, res) => {

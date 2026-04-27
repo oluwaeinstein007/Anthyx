@@ -697,3 +697,17 @@ export const mailingListSubscribers = pgTable("mailing_list_subscribers", {
   status: subscriberStatusEnum("status").default("active"),
   addedAt: timestamp("added_at").defaultNow(),
 });
+
+// ── Admin Invites ──────────────────────────────────────────────────────────────
+
+export const adminInvites = pgTable("admin_invites", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull(),
+  role: text("role").notNull().default("support"), // 'owner' | 'admin' | 'support' | 'billing'
+  token: text("token").notNull().unique(),
+  invitedBy: uuid("invited_by").references(() => users.id),
+  expiresAt: timestamp("expires_at").notNull(),
+  acceptedAt: timestamp("accepted_at"),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});

@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, desc, and, sql, isNull } from "drizzle-orm";
+import crypto from "crypto";
 import { db } from "../db/client";
 import {
   organizations,
@@ -12,6 +13,7 @@ import {
   agents,
   planTiers,
   emailTemplates,
+  adminInvites,
 } from "../db/schema";
 import { adminAuth, issueToken } from "../middleware/auth";
 import {
@@ -478,4 +480,88 @@ router.put("/email-templates/:id", async (req, res) => {
   return res.json(updated);
 });
 
+// ── Admin Invites ──────────────────────────────────────────────────────────────
+
+const VALID_ADMIN_ROLES = ["owner", "admin", "support", "billing"] as const;
+const ANTHYX_INTERNAL_ORG_ID = "00000000-0000-0000-0000-000000000001";
+
+// GET /admin/invites — list all invites (pending + used)
+router.get("/invites", async (_req, res) => {
+  const invites = await db.query.adminInvites.findMany({
+    orderBy: [desc(adminInvites.createdAt)],
+  });
+
+  // Attach inviter name
+  const inviterIds = [...new Set(invites.map((i) => i.invitedBy).filter(Boolean))] as string[];
+  const inviters = inviterIds.length > 0
+    ? await db.query.users.findMany({ where: (u, { inArray }) => inArray(u.id, inviterIds) })
+    : [];
+  const inviterMap = new Map(inviters.map((u) => [u.id, u.email]));
+
+  return res.json(invites.map((inv) => ({
+    ...inv,
+    invitedByEmail: inv.invitedBy ? inviterMap.get(inv.invitedBy) ?? null : null,
+    status: inv.revokedAt ? "revoked" : inv.acceptedAt ? "accepted" : new Date() > inv.expiresAt ? "expired" : "pending",
+  })));
+});
+
+// POST /admin/invites — create a new invite link
+router.post("/invites", async (req, res) => {
+  const { email, role } = req.body as { email?: string; role?: string };
+
+  if (!email || !role) return res.status(400).json({ error: "email and role are required" });
+  if (!VALID_ADMIN_ROLES.includes(role as never)) {
+    return res.status(400).json({ error: `role must be one of: ${VALID_ADMIN_ROLES.join(", ")}` });
+  }
+
+  // Check if user with this email already exists
+  const existing = await db.query.users.findFirst({ where: eq(users.email, email.toLowerCase()) });
+  if (existing) return res.status(409).json({ error: "A user with this email already exists" });
+
+  // Revoke any previous pending invite for the same email
+  await db
+    .update(adminInvites)
+    .set({ revokedAt: new Date() })
+    .where(and(
+      eq(adminInvites.email, email.toLowerCase()),
+      isNull(adminInvites.acceptedAt),
+      isNull(adminInvites.revokedAt),
+    ));
+
+  const token = crypto.randomBytes(36).toString("base64url");
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+  const [invite] = await db
+    .insert(adminInvites)
+    .values({
+      email: email.toLowerCase(),
+      role,
+      token,
+      invitedBy: req.user.id,
+      expiresAt,
+    })
+    .returning();
+
+  return res.status(201).json({ ...invite, status: "pending" });
+});
+
+// DELETE /admin/invites/:id — revoke an invite
+router.delete("/invites/:id", async (req, res) => {
+  const invite = await db.query.adminInvites.findFirst({
+    where: eq(adminInvites.id, req.params.id!),
+  });
+  if (!invite) return res.status(404).json({ error: "Invite not found" });
+  if (invite.acceptedAt) return res.status(400).json({ error: "Cannot revoke an already-accepted invite" });
+
+  await db
+    .update(adminInvites)
+    .set({ revokedAt: new Date() })
+    .where(eq(adminInvites.id, req.params.id!));
+
+  return res.json({ revoked: true });
+});
+
 export { router as adminRouter };
+
+// Export for use in auth route
+export { ANTHYX_INTERNAL_ORG_ID };
