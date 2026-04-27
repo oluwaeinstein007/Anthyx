@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Building2, Bot, Link2, Calendar,
   ClipboardCheck, BarChart3, CreditCard, LogOut, Zap, Settings,
   Megaphone, Users, Rss, Webhook, FileDown, FlaskConical, Inbox, Mail,
-  ListChecks,
+  ListChecks, FilePen,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
@@ -17,6 +17,7 @@ const NAV = [
   { label: "Accounts",     href: "/dashboard/accounts",    icon: Link2 },
   { label: "Plans",        href: "/dashboard/plans",       icon: Calendar },
   { label: "Posts",        href: "/dashboard/posts",       icon: ListChecks },
+  { label: "Create Post",  href: "/dashboard/posts/create", icon: FilePen },
   { label: "Campaigns",    href: "/dashboard/campaigns",   icon: Megaphone },
   { label: "Review Queue", href: "/dashboard/review",      icon: ClipboardCheck },
   { label: "A/B Tests",    href: "/dashboard/ab-tests",    icon: FlaskConical },

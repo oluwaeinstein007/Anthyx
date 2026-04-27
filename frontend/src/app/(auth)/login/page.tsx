@@ -14,6 +14,7 @@ function LoginForm() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const passwordReset = params.get("reset") === "1";
+  const next = params.get("next");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -21,7 +22,7 @@ function LoginForm() {
     setError("");
     try {
       await api.post("/auth/login", { email, password });
-      router.push("/dashboard");
+      router.push(next && next.startsWith("/") ? next : "/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {

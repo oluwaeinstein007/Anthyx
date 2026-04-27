@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq, and, inArray, type SQL } from "drizzle-orm";
 import multer from "multer";
 import { db } from "../db/client";
-import { scheduledPosts, postAnalytics, abTests, postStatusLogs } from "../db/schema";
+import { scheduledPosts, postAnalytics, abTests, postStatusLogs, brandProfiles } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { requireLimit } from "../middleware/plan-limits";
@@ -95,15 +95,79 @@ router.get("/review/buffer", auth, async (req, res) => {
     orderBy: (p, { asc }) => [asc(p.scheduledAt)],
   });
 
-  // Group by agentId and take first 5 per agent
+  // Group by agentId and take first 5 per agent (manual posts have null agentId → key "manual")
   const byAgent = new Map<string, typeof posts>();
   for (const post of posts) {
-    const existing = byAgent.get(post.agentId) ?? [];
+    const key = post.agentId ?? "manual";
+    const existing = byAgent.get(key) ?? [];
     if (existing.length < 5) existing.push(post);
-    byAgent.set(post.agentId, existing);
+    byAgent.set(key, existing);
   }
 
   return res.json(Object.fromEntries(byAgent));
+});
+
+// POST /posts — manually create a post (no plan or agent required)
+router.post("/", auth, async (req, res) => {
+  const {
+    brandProfileId,
+    agentId: manualAgentId,
+    platform,
+    contentText,
+    contentType,
+    contentHashtags,
+    scheduledAt,
+    mediaUrls,
+  } = req.body as {
+    brandProfileId: string;
+    agentId?: string;
+    platform: string;
+    contentText: string;
+    contentType?: string;
+    contentHashtags?: string[];
+    scheduledAt: string;
+    mediaUrls?: string[];
+  };
+
+  if (!brandProfileId || !platform || !contentText?.trim() || !scheduledAt) {
+    return res.status(400).json({ error: "brandProfileId, platform, contentText, and scheduledAt are required" });
+  }
+
+  const brand = await db.query.brandProfiles.findFirst({
+    where: and(
+      eq(brandProfiles.id, brandProfileId),
+      eq(brandProfiles.organizationId, req.user.orgId),
+    ),
+  });
+  if (!brand) return res.status(404).json({ error: "Brand not found" });
+
+  const [post] = await db
+    .insert(scheduledPosts)
+    .values({
+      organizationId: req.user.orgId,
+      brandProfileId,
+      agentId: manualAgentId ?? null,
+      platform: platform as never,
+      contentText: contentText.trim(),
+      contentType: contentType ?? null,
+      contentHashtags: contentHashtags ?? null,
+      mediaUrls: mediaUrls ?? null,
+      scheduledAt: new Date(scheduledAt),
+      status: "pending_review",
+    })
+    .returning();
+
+  const created = post!;
+  await db.insert(postStatusLogs).values({
+    postId: created.id,
+    organizationId: req.user.orgId,
+    actorId: req.user.id,
+    fromStatus: "draft",
+    toStatus: "pending_review",
+    reason: "Manually created",
+  });
+
+  return res.status(201).json(created);
 });
 
 // PUT /posts/:id

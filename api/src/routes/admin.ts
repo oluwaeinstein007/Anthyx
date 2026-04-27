@@ -11,6 +11,7 @@ import {
   affiliates,
   agents,
   planTiers,
+  emailTemplates,
 } from "../db/schema";
 import { adminAuth, issueToken } from "../middleware/auth";
 import {
@@ -423,6 +424,56 @@ router.put("/plans/:tier", async (req, res) => {
     .returning();
 
   if (!updated) return res.status(404).json({ error: `Plan tier '${req.params.tier}' not found` });
+
+  return res.json(updated);
+});
+
+// ── Email Templates ────────────────────────────────────────────────────────────
+
+// GET /admin/email-templates — list all templates
+router.get("/email-templates", async (_req, res) => {
+  const templates = await db.query.emailTemplates.findMany({
+    orderBy: (t, { asc }) => [asc(t.id)],
+  });
+  return res.json(templates);
+});
+
+// GET /admin/email-templates/:id
+router.get("/email-templates/:id", async (req, res) => {
+  const template = await db.query.emailTemplates.findFirst({
+    where: eq(emailTemplates.id, req.params.id!),
+  });
+  if (!template) return res.status(404).json({ error: "Template not found" });
+  return res.json(template);
+});
+
+// PUT /admin/email-templates/:id — update subject and/or body
+router.put("/email-templates/:id", async (req, res) => {
+  const { subject, htmlBody, plainText } = req.body as {
+    subject?: string;
+    htmlBody?: string;
+    plainText?: string;
+  };
+
+  if (!subject && !htmlBody && !plainText) {
+    return res.status(400).json({ error: "Provide at least one of subject, htmlBody, or plainText" });
+  }
+
+  const existing = await db.query.emailTemplates.findFirst({
+    where: eq(emailTemplates.id, req.params.id!),
+  });
+  if (!existing) return res.status(404).json({ error: "Template not found" });
+
+  const [updated] = await db
+    .update(emailTemplates)
+    .set({
+      ...(subject !== undefined && { subject }),
+      ...(htmlBody !== undefined && { htmlBody }),
+      ...(plainText !== undefined && { plainText }),
+      updatedAt: new Date(),
+    })
+    .where(eq(emailTemplates.id, req.params.id!))
+    .returning();
 
   return res.json(updated);
 });

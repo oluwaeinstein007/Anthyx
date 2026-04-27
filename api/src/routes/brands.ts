@@ -9,6 +9,7 @@ import { validate } from "../middleware/validate";
 import { requireLimit } from "../middleware/plan-limits";
 import { CreateBrandSchema } from "@anthyx/config";
 import { ingestorQueue } from "../queue/client";
+import { computeQualityImprovement } from "../services/agent/veto-learner";
 
 const router = Router();
 const upload = multer({ dest: "/tmp/anthyx-uploads/" });
@@ -125,5 +126,127 @@ router.post(
     return res.status(202).json({ jobId: job.id, status: "queued" });
   },
 );
+
+// POST /brands/:id/archive — soft-archive a brand
+router.post("/:id/archive", auth, async (req, res) => {
+  const brand = await db.query.brandProfiles.findFirst({
+    where: and(
+      eq(brandProfiles.id, req.params.id!),
+      eq(brandProfiles.organizationId, req.user.orgId),
+    ),
+  });
+  if (!brand) return res.status(404).json({ error: "Not found" });
+
+  const [updated] = await db
+    .update(brandProfiles)
+    .set({ archivedAt: new Date(), updatedAt: new Date() })
+    .where(eq(brandProfiles.id, brand.id))
+    .returning();
+
+  return res.json(updated);
+});
+
+// POST /brands/:id/unarchive — restore an archived brand
+router.post("/:id/unarchive", auth, async (req, res) => {
+  const brand = await db.query.brandProfiles.findFirst({
+    where: and(
+      eq(brandProfiles.id, req.params.id!),
+      eq(brandProfiles.organizationId, req.user.orgId),
+    ),
+  });
+  if (!brand) return res.status(404).json({ error: "Not found" });
+
+  const [updated] = await db
+    .update(brandProfiles)
+    .set({ archivedAt: null, updatedAt: new Date() })
+    .where(eq(brandProfiles.id, brand.id))
+    .returning();
+
+  return res.json(updated);
+});
+
+// POST /brands/:id/duplicate — clone a brand (copies all profile fields, new name)
+router.post("/:id/duplicate", auth, requireLimit("brand"), async (req, res) => {
+  const brand = await db.query.brandProfiles.findFirst({
+    where: and(
+      eq(brandProfiles.id, req.params.id!),
+      eq(brandProfiles.organizationId, req.user.orgId),
+    ),
+  });
+  if (!brand) return res.status(404).json({ error: "Not found" });
+
+  const {
+    id: _id, createdAt: _c, updatedAt: _u, archivedAt: _a,
+    qdrantCollectionId: _q, ingestStatus: _s, ingestHistory: _h,
+    sourceFiles: _sf, ...copyFields
+  } = brand;
+
+  const [clone] = await db
+    .insert(brandProfiles)
+    .values({
+      ...copyFields,
+      name: `${brand.name} (copy)`,
+      organizationId: req.user.orgId,
+      ingestStatus: "idle",
+    })
+    .returning();
+
+  return res.status(201).json(clone);
+});
+
+// GET /brands/:id/quality-improvement — AI quality improvement stats for a brand
+router.get("/:id/quality-improvement", auth, async (req, res) => {
+  const brand = await db.query.brandProfiles.findFirst({
+    where: and(
+      eq(brandProfiles.id, req.params.id!),
+      eq(brandProfiles.organizationId, req.user.orgId),
+    ),
+  });
+  if (!brand) return res.status(404).json({ error: "Not found" });
+
+  const days = parseInt((req.query["days"] as string) ?? "60");
+  const stats = await computeQualityImprovement(brand.id, req.user.orgId, Math.min(days, 180));
+  return res.json(stats);
+});
+
+// POST /brands/:id/tone-preview — AI-generate a sample paragraph from current brand voice
+router.post("/:id/tone-preview", auth, async (req, res) => {
+  const brand = await db.query.brandProfiles.findFirst({
+    where: and(
+      eq(brandProfiles.id, req.params.id!),
+      eq(brandProfiles.organizationId, req.user.orgId),
+    ),
+  });
+  if (!brand) return res.status(404).json({ error: "Not found" });
+
+  const { GoogleGenerativeAI } = await import("@google/generative-ai");
+  const genAI = new GoogleGenerativeAI(process.env["GEMINI_API_KEY"] ?? "");
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+  const traits = Array.isArray(brand.voiceTraits)
+    ? (brand.voiceTraits as string[]).join(", ")
+    : JSON.stringify(brand.voiceTraits ?? {});
+  const tone = (brand.toneDescriptors ?? []).join(", ");
+  const examples = (brand.voiceExamples ?? []).slice(0, 2).map((e, i) => `Example ${i + 1}: "${e}"`).join("\n");
+
+  const prompt = `You are a brand copywriter. Write a single short social media post (2–4 sentences) that perfectly demonstrates this brand's voice.
+
+Brand: ${brand.name}
+Industry: ${brand.industry ?? "general"}
+Voice traits: ${traits || "not specified"}
+Tone descriptors: ${tone || "not specified"}
+${examples ? `\nExisting voice examples (learn from these):\n${examples}` : ""}
+Mission: ${brand.missionStatement ?? "not specified"}
+
+Write only the post itself. No commentary, no hashtags, no labels.`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const text = result.response.text().trim();
+    return res.json({ preview: text });
+  } catch {
+    return res.status(500).json({ error: "Preview generation failed" });
+  }
+});
 
 export { router as brandsRouter };

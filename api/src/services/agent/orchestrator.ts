@@ -12,6 +12,7 @@ import { runReviewerAgent } from "./reviewer";
 import { retrieveBrandVoiceFromQdrant } from "./brand-context";
 import { logAgentAction } from "./logger";
 import { computeVoicePerformance, classifyVoices } from "../analytics/scorer";
+import { getVetoLearningContext } from "./veto-learner";
 import { embed } from "../brand-ingestion/embedder";
 import { QdrantClient } from "@qdrant/js-client-rest";
 
@@ -122,9 +123,10 @@ export async function generateAndReviewPost(
 
   const platform = (account?.platform ?? planItem.platform) as Platform;
 
-  const [brandVoice, { insights: engagementInsights, strictReview }] = await Promise.all([
+  const [brandVoice, { insights: engagementInsights, strictReview }, vetoCtx] = await Promise.all([
     retrieveBrandVoiceFromQdrant(brandProfileId, planItem.topic),
     buildEngagementInsights(brandProfileId, options.feedbackLoopEnabled ?? false),
+    getVetoLearningContext(brandProfileId, organizationId, 30),
   ]);
 
   const draft = await runCopywriterAgent({
@@ -142,6 +144,7 @@ export async function generateAndReviewPost(
     targetLocale: options.targetLocale,
     engagementInsights: engagementInsights || undefined,
     threadMode: options.threadMode,
+    vetoGuidance: vetoCtx.formattedGuidance || undefined,
   });
 
   // Reviewer acts as adversarial compliance gate

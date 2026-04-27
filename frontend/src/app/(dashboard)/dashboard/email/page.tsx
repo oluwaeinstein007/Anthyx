@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { Plus, Send, Trash2, Pencil, X, Mail, Sparkles } from "lucide-react";
+import Link from "next/link";
+import { Plus, Send, Trash2, Pencil, X, Mail, Sparkles, Users } from "lucide-react";
 
 interface EmailCampaign {
   id: string;
@@ -211,7 +212,7 @@ export default function EmailCampaignsPage() {
 
   return (
     <div>
-      <div className="mb-8 flex items-start justify-between">
+      <div className="mb-6 flex items-start justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Email Campaigns</h1>
           <p className="text-sm text-gray-500 mt-1">Create, schedule, and send email campaigns</p>
@@ -222,6 +223,19 @@ export default function EmailCampaignsPage() {
         >
           <Plus className="w-4 h-4" /> New campaign
         </button>
+      </div>
+
+      {/* Sub-nav */}
+      <div className="flex items-center gap-1 border-b border-gray-200 mb-6">
+        <span className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 border-green-600 text-green-700 -mb-px">
+          <Mail className="w-4 h-4" /> Campaigns
+        </span>
+        <Link
+          href="/dashboard/email/lists"
+          className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 -mb-px transition-colors"
+        >
+          <Users className="w-4 h-4" /> Mailing Lists
+        </Link>
       </div>
 
       {(showCreate || editing) && (

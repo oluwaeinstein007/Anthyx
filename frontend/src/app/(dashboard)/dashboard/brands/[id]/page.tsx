@@ -5,7 +5,66 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
-import { Pencil, Check, X, Trash2 } from "lucide-react";
+import { Pencil, Check, X, Trash2, TrendingUp, TrendingDown, Minus, Sparkles } from "lucide-react";
+
+interface QualityStats {
+  score: number;
+  approvalRate: number;
+  totalVetoed: number;
+  totalGenerated: number;
+  trend: "improving" | "stable" | "declining" | "insufficient_data";
+  trendDescription: string;
+  topVetoReasons: { reason: string; count: number }[];
+}
+
+function QualityImprovement({ brandId }: { brandId: string }) {
+  const { data, isLoading } = useQuery<QualityStats>({
+    queryKey: ["quality-improvement", brandId],
+    queryFn: () => api.get<QualityStats>(`/brands/${brandId}/quality-improvement`),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (isLoading || !data || data.totalGenerated === 0) return null;
+
+  const trendIcon = data.trend === "improving"
+    ? <TrendingUp className="w-4 h-4 text-green-500" />
+    : data.trend === "declining"
+    ? <TrendingDown className="w-4 h-4 text-red-500" />
+    : <Minus className="w-4 h-4 text-gray-400" />;
+
+  const scoreColor = data.score >= 75 ? "text-green-600" : data.score >= 50 ? "text-amber-600" : "text-red-600";
+  const scoreBg = data.score >= 75 ? "bg-green-50 border-green-200" : data.score >= 50 ? "bg-amber-50 border-amber-200" : "bg-red-50 border-red-200";
+
+  return (
+    <div className={`rounded-xl border p-4 ${scoreBg}`}>
+      <div className="flex items-center gap-2 mb-2">
+        <Sparkles className="w-4 h-4 text-purple-500" />
+        <span className="text-xs font-semibold text-gray-700">AI Quality Improvement</span>
+        {trendIcon}
+      </div>
+      <div className="flex items-baseline gap-3 mb-2">
+        <span className={`text-2xl font-bold ${scoreColor}`}>{data.score}</span>
+        <span className="text-xs text-gray-500">/ 100 quality score</span>
+        <span className="text-xs text-gray-500">
+          {Math.round(data.approvalRate * 100)}% approval rate · {data.totalGenerated} posts generated
+        </span>
+      </div>
+      <p className="text-xs text-gray-600 mb-2">{data.trendDescription}</p>
+      {data.topVetoReasons.length > 0 && (
+        <div>
+          <p className="text-xs font-medium text-gray-500 mb-1.5">Top veto reasons (learning signals):</p>
+          <div className="flex flex-wrap gap-1.5">
+            {data.topVetoReasons.map((r) => (
+              <span key={r.reason} className="text-xs px-2 py-0.5 bg-white/70 text-gray-600 rounded-full border border-gray-200">
+                {r.reason} × {r.count}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 interface BrandContext {
@@ -193,6 +252,12 @@ export default function BrandDetailPage() {
           </div>
           {!editing && (
             <div className="flex items-center gap-2 shrink-0">
+              <Link
+                href={`/dashboard/brands/${id}/competitive`}
+                className="flex items-center gap-1.5 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors"
+              >
+                <TrendingUp className="w-3.5 h-3.5" /> Competitive Intel
+              </Link>
               <Link
                 href={`/dashboard/brands/${id}/ingest`}
                 className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
@@ -428,6 +493,8 @@ export default function BrandDetailPage() {
           </Link>
         </div>
       )}
+
+      <QualityImprovement brandId={id} />
 
       <p className="text-xs text-gray-400">
         Brand created {new Date(brand.createdAt).toLocaleDateString()}. Ingest additional

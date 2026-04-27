@@ -6,7 +6,116 @@ import { api } from "@/lib/api";
 import {
   CheckCircle2, XCircle, Pencil, Sparkles, ClipboardCheck,
   Check, Filter, FlaskConical, X, Image, AlertCircle, RotateCcw,
+  Maximize2, ZoomIn,
 } from "lucide-react";
+
+function renderLinkedContent(text: string) {
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+  return parts.map((part, i) =>
+    /^https?:\/\//.test(part)
+      ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700 underline break-all">{part}</a>
+      : <span key={i}>{part}</span>
+  );
+}
+
+function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 text-white/70 hover:text-white bg-black/40 rounded-full p-2"
+      >
+        <X className="w-5 h-5" />
+      </button>
+      <img
+        src={src}
+        alt="Post media"
+        className="max-w-full max-h-[90vh] rounded-xl object-contain shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      />
+    </div>
+  );
+}
+
+interface Post {
+  id: string;
+  contentText: string;
+  contentHashtags: string[] | null;
+  platform: string;
+  contentType: string | null;
+  scheduledAt: string;
+  agentId: string;
+  brandProfileId: string;
+  suggestedMediaPrompt: string | null;
+  mediaUrls: string[] | null;
+  status: string;
+  reviewNotes: string | null;
+}
+
+function FullscreenPostModal({ post, onClose }: { post: Post; onClose: () => void }) {
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full capitalize ${PLATFORM_COLORS[post.platform] ?? "bg-gray-100 text-gray-700"}`}>
+              {post.platform}
+            </span>
+            {post.contentType && <span className="text-xs text-gray-500 capitalize">{post.contentType}</span>}
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-6 space-y-4">
+          {post.mediaUrls && post.mediaUrls.length > 0 && (
+            <div className="relative group cursor-zoom-in" onClick={() => setLightboxSrc(post.mediaUrls![0]!)}>
+              <img
+                src={post.mediaUrls[0]}
+                alt="Post media"
+                className="w-full rounded-xl object-cover border border-gray-200"
+              />
+              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-xl transition-colors flex items-center justify-center">
+                <ZoomIn className="w-8 h-8 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+              </div>
+            </div>
+          )}
+
+          <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap select-text">
+            {renderLinkedContent(post.contentText)}
+          </p>
+
+          {post.contentHashtags && post.contentHashtags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {post.contentHashtags.map((tag) => (
+                <span key={tag} className="text-xs text-blue-500 font-medium">#{tag}</span>
+              ))}
+            </div>
+          )}
+
+          <p className="text-xs text-gray-400">
+            Scheduled: {new Date(post.scheduledAt).toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" })}
+          </p>
+
+          {post.reviewNotes && (
+            <div className="p-3 bg-red-50 rounded-xl">
+              <p className="text-xs text-red-600"><span className="font-medium">Note:</span> {post.reviewNotes}</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {lightboxSrc && <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
+    </div>
+  );
+}
 
 const PLATFORM_CHAR_LIMITS: Record<string, number | null> = {
   x: 280,
@@ -26,21 +135,6 @@ const PLATFORM_CHAR_LIMITS: Record<string, number | null> = {
   pinterest: 500,
   email: null,
 };
-
-interface Post {
-  id: string;
-  contentText: string;
-  contentHashtags: string[] | null;
-  platform: string;
-  contentType: string | null;
-  scheduledAt: string;
-  agentId: string;
-  brandProfileId: string;
-  suggestedMediaPrompt: string | null;
-  mediaUrls: string[] | null;
-  status: string;
-  reviewNotes: string | null;
-}
 
 interface Brand { id: string; name: string; }
 
@@ -101,6 +195,8 @@ export default function ReviewQueuePage() {
   const [editPrompt, setEditPrompt] = useState("");
   const [imageError, setImageError] = useState<string | null>(null);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [fullscreenPost, setFullscreenPost] = useState<Post | null>(null);
 
   const queryParams = new URLSearchParams();
   if (filterBrand) queryParams.set("brandProfileId", filterBrand);
@@ -199,6 +295,9 @@ export default function ReviewQueuePage() {
 
   return (
     <div className="space-y-6">
+      {lightboxSrc && <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
+      {fullscreenPost && <FullscreenPostModal post={fullscreenPost} onClose={() => setFullscreenPost(null)} />}
+
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -415,6 +514,13 @@ export default function ReviewQueuePage() {
                   )}
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => setFullscreenPost(post)}
+                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-700 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+                    title="Full-screen view"
+                  >
+                    <Maximize2 className="w-3 h-3" />
+                  </button>
                   {statusTab === "pending_review" && (
                     <>
                       <button
@@ -515,7 +621,9 @@ export default function ReviewQueuePage() {
                     </div>
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap select-text">{post.contentText}</p>
+                  <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap select-text">
+                    {renderLinkedContent(post.contentText)}
+                  </p>
                 )}
 
                 {post.contentHashtags && post.contentHashtags.length > 0 && (
@@ -526,14 +634,17 @@ export default function ReviewQueuePage() {
                   </div>
                 )}
 
-                {/* Generated image */}
+                {/* Generated image — click to open lightbox */}
                 {post.mediaUrls && post.mediaUrls.length > 0 && (
-                  <div className="mt-3">
+                  <div className="mt-3 relative group cursor-zoom-in" onClick={() => setLightboxSrc(post.mediaUrls![0]!)}>
                     <img
                       src={post.mediaUrls[0]}
                       alt="Generated post image"
                       className="rounded-xl max-h-64 w-full object-cover border border-gray-200"
                     />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-xl transition-colors flex items-center justify-center">
+                      <ZoomIn className="w-7 h-7 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow" />
+                    </div>
                   </div>
                 )}
 

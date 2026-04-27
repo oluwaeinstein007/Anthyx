@@ -22,6 +22,8 @@ import { inboxRouter } from "./routes/inbox";
 import { emailCampaignsRouter } from "./routes/email-campaigns";
 import { feedsRouter } from "./routes/feeds";
 import { affiliatesRouter } from "./routes/affiliates";
+import { competitiveRouter } from "./routes/competitive";
+import { mailingListsRouter } from "./routes/mailing-lists";
 import { PlanLimitError } from "./services/billing/limits";
 import { registerMcpRoutes } from "./mcp/server";
 import { db } from "./db/client";
@@ -106,6 +108,8 @@ app.use("/v1/inbox", inboxRouter);
 app.use("/v1/email-campaigns", emailCampaignsRouter);
 app.use("/v1/brands", feedsRouter);
 app.use("/v1/affiliates", affiliatesRouter);
+app.use("/v1/brands", competitiveRouter);
+app.use("/v1/mailing-lists", mailingListsRouter);
 
 // ── MCP SSE routes ────────────────────────────────────────────────────────────
 registerMcpRoutes(app);

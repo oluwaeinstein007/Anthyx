@@ -19,6 +19,10 @@ async function request<T>(
   });
 
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== "undefined" && !path.includes("/auth/")) {
+      window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+      return new Promise(() => {});
+    }
     const error = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
     throw new Error(error.error ?? `Request failed: ${res.status}`);
   }
@@ -35,6 +39,10 @@ async function upload<T>(path: string, body: FormData): Promise<T> {
   });
 
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== "undefined") {
+      window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+      return new Promise(() => {});
+    }
     const error = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
     throw new Error(error.error ?? `Upload failed: ${res.status}`);
   }

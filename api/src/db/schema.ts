@@ -119,17 +119,55 @@ export const brandProfiles = pgTable("brand_profiles", {
     .notNull(),
   name: text("name").notNull(),
   industry: text("industry"),
+
+  // Voice & tone
   voiceTraits: jsonb("voice_traits"),
   toneDescriptors: text("tone_descriptors").array(),
+  voiceExamples: text("voice_examples").array().default(sql`'{}'`),
+
+  // Visual identity
   primaryColors: text("primary_colors").array(),
   secondaryColors: text("secondary_colors").array(),
   typography: jsonb("typography"),
+  logoUrl: text("logo_url"),
+  tagline: text("tagline"),
+  brandEmojis: text("brand_emojis").array().default(sql`'{}'`),
+
+  // Brand story & values
+  missionStatement: text("mission_statement"),
+  visionStatement: text("vision_statement"),
+  coreValues: jsonb("core_values"),
+  originStory: text("origin_story"),
+  brandStage: text("brand_stage").default("startup"),
+
+  // Content strategy
+  contentDos: text("content_dos").array().default(sql`'{}'`),
+  contentDonts: text("content_donts").array().default(sql`'{}'`),
+  bannedWords: text("banned_words").array().default(sql`'{}'`),
+  ctaPreferences: jsonb("cta_preferences"),
+  hashtagStrategy: jsonb("hashtag_strategy"),
+  postingLanguages: text("posting_languages").array().default(sql`ARRAY['en']`),
+  contentRatio: jsonb("content_ratio"),
+
+  // Audience & market
+  audiencePersonas: jsonb("audience_personas"),
+  geographicFocus: text("geographic_focus").array().default(sql`'{}'`),
+
+  // Social & contact
+  socialHandles: jsonb("social_handles"),
+  websiteUrl: text("website_url"),
+  brandEmail: text("brand_email"),
+
+  // Ingestion & AI infra
   qdrantCollectionId: text("qdrant_collection_id").unique(),
   sourceFiles: jsonb("source_files"),
   brandContext: jsonb("brand_context"),
   ingestStatus: text("ingest_status").default("idle"),
+  ingestHistory: jsonb("ingest_history").default(sql`'[]'`),
   bannerBearTemplateUid: text("bannerbear_template_uid"),
-  logoUrl: text("logo_url"),
+
+  // Lifecycle
+  archivedAt: timestamp("archived_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -233,13 +271,11 @@ export const marketingPlans = pgTable("marketing_plans", {
 export const scheduledPosts = pgTable("scheduled_posts", {
   id: uuid("id").primaryKey().defaultRandom(),
   planId: uuid("plan_id")
-    .references(() => marketingPlans.id)
-    .notNull(),
+    .references(() => marketingPlans.id),
   socialAccountId: uuid("social_account_id")
     .references(() => socialAccounts.id),
   agentId: uuid("agent_id")
-    .references(() => agents.id)
-    .notNull(),
+    .references(() => agents.id),
   organizationId: uuid("organization_id")
     .references(() => organizations.id)
     .notNull(),
@@ -565,6 +601,51 @@ export const emailCampaigns = pgTable("email_campaigns", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// ── Competitive Intelligence ───────────────────────────────────────────────────
+
+export const competitorTierEnum = pgEnum("competitor_tier", ["direct", "indirect", "aspirational"]);
+export const competitorStatusEnum = pgEnum("competitor_status", ["active", "inactive", "new"]);
+
+export const competitors = pgTable("competitors", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
+  brandProfileId: uuid("brand_profile_id").references(() => brandProfiles.id).notNull(),
+  name: text("name").notNull(),
+  websiteUrl: text("website_url"),
+  socialHandles: jsonb("social_handles"), // { twitter, instagram, linkedin, tiktok, ... }
+  tier: competitorTierEnum("tier").default("direct"),
+  status: competitorStatusEnum("status").default("active"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const competitorAnalyses = pgTable("competitor_analyses", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  brandProfileId: uuid("brand_profile_id").references(() => brandProfiles.id).notNull(),
+  organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
+  industryOverview: jsonb("industry_overview"),
+  contentAnalysis: jsonb("content_analysis"),
+  engagementBenchmarks: jsonb("engagement_benchmarks"),
+  gapAnalysis: jsonb("gap_analysis"),
+  shareOfVoice: jsonb("share_of_voice"),
+  sentimentAnalysis: jsonb("sentiment_analysis"),
+  benchmarkScorecard: jsonb("benchmark_scorecard"),
+  generatedAt: timestamp("generated_at").defaultNow(),
+});
+
+// ── Email Templates ────────────────────────────────────────────────────────────
+
+export const emailTemplates = pgTable("email_templates", {
+  id: text("id").primaryKey(),  // slug key, e.g. "verify-email"
+  name: text("name").notNull(),
+  subject: text("subject").notNull(),
+  htmlBody: text("html_body").notNull(),
+  plainText: text("plain_text"),
+  variables: text("variables").array().default(sql`'{}'`),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // ── RSS Feeds ──────────────────────────────────────────────────────────────────
 
 export const rssFeeds = pgTable("rss_feeds", {
@@ -588,4 +669,31 @@ export const feedItems = pgTable("feed_items", {
   publishedAt: timestamp("published_at"),
   isFlagged: boolean("is_flagged").default(false),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Mailing Lists ─────────────────────────────────────────────────────────────
+
+export const subscriberStatusEnum = pgEnum("subscriber_status", ["active", "unsubscribed"]);
+
+export const mailingLists = pgTable("mailing_lists", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  tags: text("tags").array().default(sql`'{}'`),
+  archivedAt: timestamp("archived_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const mailingListSubscribers = pgTable("mailing_list_subscribers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  mailingListId: uuid("mailing_list_id").references(() => mailingLists.id, { onDelete: "cascade" }).notNull(),
+  organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
+  email: text("email").notNull(),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  tags: text("tags").array().default(sql`'{}'`),
+  status: subscriberStatusEnum("status").default("active"),
+  addedAt: timestamp("added_at").defaultNow(),
 });

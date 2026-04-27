@@ -19,6 +19,7 @@ export interface CopywriterRunInput {
   targetLocale?: string; // e.g. "es-MX" — write the post in this language/locale
   engagementInsights?: string; // analytics-derived tone/style guidance for deeper feedback loop
   threadMode?: boolean; // if true, output a segments[] array for thread/carousel support
+  vetoGuidance?: string; // negative examples from vetoed content — patterns to avoid
 }
 
 function buildCopywriterBasePrompt(ctx: CopywriterRunInput): string {
@@ -28,6 +29,10 @@ function buildCopywriterBasePrompt(ctx: CopywriterRunInput): string {
 
   const insightsSection = ctx.engagementInsights
     ? `\n## Performance Insights (adjust your tone accordingly)\n${ctx.engagementInsights}\n`
+    : "";
+
+  const vetoSection = ctx.vetoGuidance
+    ? `\n${ctx.vetoGuidance}\n`
     : "";
 
   const threadSection = ctx.threadMode
@@ -60,7 +65,7 @@ ${ctx.dietInstructions || "No specific persona instructions."}
 
 ## Platform: ${ctx.platform.toUpperCase()}
 ${getPlatformConstraints(ctx.platform)}
-${localeSection}${insightsSection}${threadSection}
+${localeSection}${insightsSection}${vetoSection}${threadSection}
 ## Assignment
 Write a single post for the following plan item:
 - Topic: ${ctx.topic}
