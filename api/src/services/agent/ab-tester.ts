@@ -24,14 +24,19 @@ export async function generateAbVariants(
   if (post.status !== "pending_review") throw new Error("A/B test can only be created for pending_review posts");
 
   const [agent, brand, account] = await Promise.all([
-    db.query.agents.findFirst({ where: eq(agents.id, post.agentId) }),
+    post.agentId ? db.query.agents.findFirst({ where: eq(agents.id, post.agentId) }) : Promise.resolve(undefined),
     db.query.brandProfiles.findFirst({ where: eq(brandProfiles.id, post.brandProfileId) }),
     post.socialAccountId
       ? db.query.socialAccounts.findFirst({ where: eq(socialAccounts.id, post.socialAccountId) })
       : Promise.resolve(null),
   ]);
 
-  if (!agent || !brand) throw new Error("Agent or brand not found");
+  if (!brand) throw new Error("Brand not found");
+  if (!post.agentId || !agent) {
+    throw new Error(
+      "A/B testing requires a post attributed to an agent. When creating a post, use 'Attribute to agent' to link it to an agent first.",
+    );
+  }
 
   const platform = (account?.platform ?? post.platform) as Platform;
   const brandVoice = await retrieveBrandVoiceFromQdrant(post.brandProfileId, post.contentText);

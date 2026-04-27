@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -100,7 +100,7 @@ function PayloadViewer({ payload }: { payload: Record<string, unknown> }) {
   );
 }
 
-export default function AgentDetailPage() {
+function AgentDetailPageContent() {
   const { id } = useParams<{ id: string }>();
   const searchParams = useSearchParams();
   const qc = useQueryClient();
@@ -520,5 +520,13 @@ export default function AgentDetailPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function AgentDetailPage() {
+  return (
+    <Suspense>
+      <AgentDetailPageContent />
+    </Suspense>
   );
 }

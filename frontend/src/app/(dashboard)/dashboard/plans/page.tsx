@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useRef, KeyboardEvent } from "react";
+import { useState, useRef, KeyboardEvent, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import Link from "next/link";
-import { Plus, Calendar, ArrowRight, X, Sparkles, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Plus, Calendar, ArrowRight, X, Sparkles, AlertCircle, CheckCircle2, Link2 } from "lucide-react";
 
 const SUGGESTED_GOALS = [
   "Increase brand awareness",
@@ -45,9 +46,14 @@ const PLATFORMS = [
   "mastodon", "discord", "whatsapp", "slack",
 ];
 
-export default function PlansPage() {
+interface Campaign { id: string; name: string; }
+
+function PlansPageContent() {
   const qc = useQueryClient();
-  const [generating, setGenerating] = useState(false);
+  const searchParams = useSearchParams();
+  const campaignId = searchParams.get("campaignId") ?? "";
+
+  const [generating, setGenerating] = useState(() => !!campaignId);
   const [form, setForm] = useState({
     brandProfileId: "",
     agentId: "",
@@ -58,6 +64,12 @@ export default function PlansPage() {
     feedbackLoopEnabled: false,
     postsPerPlatformPerDay: 1,
     targetLocale: "",
+  });
+
+  const { data: campaign } = useQuery<Campaign>({
+    queryKey: ["campaign", campaignId],
+    queryFn: () => api.get<Campaign>(`/campaigns/${campaignId}`),
+    enabled: !!campaignId,
   });
   const [goalInput, setGoalInput] = useState("");
   const goalInputRef = useRef<HTMLInputElement>(null);
@@ -84,6 +96,7 @@ export default function PlansPage() {
         feedbackLoopEnabled: form.feedbackLoopEnabled,
         postsPerPlatformPerDay: form.postsPerPlatformPerDay,
         ...(form.targetLocale ? { targetLocale: form.targetLocale } : {}),
+        ...(campaignId ? { campaignId } : {}),
       }),
     onSuccess: () => {
       setGenerating(false);
@@ -148,7 +161,11 @@ export default function PlansPage() {
               </div>
               <div>
                 <h2 className="font-semibold text-gray-900 text-sm">New content plan</h2>
-                <p className="text-xs text-gray-400">AI will generate a full content calendar</p>
+                <p className="text-xs text-gray-400">
+                  {campaign
+                    ? <span className="flex items-center gap-1"><Link2 className="w-3 h-3 text-green-500" /> Will be linked to campaign: <strong>{campaign.name}</strong></span>
+                    : "AI will generate a full content calendar"}
+                </p>
               </div>
             </div>
             <button onClick={() => { setGenerating(false); setGenerateError(""); }} className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -445,5 +462,13 @@ export default function PlansPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function PlansPage() {
+  return (
+    <Suspense>
+      <PlansPageContent />
+    </Suspense>
   );
 }

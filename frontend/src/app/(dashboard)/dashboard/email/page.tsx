@@ -4,7 +4,10 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
-import { Plus, Send, Trash2, Pencil, X, Mail, Sparkles, Users } from "lucide-react";
+import { Plus, Send, Trash2, Pencil, X, Mail, Sparkles, Users, ChevronDown } from "lucide-react";
+
+interface MailingList { id: string; name: string; subscriberCount: number; }
+interface Subscriber { email: string; status: string; }
 
 interface EmailCampaign {
   id: string;
@@ -45,6 +48,30 @@ function CampaignModal({
     scheduledAt: initial?.scheduledAt ? initial.scheduledAt.slice(0, 16) : "",
   });
   const [aiLoading, setAiLoading] = useState(false);
+  const [listLoading, setListLoading] = useState(false);
+  const [showListPicker, setShowListPicker] = useState(false);
+
+  const { data: mailingLists = [] } = useQuery<MailingList[]>({
+    queryKey: ["mailing-lists"],
+    queryFn: () => api.get<MailingList[]>("/mailing-lists"),
+  });
+
+  async function importFromList(listId: string, listName: string) {
+    setListLoading(true);
+    setShowListPicker(false);
+    try {
+      const subscribers = await api.get<Subscriber[]>(`/mailing-lists/${listId}/subscribers`);
+      const active = subscribers.filter((s) => s.status === "active").map((s) => s.email);
+      if (active.length === 0) { alert(`"${listName}" has no active subscribers.`); return; }
+      const existing = form.recipients.split(",").map((e) => e.trim()).filter(Boolean);
+      const merged = [...new Set([...existing, ...active])];
+      setForm((f) => ({ ...f, recipients: merged.join(", ") }));
+    } catch {
+      alert("Failed to load subscribers from that list.");
+    } finally {
+      setListLoading(false);
+    }
+  }
 
   async function generateWithAI() {
     if (!form.subject) { alert("Enter a subject line first"); return; }
@@ -134,7 +161,53 @@ function CampaignModal({
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Recipients (comma-separated emails)</label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-sm font-medium text-gray-700">Recipients</label>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowListPicker((s) => !s)}
+                  disabled={listLoading}
+                  className="flex items-center gap-1.5 text-xs text-green-600 hover:text-green-700 font-medium border border-green-200 hover:bg-green-50 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <Users className="w-3 h-3" />
+                  {listLoading ? "Loading…" : "Add from mailing list"}
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+                {showListPicker && (
+                  <div className="absolute right-0 top-full mt-1 z-20 w-64 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
+                    <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
+                      <span className="text-xs font-medium text-gray-700">Select a list to import</span>
+                      <button type="button" onClick={() => setShowListPicker(false)} className="text-gray-400 hover:text-gray-600">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    {mailingLists.length === 0 ? (
+                      <div className="px-3 py-4 text-center">
+                        <p className="text-xs text-gray-400">No mailing lists yet.</p>
+                        <Link href="/dashboard/email/lists" className="text-xs text-green-600 hover:underline mt-1 block" onClick={() => setShowListPicker(false)}>
+                          Create a list →
+                        </Link>
+                      </div>
+                    ) : (
+                      <div className="max-h-48 overflow-y-auto">
+                        {mailingLists.map((list) => (
+                          <button
+                            key={list.id}
+                            type="button"
+                            onClick={() => importFromList(list.id, list.name)}
+                            className="w-full text-left px-3 py-2.5 hover:bg-gray-50 transition-colors flex items-center justify-between gap-2"
+                          >
+                            <span className="text-sm text-gray-800 truncate">{list.name}</span>
+                            <span className="text-xs text-gray-400 shrink-0">{list.subscriberCount} subscribers</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
             <textarea
               value={form.recipients}
               onChange={(e) => setForm({ ...form, recipients: e.target.value })}
@@ -142,6 +215,11 @@ function CampaignModal({
               placeholder="alice@example.com, bob@example.com"
               className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
             />
+            {form.recipients && (
+              <p className="text-xs text-gray-400 mt-1">
+                {form.recipients.split(",").map((e) => e.trim()).filter(Boolean).length} recipient(s)
+              </p>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Schedule (optional)</label>

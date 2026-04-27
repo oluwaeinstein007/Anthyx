@@ -107,12 +107,50 @@ router.get("/review/buffer", auth, async (req, res) => {
   return res.json(Object.fromEntries(byAgent));
 });
 
+// POST /posts/assist — AI content assistance (improve, proofread, reword, suggest)
+router.post("/assist", auth, async (req, res) => {
+  try {
+    const { content, action, platform: plt } = req.body as {
+      content: string;
+      action?: string;
+      platform?: string;
+    };
+    if (!content?.trim()) return res.status(400).json({ error: "content is required" });
+
+    const { generateWithFallback, CLAUDE_HAIKU } = await import("../services/agent/llm-client");
+
+    const instructions: Record<string, string> = {
+      improve: "Improve the writing quality, engagement, and clarity of this social media post. Make it more compelling and shareable. Return only the improved post text, no preamble.",
+      proofread: "Fix all grammar, spelling, and punctuation errors. Keep the meaning and tone identical. Return only the corrected text, no preamble.",
+      reword: "Rewrite this post using different words and phrasing while keeping the same core message. Return only the reworded text, no preamble.",
+      suggest: "Write 3 alternative versions of this post. Label them exactly 'Option 1:', 'Option 2:', 'Option 3:' — each on its own line. Each should have a different tone or angle.",
+    };
+
+    const instruction = instructions[action ?? "improve"] ?? instructions["improve"]!;
+    const platformCtx = plt ? ` Optimize for ${plt}.` : "";
+
+    const result = await generateWithFallback({
+      systemPrompt: `You are an expert social media copywriter.${platformCtx} ${instruction}`,
+      userMessage: content,
+      claudeModel: CLAUDE_HAIKU,
+      maxTokens: 1024,
+    });
+
+    return res.json({ result });
+  } catch (err) {
+    console.error("[posts/assist]", err);
+    const msg = err instanceof Error ? err.message : "AI assist failed";
+    return res.status(500).json({ error: msg });
+  }
+});
+
 // POST /posts — manually create a post (no plan or agent required)
 router.post("/", auth, async (req, res) => {
   const {
     brandProfileId,
     agentId: manualAgentId,
     platform,
+    planId,
     contentText,
     contentType,
     contentHashtags,
@@ -122,6 +160,7 @@ router.post("/", auth, async (req, res) => {
     brandProfileId: string;
     agentId?: string;
     platform: string;
+    planId?: string;
     contentText: string;
     contentType?: string;
     contentHashtags?: string[];
@@ -148,6 +187,7 @@ router.post("/", auth, async (req, res) => {
       brandProfileId,
       agentId: manualAgentId ?? null,
       platform: platform as never,
+      planId: planId ?? null,
       contentText: contentText.trim(),
       contentType: contentType ?? null,
       contentHashtags: contentHashtags ?? null,
@@ -432,8 +472,14 @@ router.get("/ab-tests", auth, async (req, res) => {
 
 // POST /posts/:id/ab-test — generate a second content variant for A/B testing
 router.post("/:id/ab-test", auth, async (req, res) => {
-  const result = await generateAbVariants(req.params.id!, req.user.orgId);
-  return res.status(201).json(result);
+  try {
+    const result = await generateAbVariants(req.params.id!, req.user.orgId);
+    return res.status(201).json(result);
+  } catch (err) {
+    console.error("[ab-test]", err);
+    const message = err instanceof Error ? err.message : "Failed to generate A/B variant";
+    return res.status(500).json({ error: message });
+  }
 });
 
 // POST /posts/ab-tests/:abTestId/promote — evaluate and promote A/B test winner
