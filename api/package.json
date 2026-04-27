@@ -11,7 +11,11 @@
     "start:worker": "node dist/workers/index.js",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src --ext .ts",
+    "seed": "npx tsx src/db/seed.ts",
+    "seed:admins": "npx tsx src/db/seed-admins.ts",
+    "migrate": "npx tsx -e \"import('./src/db/client').then(m => m.migrate())\"",
+    "db:migrate": "drizzle-kit push"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.0",

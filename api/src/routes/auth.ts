@@ -192,13 +192,79 @@ router.post("/login", async (req, res) => {
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 
-  return res.json({ user: { id: user.id, email: user.email, name: user.name, isSuperAdmin: user.isSuperAdmin } });
+  return res.json({ user: { id: user.id, email: user.email, name: user.name, isSuperAdmin: user.isSuperAdmin, mustChangePassword: user.mustChangePassword ?? false } });
 });
 
 // POST /auth/logout
 router.post("/logout", (req, res) => {
   res.clearCookie("auth_token");
   return res.json({ ok: true });
+});
+
+// POST /auth/admin/login — issues an admin-scoped token (aud: 'admin') via admin_token cookie
+router.post("/admin/login", async (req, res) => {
+  const parsed = LoginSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Validation failed" });
+
+  const { email, password } = parsed.data;
+
+  const user = await db.query.users.findFirst({ where: eq(users.email, email) });
+  if (!user?.passwordHash) return res.status(401).json({ error: "Invalid credentials" });
+
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) return res.status(401).json({ error: "Invalid credentials" });
+  if (!user.isSuperAdmin) return res.status(403).json({ error: "Access denied — admin only" });
+  if (!user.organizationId) return res.status(401).json({ error: "No organization" });
+
+  const token = issueToken({
+    id: user.id,
+    email: user.email,
+    orgId: user.organizationId,
+    role: user.role,
+  }, "admin");
+
+  res.cookie("admin_token", token, {
+    httpOnly: true,
+    secure: process.env["NODE_ENV"] === "production",
+    sameSite: "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+
+  return res.json({ user: { id: user.id, email: user.email, name: user.name, isSuperAdmin: true, mustChangePassword: user.mustChangePassword ?? false } });
+});
+
+// POST /auth/admin/logout
+router.post("/admin/logout", (req, res) => {
+  res.clearCookie("admin_token");
+  return res.json({ ok: true });
+});
+
+// GET /auth/admin/me — reads admin_token cookie
+router.get("/admin/me", async (req, res) => {
+  const token =
+    req.cookies?.["admin_token"] || req.headers.authorization?.replace("Bearer ", "");
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const jwtLib = await import("jsonwebtoken");
+    const secret = process.env["JWT_SECRET"]!;
+    const payload = jwtLib.default.verify(token, secret) as { sub: string; aud?: string };
+
+    if (payload.aud !== "admin") return res.status(401).json({ error: "Unauthorized" });
+
+    const user = await db.query.users.findFirst({ where: eq(users.id, payload.sub) });
+    if (!user?.isSuperAdmin) return res.status(403).json({ error: "Forbidden" });
+
+    return res.json({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      isSuperAdmin: user.isSuperAdmin,
+      mustChangePassword: user.mustChangePassword ?? false,
+    });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
 });
 
 // PUT /auth/me — update display name

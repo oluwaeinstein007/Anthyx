@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import {
   CheckCircle2, XCircle, Pencil, Sparkles, ClipboardCheck,
-  Check, Filter, FlaskConical, X, Image, AlertCircle,
+  Check, Filter, FlaskConical, X, Image, AlertCircle, RotateCcw,
 } from "lucide-react";
 
 const PLATFORM_CHAR_LIMITS: Record<string, number | null> = {
@@ -39,6 +39,7 @@ interface Post {
   suggestedMediaPrompt: string | null;
   mediaUrls: string[] | null;
   status: string;
+  reviewNotes: string | null;
 }
 
 interface Brand { id: string; name: string; }
@@ -63,8 +64,18 @@ const PLATFORM_COLORS: Record<string, string> = {
 const CONTENT_TYPES = ["educational", "promotional", "entertaining", "inspirational", "news"];
 const PLATFORMS = ["x", "instagram", "linkedin", "facebook", "telegram", "tiktok", "bluesky", "threads", "reddit"];
 
+type StatusTab = "pending_review" | "approved" | "vetoed";
+
+const STATUS_TABS: { key: StatusTab; label: string }[] = [
+  { key: "pending_review", label: "Pending Review" },
+  { key: "approved", label: "Approved" },
+  { key: "vetoed", label: "Vetoed" },
+];
+
 export default function ReviewQueuePage() {
   const qc = useQueryClient();
+
+  const [statusTab, setStatusTab] = useState<StatusTab>("pending_review");
 
   // Filters
   const [filterBrand, setFilterBrand] = useState("");
@@ -77,6 +88,7 @@ export default function ReviewQueuePage() {
   const [editText, setEditText] = useState("");
   const [vetoId, setVetoId] = useState<string | null>(null);
   const [vetoReason, setVetoReason] = useState("");
+  const [reApproveId, setReApproveId] = useState<string | null>(null);
   const [bulkMode, setBulkMode] = useState<"approve" | "veto" | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkVetoReason, setBulkVetoReason] = useState("");
@@ -95,17 +107,24 @@ export default function ReviewQueuePage() {
   if (filterPlatform) queryParams.set("platform", filterPlatform);
   if (filterContentType) queryParams.set("contentType", filterContentType);
 
-  const { data: posts = [], isLoading } = useQuery<Post[]>({
-    queryKey: ["posts-review", filterBrand, filterPlatform, filterContentType],
-    queryFn: () => api.get<Post[]>(`/posts/review?${queryParams.toString()}`),
+  // Pending review uses the dedicated review endpoint; other statuses use the main posts list.
+  const postsEndpoint = statusTab === "pending_review"
+    ? `/posts/review?${queryParams.toString()}`
+    : `/posts?status=${statusTab}&${queryParams.toString()}`;
+
+  const { data: postsData = [], isLoading } = useQuery<Post[] | { posts: Post[] }>({
+    queryKey: ["posts-review", statusTab, filterBrand, filterPlatform, filterContentType],
+    queryFn: () => api.get<Post[] | { posts: Post[] }>(postsEndpoint),
     refetchInterval: 30_000,
   });
+
+  const posts: Post[] = Array.isArray(postsData) ? postsData : (postsData as { posts: Post[] }).posts ?? [];
 
   const { data: brands = [] } = useQuery<Brand[]>({ queryKey: ["brands"], queryFn: () => api.get<Brand[]>("/brands") });
 
   const approve = useMutation({
     mutationFn: (postId: string) => api.post(`/posts/${postId}/approve`, {}),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["posts-review"] }),
+    onSuccess: () => { setReApproveId(null); qc.invalidateQueries({ queryKey: ["posts-review"] }); },
   });
 
   const veto = useMutation({
@@ -171,13 +190,12 @@ export default function ReviewQueuePage() {
 
   const filtersActive = !!(filterBrand || filterPlatform || filterContentType);
 
-  if (isLoading) {
-    return (
-      <div className="space-y-4 animate-pulse">
-        {[...Array(3)].map((_, i) => <div key={i} className="h-40 bg-gray-100 rounded-2xl" />)}
-      </div>
-    );
-  }
+  const pendingCount = useQuery<Post[]>({
+    queryKey: ["posts-review-count"],
+    queryFn: () => api.get<Post[]>("/posts/review"),
+    refetchInterval: 60_000,
+    select: (d) => d,
+  }).data?.length;
 
   return (
     <div className="space-y-6">
@@ -186,7 +204,7 @@ export default function ReviewQueuePage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Review Queue</h1>
           <p className="text-sm text-gray-500 mt-1">
-            {posts.length} post{posts.length !== 1 ? "s" : ""} awaiting review
+            {posts.length} post{posts.length !== 1 ? "s" : ""} {statusTab === "pending_review" ? "awaiting review" : statusTab === "approved" ? "approved" : "vetoed"}
             {filtersActive && " (filtered)"}
           </p>
         </div>
@@ -202,7 +220,7 @@ export default function ReviewQueuePage() {
             <Filter className="w-4 h-4" />
             {filtersActive ? "Filtered" : "Filter"}
           </button>
-          {posts.length > 1 && (
+          {statusTab === "pending_review" && posts.length > 1 && (
             <>
               <button
                 onClick={() => { setBulkMode("approve"); selectAll(); }}
@@ -219,6 +237,26 @@ export default function ReviewQueuePage() {
             </>
           )}
         </div>
+      </div>
+
+      {/* Status tabs */}
+      <div className="flex items-center gap-1 border-b border-gray-200">
+        {STATUS_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => { setStatusTab(tab.key); setBulkMode(null); setSelectedIds(new Set()); }}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
+              statusTab === tab.key
+                ? "border-green-600 text-green-700"
+                : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            {tab.label}
+            {tab.key === "pending_review" && pendingCount !== undefined && pendingCount > 0 && (
+              <span className="px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded-full font-semibold">{pendingCount}</span>
+            )}
+          </button>
+        ))}
       </div>
 
       {/* Filter bar */}
@@ -323,14 +361,20 @@ export default function ReviewQueuePage() {
         </div>
       )}
 
-      {posts.length === 0 ? (
+      {isLoading ? (
+        <div className="space-y-4 animate-pulse">
+          {[...Array(3)].map((_, i) => <div key={i} className="h-40 bg-gray-100 rounded-2xl" />)}
+        </div>
+      ) : posts.length === 0 ? (
         <div className="text-center py-24">
           <div className="w-16 h-16 bg-green-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <ClipboardCheck className="w-8 h-8 text-green-500" />
           </div>
-          <h2 className="text-lg font-semibold text-gray-900 mb-1">All clear</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-1">
+            {statusTab === "pending_review" ? "All clear" : statusTab === "approved" ? "No approved posts" : "No vetoed posts"}
+          </h2>
           <p className="text-sm text-gray-500">
-            {filtersActive ? "No posts match the current filters." : "No posts awaiting review right now."}
+            {filtersActive ? "No posts match the current filters." : statusTab === "pending_review" ? "No posts awaiting review right now." : `No ${statusTab.replace("_", " ")} posts found.`}
           </p>
         </div>
       ) : (
@@ -345,7 +389,7 @@ export default function ReviewQueuePage() {
               {/* Card header */}
               <div className="px-5 py-3.5 bg-gray-50 border-b border-gray-100 flex items-center justify-between gap-4 flex-wrap">
                 <div className="flex items-center gap-2.5">
-                  {bulkMode && (
+                  {bulkMode && statusTab === "pending_review" && (
                     <input
                       type="checkbox"
                       checked={selectedIds.has(post.id)}
@@ -362,35 +406,69 @@ export default function ReviewQueuePage() {
                   <span className="text-xs text-gray-400">
                     {new Date(post.scheduledAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
                   </span>
+                  {/* Status badge for non-pending tabs */}
+                  {statusTab === "approved" && (
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">Approved</span>
+                  )}
+                  {statusTab === "vetoed" && (
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">Vetoed</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <button
-                    onClick={() => { setAbTestId(post.id); }}
-                    className="flex items-center gap-1.5 text-xs text-purple-600 hover:text-purple-800 px-2.5 py-1.5 rounded-lg hover:bg-purple-50 transition-colors"
-                  >
-                    <FlaskConical className="w-3 h-3" /> A/B test
-                  </button>
-                  <button
-                    onClick={() => { setEditingId(post.id); setEditText(post.contentText); setVetoId(null); }}
-                    className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-800 px-2.5 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
-                  >
-                    <Pencil className="w-3 h-3" /> Edit
-                  </button>
-                  <button
-                    onClick={() => { setVetoId(post.id); setEditingId(null); }}
-                    className="flex items-center gap-1.5 text-xs text-red-600 hover:text-red-700 px-2.5 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
-                  >
-                    <XCircle className="w-3 h-3" /> Veto
-                  </button>
-                  <button
-                    onClick={() => approve.mutate(post.id)}
-                    disabled={approve.isPending}
-                    className="flex items-center gap-1.5 text-xs bg-green-600 hover:bg-green-700 text-white px-3.5 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50"
-                  >
-                    <CheckCircle2 className="w-3 h-3" /> Approve
-                  </button>
+                  {statusTab === "pending_review" && (
+                    <>
+                      <button
+                        onClick={() => { setAbTestId(post.id); }}
+                        className="flex items-center gap-1.5 text-xs text-purple-600 hover:text-purple-800 px-2.5 py-1.5 rounded-lg hover:bg-purple-50 transition-colors"
+                      >
+                        <FlaskConical className="w-3 h-3" /> A/B test
+                      </button>
+                      <button
+                        onClick={() => { setEditingId(post.id); setEditText(post.contentText); setVetoId(null); }}
+                        className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-800 px-2.5 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+                      >
+                        <Pencil className="w-3 h-3" /> Edit
+                      </button>
+                      <button
+                        onClick={() => { setVetoId(post.id); setEditingId(null); }}
+                        className="flex items-center gap-1.5 text-xs text-red-600 hover:text-red-700 px-2.5 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
+                      >
+                        <XCircle className="w-3 h-3" /> Veto
+                      </button>
+                      <button
+                        onClick={() => approve.mutate(post.id)}
+                        disabled={approve.isPending}
+                        className="flex items-center gap-1.5 text-xs bg-green-600 hover:bg-green-700 text-white px-3.5 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50"
+                      >
+                        <CheckCircle2 className="w-3 h-3" /> Approve
+                      </button>
+                    </>
+                  )}
+                  {statusTab === "approved" && (
+                    <button
+                      onClick={() => { setVetoId(post.id); setVetoReason(""); }}
+                      className="flex items-center gap-1.5 text-xs text-red-600 hover:text-red-700 px-2.5 py-1.5 rounded-lg hover:bg-red-50 border border-red-200 transition-colors"
+                    >
+                      <XCircle className="w-3 h-3" /> Veto
+                    </button>
+                  )}
+                  {statusTab === "vetoed" && (
+                    <button
+                      onClick={() => setReApproveId(post.id)}
+                      className="flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 px-2.5 py-1.5 rounded-lg hover:bg-green-50 border border-green-200 transition-colors"
+                    >
+                      <RotateCcw className="w-3 h-3" /> Re-approve
+                    </button>
+                  )}
                 </div>
               </div>
+
+              {/* Veto reason banner (for vetoed posts) */}
+              {statusTab === "vetoed" && post.reviewNotes && (
+                <div className="px-5 py-2.5 bg-red-50 border-b border-red-100">
+                  <p className="text-xs text-red-600"><span className="font-medium">Veto reason:</span> {post.reviewNotes}</p>
+                </div>
+              )}
 
               {/* Content */}
               <div className="p-5">
@@ -437,7 +515,7 @@ export default function ReviewQueuePage() {
                     </div>
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">{post.contentText}</p>
+                  <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap select-text">{post.contentText}</p>
                 )}
 
                 {post.contentHashtags && post.contentHashtags.length > 0 && (
@@ -459,8 +537,8 @@ export default function ReviewQueuePage() {
                   </div>
                 )}
 
-                {/* Image prompt section */}
-                {post.suggestedMediaPrompt && (
+                {/* Image prompt section (pending_review only) */}
+                {statusTab === "pending_review" && post.suggestedMediaPrompt && (
                   <div className="mt-3 rounded-xl border border-purple-100 overflow-hidden">
                     {imagePromptId === post.id ? (
                       <div className="p-3 bg-purple-50 space-y-2">
@@ -561,10 +639,15 @@ export default function ReviewQueuePage() {
                 </div>
               )}
 
-              {/* Veto panel */}
+              {/* Veto confirmation panel */}
               {vetoId === post.id && (
                 <div className="px-5 pb-5 pt-4 border-t border-red-100 bg-red-50 space-y-3">
-                  <p className="text-sm font-medium text-red-800">Select a reason for vetoing:</p>
+                  <p className="text-sm font-medium text-red-800">
+                    {statusTab === "approved" ? "Veto this approved post?" : "Select a reason for vetoing:"}
+                  </p>
+                  {statusTab === "approved" && (
+                    <p className="text-xs text-red-600">This post was already approved. Vetoing it will remove it from the schedule.</p>
+                  )}
                   <div className="flex flex-wrap gap-1.5">
                     {VETO_REASONS.map((r) => (
                       <button
@@ -589,6 +672,26 @@ export default function ReviewQueuePage() {
                       {veto.isPending ? "Vetoing…" : "Confirm veto"}
                     </button>
                     <button onClick={() => { setVetoId(null); setVetoReason(""); }} className="px-4 py-2 text-sm border border-red-200 bg-white hover:bg-red-50 rounded-xl text-red-600 transition-colors">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Re-approve confirmation panel */}
+              {reApproveId === post.id && (
+                <div className="px-5 pb-5 pt-4 border-t border-green-100 bg-green-50 space-y-3">
+                  <p className="text-sm font-medium text-green-800">Re-approve this vetoed post?</p>
+                  <p className="text-xs text-green-700">The post will move back to approved and be scheduled for publishing.</p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => approve.mutate(post.id)}
+                      disabled={approve.isPending}
+                      className="px-4 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
+                    >
+                      {approve.isPending ? "Approving…" : "Confirm re-approve"}
+                    </button>
+                    <button onClick={() => setReApproveId(null)} className="px-4 py-2 text-sm border border-green-200 bg-white hover:bg-green-50 rounded-xl text-green-600 transition-colors">
                       Cancel
                     </button>
                   </div>

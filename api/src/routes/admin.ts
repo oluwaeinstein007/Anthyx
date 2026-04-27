@@ -10,8 +10,9 @@ import {
   featureFlags,
   affiliates,
   agents,
+  planTiers,
 } from "../db/schema";
-import { auth, issueToken } from "../middleware/auth";
+import { adminAuth, issueToken } from "../middleware/auth";
 import {
   postExecutionQueue,
   planGenerationQueue,
@@ -23,18 +24,8 @@ import {
 
 const router = Router();
 
-// All admin routes require authentication + super_admin flag
-async function requireSuperAdmin(
-  req: Parameters<Parameters<Router["use"]>[0]>[0] & { user: { id: string } },
-  res: Parameters<Parameters<Router["use"]>[0]>[1],
-  next: Parameters<Parameters<Router["use"]>[0]>[2],
-) {
-  const user = await db.query.users.findFirst({ where: eq(users.id, req.user.id) });
-  if (!user?.isSuperAdmin) return res.status(403).json({ error: "Forbidden" });
-  next();
-}
-
-router.use(auth, requireSuperAdmin as never);
+// All admin routes require an admin-scoped JWT (aud: 'admin') and isSuperAdmin flag.
+router.use(adminAuth);
 
 // ── Platform stats ─────────────────────────────────────────────────────────────
 
@@ -396,6 +387,44 @@ router.put("/agents/:id/resume", async (req, res) => {
     .set({ isActive: true, silencedAt: null, silenceReason: null, updatedAt: new Date() })
     .where(eq(agents.id, req.params.id!));
   return res.json({ resumed: true });
+});
+
+// ── Plan Tier Pricing ──────────────────────────────────────────────────────────
+
+// GET /admin/plans — list all plan tiers with current pricing
+router.get("/plans", async (_req, res) => {
+  const tiers = await db.query.planTiers.findMany({
+    orderBy: (t, { asc }) => [asc(t.monthlyPrice)],
+  });
+  return res.json(tiers);
+});
+
+// PUT /admin/plans/:tier — update pricing for a plan tier (applies to new subscribers only)
+router.put("/plans/:tier", async (req, res) => {
+  const { monthlyPrice, annualPrice } = req.body as { monthlyPrice?: number; annualPrice?: number };
+
+  if (monthlyPrice === undefined && annualPrice === undefined) {
+    return res.status(400).json({ error: "Provide at least one of monthlyPrice or annualPrice" });
+  }
+  if (monthlyPrice !== undefined && (typeof monthlyPrice !== "number" || monthlyPrice < 0)) {
+    return res.status(400).json({ error: "monthlyPrice must be a non-negative integer (cents)" });
+  }
+  if (annualPrice !== undefined && (typeof annualPrice !== "number" || annualPrice < 0)) {
+    return res.status(400).json({ error: "annualPrice must be a non-negative integer (cents)" });
+  }
+
+  const [updated] = await db
+    .update(planTiers)
+    .set({
+      ...(monthlyPrice !== undefined && { monthlyPrice }),
+      ...(annualPrice !== undefined && { annualPrice }),
+    })
+    .where(eq(planTiers.tier, req.params.tier as never))
+    .returning();
+
+  if (!updated) return res.status(404).json({ error: `Plan tier '${req.params.tier}' not found` });
+
+  return res.json(updated);
 });
 
 export { router as adminRouter };

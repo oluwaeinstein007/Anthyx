@@ -10,17 +10,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    api.get<{ isSuperAdmin: boolean }>("/auth/me")
-      .then((me) => {
-        if (!me.isSuperAdmin) {
-          router.replace("/login");
-        } else {
-          setReady(true);
-        }
-      })
-      .catch(() => {
-        router.replace("/login");
-      });
+    api.get<{ isSuperAdmin: boolean }>("/auth/admin/me")
+      .then(() => setReady(true))
+      .catch(() => router.replace("/login"));
   }, [router]);
 
   if (!ready) {

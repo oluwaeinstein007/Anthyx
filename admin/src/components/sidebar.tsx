@@ -34,7 +34,7 @@ export function AdminSidebar() {
   const router = useRouter();
 
   async function handleSignOut() {
-    try { await api.post("/auth/logout"); } catch { /* ignore */ }
+    try { await api.post("/auth/admin/logout"); } catch { /* ignore */ }
     router.push("/login");
   }
 

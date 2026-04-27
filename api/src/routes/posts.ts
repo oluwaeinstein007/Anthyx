@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq, and, inArray, type SQL } from "drizzle-orm";
 import multer from "multer";
 import { db } from "../db/client";
-import { scheduledPosts, postAnalytics, abTests } from "../db/schema";
+import { scheduledPosts, postAnalytics, abTests, postStatusLogs } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { requireLimit } from "../middleware/plan-limits";
@@ -129,6 +129,7 @@ router.put("/:id", auth, validate(UpdatePostSchema), async (req, res) => {
 });
 
 // POST /posts/:id/approve
+// Accepts pending_review and vetoed posts (allows un-vetoing a previously vetoed post).
 router.post("/:id/approve", auth, requireLimit("post"), validate(ApprovePostSchema), async (req, res) => {
 
   const post = await db.query.scheduledPosts.findFirst({
@@ -139,17 +140,32 @@ router.post("/:id/approve", auth, requireLimit("post"), validate(ApprovePostSche
   });
   if (!post) return res.status(404).json({ error: "Not found" });
 
-  // Mark approved
+  const allowedFromStatuses = ["pending_review", "vetoed"];
+  if (!allowedFromStatuses.includes(post.status!)) {
+    return res.status(400).json({ error: `Cannot approve a post with status '${post.status}'` });
+  }
+
+  const fromStatus = post.status!;
+
   await db
     .update(scheduledPosts)
     .set({
       status: "approved",
       reviewedBy: req.user.id,
       reviewedAt: new Date(),
-      reviewNotes: req.body.reviewNotes,
+      reviewNotes: req.body.reviewNotes ?? null,
       updatedAt: new Date(),
     })
     .where(eq(scheduledPosts.id, post.id));
+
+  await db.insert(postStatusLogs).values({
+    postId: post.id,
+    organizationId: req.user.orgId,
+    actorId: req.user.id,
+    fromStatus,
+    toStatus: "approved",
+    reason: req.body.reviewNotes ?? null,
+  });
 
   // Only schedule BullMQ job if a social account is linked; otherwise the post
   // stays in "approved" state until the user connects an account and reschedules.
@@ -213,6 +229,7 @@ router.post("/veto-batch", auth, async (req, res) => {
   });
 
   for (const post of posts) {
+    const fromStatus = post.status!;
     await db
       .update(scheduledPosts)
       .set({
@@ -223,28 +240,57 @@ router.post("/veto-batch", auth, async (req, res) => {
         updatedAt: new Date(),
       })
       .where(eq(scheduledPosts.id, post.id));
+
+    await db.insert(postStatusLogs).values({
+      postId: post.id,
+      organizationId: req.user.orgId,
+      actorId: req.user.id,
+      fromStatus,
+      toStatus: "vetoed",
+      reason: reason ?? null,
+    });
   }
 
   return res.json({ vetoed: posts.length });
 });
 
 // POST /posts/:id/veto
+// Accepts pending_review and approved posts (allows vetoing a previously approved post).
 router.post("/:id/veto", auth, validate(VetoPostSchema), async (req, res) => {
+  const post = await db.query.scheduledPosts.findFirst({
+    where: and(
+      eq(scheduledPosts.id, req.params.id!),
+      eq(scheduledPosts.organizationId, req.user.orgId),
+    ),
+  });
+  if (!post) return res.status(404).json({ error: "Not found" });
+
+  const allowedFromStatuses = ["pending_review", "approved"];
+  if (!allowedFromStatuses.includes(post.status!)) {
+    return res.status(400).json({ error: `Cannot veto a post with status '${post.status}'` });
+  }
+
+  const fromStatus = post.status!;
+
   await db
     .update(scheduledPosts)
     .set({
       status: "vetoed",
       reviewedBy: req.user.id,
       reviewedAt: new Date(),
-      reviewNotes: req.body.reason,
+      reviewNotes: req.body.reason ?? null,
       updatedAt: new Date(),
     })
-    .where(
-      and(
-        eq(scheduledPosts.id, req.params.id!),
-        eq(scheduledPosts.organizationId, req.user.orgId),
-      ),
-    );
+    .where(eq(scheduledPosts.id, post.id));
+
+  await db.insert(postStatusLogs).values({
+    postId: post.id,
+    organizationId: req.user.orgId,
+    actorId: req.user.id,
+    fromStatus,
+    toStatus: "vetoed",
+    reason: req.body.reason ?? null,
+  });
 
   return res.json({ vetoed: true });
 });
@@ -284,6 +330,21 @@ router.get("/:id/analytics", auth, async (req, res) => {
   });
 
   return res.json(analytics);
+});
+
+// GET /posts/:id/status-log — audit trail of status changes for a post
+router.get("/:id/status-log", auth, async (req, res) => {
+  const post = await db.query.scheduledPosts.findFirst({
+    where: and(eq(scheduledPosts.id, req.params.id!), eq(scheduledPosts.organizationId, req.user.orgId)),
+  });
+  if (!post) return res.status(404).json({ error: "Not found" });
+
+  const logs = await db.query.postStatusLogs.findMany({
+    where: eq(postStatusLogs.postId, post.id),
+    orderBy: (l, { desc }) => [desc(l.createdAt)],
+  });
+
+  return res.json(logs);
 });
 
 // GET /posts/:id — get single post

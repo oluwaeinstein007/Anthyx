@@ -17,12 +17,7 @@ export default function AdminLoginPage() {
     setLoading(true);
     setError("");
     try {
-      const res = await api.post<{ user: { isSuperAdmin?: boolean } }>("/auth/login", { email, password });
-      if (!res.user.isSuperAdmin) {
-        await api.post("/auth/logout");
-        setError("Access denied — super admin only");
-        return;
-      }
+      await api.post<{ user: { isSuperAdmin?: boolean } }>("/auth/admin/login", { email, password });
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");

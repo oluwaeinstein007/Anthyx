@@ -106,6 +106,7 @@ export const users = pgTable("users", {
   role: text("role").notNull().default("member"), // 'owner' | 'admin' | 'member'
   isSuperAdmin: boolean("is_super_admin").default(false),
   emailVerified: boolean("email_verified").default(false),
+  mustChangePassword: boolean("must_change_password").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -311,6 +312,19 @@ export const agentLogs = pgTable("agent_logs", {
   postId: uuid("post_id").references(() => scheduledPosts.id),
   action: text("action").notNull(),
   payload: jsonb("payload"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Post Status Logs ──────────────────────────────────────────────────────────
+
+export const postStatusLogs = pgTable("post_status_logs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  postId: uuid("post_id").references(() => scheduledPosts.id, { onDelete: "cascade" }).notNull(),
+  organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
+  actorId: uuid("actor_id").references(() => users.id),
+  fromStatus: text("from_status").notNull(),
+  toStatus: text("to_status").notNull(),
+  reason: text("reason"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
