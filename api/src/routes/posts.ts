@@ -451,15 +451,6 @@ router.get("/:id/status-log", auth, async (req, res) => {
   return res.json(logs);
 });
 
-// GET /posts/:id — get single post
-router.get("/:id", auth, async (req, res) => {
-  const post = await db.query.scheduledPosts.findFirst({
-    where: and(eq(scheduledPosts.id, req.params.id!), eq(scheduledPosts.organizationId, req.user.orgId)),
-  });
-  if (!post) return res.status(404).json({ error: "Not found" });
-  return res.json(post);
-});
-
 // GET /posts/ab-tests — list A/B tests for the org
 router.get("/ab-tests", auth, async (req, res) => {
   const tests = await db.query.abTests.findMany({
@@ -468,6 +459,21 @@ router.get("/ab-tests", auth, async (req, res) => {
     limit: 50,
   });
   return res.json(tests);
+});
+
+// POST /posts/ab-tests/:abTestId/promote — evaluate and promote A/B test winner
+router.post("/ab-tests/:abTestId/promote", auth, async (req, res) => {
+  const result = await evaluateAndPromoteWinner(req.params.abTestId!);
+  return res.json(result);
+});
+
+// GET /posts/:id — get single post
+router.get("/:id", auth, async (req, res) => {
+  const post = await db.query.scheduledPosts.findFirst({
+    where: and(eq(scheduledPosts.id, req.params.id!), eq(scheduledPosts.organizationId, req.user.orgId)),
+  });
+  if (!post) return res.status(404).json({ error: "Not found" });
+  return res.json(post);
 });
 
 // POST /posts/:id/ab-test — generate a second content variant for A/B testing
@@ -480,12 +486,6 @@ router.post("/:id/ab-test", auth, async (req, res) => {
     const message = err instanceof Error ? err.message : "Failed to generate A/B variant";
     return res.status(500).json({ error: message });
   }
-});
-
-// POST /posts/ab-tests/:abTestId/promote — evaluate and promote A/B test winner
-router.post("/ab-tests/:abTestId/promote", auth, async (req, res) => {
-  const result = await evaluateAndPromoteWinner(req.params.abTestId!);
-  return res.json(result);
 });
 
 // POST /posts/:id/regenerate-image — regenerate AI image for a draft/pending post

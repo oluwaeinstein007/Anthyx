@@ -4,6 +4,14 @@ x-app-env: &app-env
   REDIS_URL: redis://redis:6379
   QDRANT_URL: http://qdrant:6333
 
+# External DNS for services that fetch public URLs.
+# Alpine musl getaddrinfo is unreliable with Docker's internal 127.0.0.11 forwarder.
+# Docker still intercepts service-name queries (postgres/redis/qdrant) via iptables.
+x-dns: &ext-dns
+  dns:
+    - 8.8.8.8
+    - 1.1.1.1
+
 x-app-depends: &app-depends
   postgres:
     condition: service_healthy
@@ -22,6 +30,7 @@ services:
       dockerfile: api/Dockerfile
     ports:
       - "4000:4000"
+    <<: *ext-dns
     environment:
       <<: *app-env
       NODE_ENV: development
@@ -35,6 +44,7 @@ services:
   worker:
     image: anthyx-api
     command: node dist/workers/index.js
+    <<: *ext-dns
     environment:
       <<: *app-env
     env_file: .env
@@ -102,6 +112,7 @@ services:
     build:
       context: .
       dockerfile: services/ingestor/Dockerfile
+    <<: *ext-dns
     environment:
       <<: *app-env
       INGESTOR_CONCURRENCY: 3

@@ -3,7 +3,8 @@ import { eq, and, desc } from "drizzle-orm";
 import { db } from "../db/client";
 import { brandProfiles, competitors, competitorAnalyses } from "../db/schema";
 import { auth } from "../middleware/auth";
-import { generateCompetitiveAnalysis } from "../services/agent/competitive-analyst";
+import { generateCompetitiveAnalysis, lookupCompetitorInfo } from "../services/agent/competitive-analyst";
+import { parseUrl } from "../services/brand-ingestion/parser";
 
 const router = Router();
 
@@ -112,6 +113,32 @@ router.delete("/:brandId/competitors/:competitorId", auth, async (req, res) => {
     );
 
   return res.json({ deleted: true });
+});
+
+// ── Competitor Lookup (pre-analyse) ───────────────────────────────────────────
+
+// POST /brands/:brandId/competitors/lookup
+router.post("/:brandId/competitors/lookup", auth, async (req, res) => {
+  const brand = await db.query.brandProfiles.findFirst({
+    where: and(eq(brandProfiles.id, req.params.brandId!), eq(brandProfiles.organizationId, req.user.orgId)),
+  });
+  if (!brand) return res.status(404).json({ error: "Brand not found" });
+
+  const { name, websiteUrl } = req.body as { name: string; websiteUrl?: string };
+  if (!name?.trim()) return res.status(400).json({ error: "name is required" });
+
+  let scrapedContent: string | undefined;
+  if (websiteUrl) {
+    try {
+      const parsed = await parseUrl(websiteUrl);
+      scrapedContent = parsed.text.slice(0, 3000);
+    } catch {
+      // Scrape failed — proceed with LLM knowledge only
+    }
+  }
+
+  const result = await lookupCompetitorInfo(name.trim(), websiteUrl, scrapedContent);
+  return res.json(result);
 });
 
 // ── Competitive Analysis ───────────────────────────────────────────────────────

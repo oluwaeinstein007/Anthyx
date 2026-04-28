@@ -52,27 +52,37 @@ export async function embedAndStore(
 ): Promise<void> {
   if (chunks.length === 0) return;
 
-  // Batch embeddings (max 100 at a time)
   const BATCH_SIZE = 100;
+  const embeddingModel = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
+
   for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
     const batch = chunks.slice(i, i + BATCH_SIZE);
-    const embeddingModel = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
-    const { embeddings } = await embeddingModel.batchEmbedContents({
-      requests: batch.map((text) => ({
-        content: { role: "user", parts: [{ text }] },
-      })),
-    });
+    let lastError: unknown;
 
-    const points = embeddings.map((e, idx) => ({
-      id: crypto.randomUUID(),
-      vector: e.values,
-      payload: {
-        text: batch[idx],
-        ...metadata,
-      },
-    }));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const { embeddings } = await embeddingModel.batchEmbedContents({
+          requests: batch.map((text) => ({
+            content: { role: "user", parts: [{ text }] },
+          })),
+        });
 
-    await qdrant.upsert(`brand_${metadata.brandProfileId}`, { points });
+        const points = embeddings.map((e, idx) => ({
+          id: crypto.randomUUID(),
+          vector: e.values,
+          payload: { text: batch[idx], ...metadata },
+        }));
+
+        await qdrant.upsert(`brand_${metadata.brandProfileId}`, { points });
+        lastError = undefined;
+        break;
+      } catch (err) {
+        lastError = err;
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      }
+    }
+
+    if (lastError) throw lastError;
   }
 }
 

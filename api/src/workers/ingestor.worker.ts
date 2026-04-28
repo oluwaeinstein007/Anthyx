@@ -1,7 +1,7 @@
 import { Worker, type Job } from "bullmq";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and } from "drizzle-orm";
 import { db } from "../db/client";
-import { brandProfiles } from "../db/schema";
+import { brandProfiles, competitors } from "../db/schema";
 import { redisConnection } from "../queue/client";
 import { parsePdf, parseUrl, parseMarkdown } from "../services/brand-ingestion/parser";
 import { extractBrandData } from "../services/brand-ingestion/extractor";
@@ -62,6 +62,25 @@ const worker = new Worker<IngestJobData>(
     await job.updateProgress({ step: "embedding", message: "Embedding into knowledge base…" } satisfies IngestProgress);
     await ingestBrandDocument(text, brandId, organizationId, sourceName ?? "document", extraction);
 
+    // Auto-add competitors discovered during extraction (skip duplicates by name)
+    if (extraction.competitors && extraction.competitors.length > 0) {
+      for (const competitorName of extraction.competitors) {
+        const existing = await db.query.competitors.findFirst({
+          where: and(eq(competitors.brandProfileId, brandId), eq(competitors.name, competitorName)),
+        });
+        if (!existing) {
+          await db.insert(competitors).values({
+            organizationId,
+            brandProfileId: brandId,
+            name: competitorName,
+            tier: "direct",
+            status: "new",
+            notes: "Auto-discovered during brand ingestion",
+          });
+        }
+      }
+    }
+
     // Persist extracted data + append to ingest_history
     const historyEntry = {
       sourceType,
@@ -74,6 +93,18 @@ const worker = new Worker<IngestJobData>(
       .update(brandProfiles)
       .set({
         ...(extraction.industry ? { industry: extraction.industry } : {}),
+        // Only overwrite fields that have a real extracted value — never clobber manually entered data with null
+        ...(extraction.tagline ? { tagline: extraction.tagline } : {}),
+        ...(extraction.websiteUrl ? { websiteUrl: extraction.websiteUrl } : {}),
+        ...(extraction.brandEmail ? { brandEmail: extraction.brandEmail } : {}),
+        ...(extraction.brandStage ? { brandStage: extraction.brandStage } : {}),
+        ...(extraction.missionStatement ? { missionStatement: extraction.missionStatement } : {}),
+        ...(extraction.visionStatement ? { visionStatement: extraction.visionStatement } : {}),
+        ...(extraction.originStory ? { originStory: extraction.originStory } : {}),
+        ...((extraction.coreValues?.length ?? 0) > 0 ? { coreValues: extraction.coreValues } : {}),
+        ...((extraction.voiceExamples?.length ?? 0) > 0 ? { voiceExamples: extraction.voiceExamples } : {}),
+        ...((extraction.contentDos?.length ?? 0) > 0 ? { contentDos: extraction.contentDos } : {}),
+        ...((extraction.bannedWords?.length ?? 0) > 0 ? { bannedWords: extraction.bannedWords } : {}),
         voiceTraits: extraction.voiceTraits,
         toneDescriptors: extraction.toneDescriptors,
         primaryColors: extraction.primaryColors,

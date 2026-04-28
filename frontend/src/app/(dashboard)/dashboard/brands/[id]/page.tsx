@@ -751,6 +751,28 @@ export default function BrandDetailPage() {
         </div>
       )}
 
+      {(brand.brandContext?.competitors?.length ?? 0) > 0 && (
+        <div className="bg-white border border-gray-200 rounded-2xl p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-900">Known competitors</h2>
+            <Link
+              href={`/dashboard/brands/${id}/competitive`}
+              className="text-xs text-purple-600 hover:text-purple-700 font-medium"
+            >
+              View intel →
+            </Link>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {brand.brandContext!.competitors!.map((name) => (
+              <span key={name} className="text-xs bg-purple-50 text-purple-700 border border-purple-100 px-2.5 py-1 rounded-full font-medium">
+                {name}
+              </span>
+            ))}
+          </div>
+          <p className="text-xs text-gray-400">Auto-discovered from ingested documents. Manage in Competitive Intelligence.</p>
+        </div>
+      )}
+
       {/* AI Quality Improvement */}
       <QualityImprovement brandId={id} />
 

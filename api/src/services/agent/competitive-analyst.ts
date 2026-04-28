@@ -1,10 +1,71 @@
-import { generateWithFallback, extractJsonObject, GEMINI_PRO, CLAUDE_SONNET } from "./llm-client";
+import { generateWithFallback, extractJsonObject, GEMINI_PRO, CLAUDE_SONNET, GEMINI_FLASH, CLAUDE_HAIKU } from "./llm-client";
+import { parseUrl } from "../brand-ingestion/parser";
 
 export interface CompetitorProfile {
   name: string;
   websiteUrl?: string | null;
   tier: string;
   socialHandles?: Record<string, string> | null;
+}
+
+export interface CompetitorLookupResult {
+  websiteUrl: string | null;
+  socialHandles: Record<string, string>;
+  description: string;
+  industry: string | null;
+}
+
+export async function lookupCompetitorInfo(
+  name: string,
+  websiteUrl?: string | null,
+  scrapedContent?: string,
+): Promise<CompetitorLookupResult> {
+  const contextLines: string[] = [];
+  if (websiteUrl) contextLines.push(`Known website: ${websiteUrl}`);
+  if (scrapedContent) contextLines.push(`Website content snippet:\n${scrapedContent.slice(0, 2000)}`);
+
+  const prompt = `You are a brand research assistant. Given a competitor brand name, return basic public information about them.
+
+Brand name: "${name}"
+${contextLines.join("\n")}
+
+Return ONLY valid JSON with this exact structure:
+{
+  "websiteUrl": "https://example.com or null if unknown",
+  "socialHandles": {
+    "twitter": "@handle or null",
+    "instagram": "@handle or null",
+    "linkedin": "company-slug or null",
+    "tiktok": "@handle or null"
+  },
+  "description": "1-2 sentence description of what this company does",
+  "industry": "industry/vertical or null"
+}
+
+Rules:
+- Only include social handles you are confident about (omit keys where you are unsure)
+- websiteUrl must be a real URL or null
+- socialHandles may be an empty object if unknown
+- Base answers on the scraped content if provided, otherwise use your knowledge`;
+
+  const raw = await generateWithFallback({
+    systemPrompt: "You are a brand research assistant. Return ONLY valid JSON — no prose, no markdown fences.",
+    userMessage: prompt,
+    geminiModel: GEMINI_FLASH,
+    claudeModel: CLAUDE_HAIKU,
+    maxTokens: 512,
+  });
+
+  const parsed = extractJsonObject(raw) as CompetitorLookupResult;
+  // Strip null social handle values
+  if (parsed.socialHandles) {
+    for (const key of Object.keys(parsed.socialHandles)) {
+      if (!parsed.socialHandles[key] || parsed.socialHandles[key] === "null") {
+        delete parsed.socialHandles[key];
+      }
+    }
+  }
+  return parsed;
 }
 
 export interface CompetitiveAnalysisResult {
@@ -60,6 +121,27 @@ export async function generateCompetitiveAnalysis(
   industry: string,
   competitorProfiles: CompetitorProfile[],
 ): Promise<CompetitiveAnalysisResult> {
+  // Scrape competitor websites in parallel to ground the analysis in real content
+  const scrapedData = await Promise.allSettled(
+    competitorProfiles.map(async (c) => {
+      if (!c.websiteUrl) return { name: c.name, content: null };
+      try {
+        const parsed = await parseUrl(c.websiteUrl);
+        return { name: c.name, content: parsed.text.slice(0, 3000) };
+      } catch {
+        return { name: c.name, content: null };
+      }
+    }),
+  );
+
+  const competitorContext = scrapedData
+    .map((r) => {
+      if (r.status !== "fulfilled" || !r.value.content) return null;
+      return `### ${r.value.name} (website content)\n${r.value.content}`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+
   const competitorList = competitorProfiles
     .map((c) => `- ${c.name} (${c.tier}${c.websiteUrl ? `, ${c.websiteUrl}` : ""})`)
     .join("\n");
@@ -68,6 +150,7 @@ export async function generateCompetitiveAnalysis(
 
 Competitors being analyzed:
 ${competitorList}
+${competitorContext ? `\nReal website content scraped from competitor sites (use this to make the analysis accurate and specific):\n${competitorContext}\n` : ""}
 
 Return a single JSON object with EXACTLY this structure (no extra keys, no prose outside the JSON):
 

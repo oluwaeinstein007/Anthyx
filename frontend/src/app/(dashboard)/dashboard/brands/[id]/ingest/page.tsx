@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import {
   Upload, X, FileText, Globe, AlignLeft, CheckCircle2,
-  AlertCircle, Loader2, Clock, ChevronDown, ChevronUp,
+  AlertCircle, Loader2, Clock, ChevronDown, ChevronUp, RefreshCw, TrendingUp,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
@@ -15,6 +15,11 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 type IngestMode = "pdf" | "url" | "text";
 
 type JobState = "waiting" | "active" | "completed" | "failed" | "delayed" | "unknown";
+
+type JobSource =
+  | { type: "file"; file: File }
+  | { type: "url"; url: string }
+  | { type: "text"; text: string };
 
 interface JobProgress {
   step: "parsing" | "extracting" | "embedding" | "done" | "failed";
@@ -27,6 +32,7 @@ interface TrackedJob {
   state: JobState;
   progress: JobProgress | null;
   failedReason: string | null;
+  source: JobSource;
 }
 
 interface HistoryEntry {
@@ -41,6 +47,7 @@ interface BrandForIngest {
   name: string;
   ingestStatus: string | null;
   ingestHistory: HistoryEntry[] | null;
+  brandContext?: { competitors?: string[] } | null;
 }
 
 const STEP_ORDER = ["parsing", "extracting", "embedding", "done"] as const;
@@ -50,7 +57,7 @@ function stepIndex(step: string | undefined) {
   return STEP_ORDER.indexOf(step as typeof STEP_ORDER[number]);
 }
 
-function JobProgressRow({ job, onDone }: { job: TrackedJob; onDone: () => void }) {
+function JobProgressRow({ job, onDone, onRetry }: { job: TrackedJob; onDone: () => void; onRetry: () => void }) {
   const isDone = job.state === "completed";
   const isFailed = job.state === "failed";
   const isActive = job.state === "active" || job.state === "waiting" || job.state === "delayed";
@@ -66,9 +73,20 @@ function JobProgressRow({ job, onDone }: { job: TrackedJob; onDone: () => void }
           <FileText className="w-4 h-4 text-gray-400 shrink-0" />
           <span className="font-medium text-gray-800 truncate">{job.fileName}</span>
         </div>
-        {isDone && <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />}
-        {isFailed && <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />}
-        {isActive && <Loader2 className="w-4 h-4 text-green-600 animate-spin shrink-0" />}
+        <div className="flex items-center gap-2 shrink-0">
+          {isFailed && (
+            <button
+              onClick={onRetry}
+              className="flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 bg-red-100 hover:bg-red-200 px-2.5 py-1 rounded-lg transition-colors"
+            >
+              <RefreshCw className="w-3 h-3" />
+              Retry
+            </button>
+          )}
+          {isDone && <CheckCircle2 className="w-4 h-4 text-green-600" />}
+          {isFailed && <AlertCircle className="w-4 h-4 text-red-500" />}
+          {isActive && <Loader2 className="w-4 h-4 text-green-600 animate-spin" />}
+        </div>
       </div>
 
       {/* Step progress bar */}
@@ -79,7 +97,7 @@ function JobProgressRow({ job, onDone }: { job: TrackedJob; onDone: () => void }
           const done = i < current || isDone;
           return (
             <div key={s} className="flex items-center gap-1 flex-1">
-              <div className={`h-1.5 flex-1 rounded-full transition-all ${done || isDone ? "bg-green-500" : active ? "bg-green-400 animate-pulse" : "bg-gray-200"}`} />
+              <div className={`h-1.5 flex-1 rounded-full transition-all ${done || isDone ? "bg-green-500" : active ? "bg-green-400 animate-pulse" : isFailed ? "bg-red-200" : "bg-gray-200"}`} />
               {i < STEP_ORDER.length - 1 && <div className="w-0" />}
             </div>
           );
@@ -89,7 +107,7 @@ function JobProgressRow({ job, onDone }: { job: TrackedJob; onDone: () => void }
         <span>Parse</span><span>Extract</span><span>Embed</span><span>Done</span>
       </div>
 
-      {job.progress?.message && !isDone && (
+      {job.progress?.message && !isDone && !isFailed && (
         <p className="text-xs text-gray-500 mt-1.5 italic">{job.progress.message}</p>
       )}
       {isFailed && (
@@ -204,20 +222,18 @@ export default function IngestPage() {
 
       const data = await res.json() as { jobs: { jobId: string; status: string }[] };
 
-      const fileNames = mode === "pdf"
-        ? files.map((f) => f.name)
-        : mode === "url"
-        ? [url]
-        : ["pasted text"];
-
       setJobs(
-        data.jobs.map((j, i) => ({
-          jobId: j.jobId,
-          fileName: fileNames[i] ?? `Source ${i + 1}`,
-          state: "waiting",
-          progress: null,
-          failedReason: null,
-        })),
+        data.jobs.map((j, i) => {
+          const source: JobSource =
+            mode === "pdf"
+              ? { type: "file", file: files[i]! }
+              : mode === "url"
+              ? { type: "url", url }
+              : { type: "text", text };
+          const fileName =
+            mode === "pdf" ? (files[i]?.name ?? `File ${i + 1}`) : mode === "url" ? url : "pasted text";
+          return { jobId: j.jobId, fileName, state: "waiting", progress: null, failedReason: null, source };
+        }),
       );
 
       if (mode === "pdf") setFiles([]);
@@ -230,8 +246,56 @@ export default function IngestPage() {
     }
   };
 
+  const retryJob = async (index: number) => {
+    const job = jobs[index];
+    if (!job) return;
+
+    setJobs((prev) =>
+      prev.map((j, i) =>
+        i === index ? { ...j, state: "waiting", progress: null, failedReason: null } : j,
+      ),
+    );
+    setAllDone(false);
+
+    try {
+      const formData = new FormData();
+      if (job.source.type === "file") formData.append("files", job.source.file);
+      else if (job.source.type === "url") formData.append("url", job.source.url);
+      else formData.append("text", job.source.text);
+
+      const res = await fetch(`${API_BASE}/v1/brands/${id}/ingest`, {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const b = err as { error?: string };
+        throw new Error(b.error ?? "Retry failed");
+      }
+
+      const data = await res.json() as { jobs: { jobId: string }[] };
+      const newJobId = data.jobs[0]?.jobId;
+      if (!newJobId) throw new Error("No job ID returned");
+
+      setJobs((prev) =>
+        prev.map((j, i) => (i === index ? { ...j, jobId: newJobId } : j)),
+      );
+    } catch (err) {
+      setJobs((prev) =>
+        prev.map((j, i) =>
+          i === index
+            ? { ...j, state: "failed", failedReason: err instanceof Error ? err.message : "Retry failed" }
+            : j,
+        ),
+      );
+    }
+  };
+
   const doneCount = jobs.filter((j) => j.state === "completed").length;
   const failedCount = jobs.filter((j) => j.state === "failed").length;
+  const autoCompetitors = brand?.brandContext?.competitors ?? [];
 
   useEffect(() => {
     if (jobs.length > 0 && jobs.every((j) => j.state === "completed" || j.state === "failed")) {
@@ -393,13 +457,43 @@ export default function IngestPage() {
             )}
           </div>
 
-          {jobs.map((job) => (
+          {jobs.map((job, i) => (
             <JobProgressRow
               key={job.jobId}
               job={job}
               onDone={() => {}}
+              onRetry={() => retryJob(i)}
             />
           ))}
+
+          {allDone && autoCompetitors.length > 0 && (
+            <div className="p-4 bg-purple-50 border border-purple-200 rounded-xl">
+              <div className="flex items-start gap-3">
+                <TrendingUp className="w-4 h-4 text-purple-600 mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-purple-800">
+                    {autoCompetitors.length} competitor{autoCompetitors.length !== 1 ? "s" : ""} auto-discovered
+                  </p>
+                  <p className="text-xs text-purple-600 mt-0.5 mb-2">
+                    Found in your brand document and added to Competitive Intelligence.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {autoCompetitors.map((name) => (
+                      <span key={name} className="text-xs px-2.5 py-1 bg-white border border-purple-200 text-purple-700 rounded-full font-medium">
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                  <Link
+                    href={`/dashboard/brands/${id}/competitive`}
+                    className="text-xs text-purple-700 font-semibold hover:text-purple-800 underline"
+                  >
+                    View &amp; manage in Competitive Intelligence →
+                  </Link>
+                </div>
+              </div>
+            </div>
+          )}
 
           {allDone && (
             <div className="flex gap-3 pt-1">

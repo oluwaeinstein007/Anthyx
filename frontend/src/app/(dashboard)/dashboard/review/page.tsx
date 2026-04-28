@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import {
   CheckCircle2, XCircle, Pencil, Sparkles, ClipboardCheck,
   Check, Filter, FlaskConical, X, Image, AlertCircle, RotateCcw,
-  Maximize2, ZoomIn,
+  Maximize2, ZoomIn, ArrowRight,
 } from "lucide-react";
 
 function renderLinkedContent(text: string) {
@@ -187,8 +188,9 @@ export default function ReviewQueuePage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkVetoReason, setBulkVetoReason] = useState("");
   const [abTestId, setAbTestId] = useState<string | null>(null);
-  const [abResult, setAbResult] = useState<{ abTestId: string; variantAId: string; variantBId: string } | null>(null);
+  const [abResult, setAbResult] = useState<{ abTestId: string; variantAId: string; variantBId: string; sourcePostId: string } | null>(null);
   const [abError, setAbError] = useState<string | null>(null);
+  const [abTestPostIds, setAbTestPostIds] = useState<Set<string>>(new Set());
 
   // Image actions
   const [imagePromptId, setImagePromptId] = useState<string | null>(null);
@@ -246,7 +248,13 @@ export default function ReviewQueuePage() {
 
   const runAbTest = useMutation({
     mutationFn: (postId: string) => api.post<{ abTestId: string; variantAId: string; variantBId: string }>(`/posts/${postId}/ab-test`, {}),
-    onSuccess: (data) => { setAbTestId(null); setAbResult(data); setAbError(null); },
+    onSuccess: (data, postId) => {
+      setAbTestId(null);
+      setAbResult({ ...data, sourcePostId: postId });
+      setAbError(null);
+      setAbTestPostIds((prev) => new Set([...prev, postId]));
+      qc.invalidateQueries({ queryKey: ["posts-review"] });
+    },
     onError: (err) => { setAbError(err instanceof Error ? err.message : "Failed to generate A/B variant."); },
   });
 
@@ -451,12 +459,25 @@ export default function ReviewQueuePage() {
 
       {/* A/B test result banner */}
       {abResult && (
-        <div className="bg-purple-50 border border-purple-200 rounded-2xl p-4 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-semibold text-purple-800">A/B test created</p>
-            <p className="text-xs text-purple-600 mt-0.5">Test ID: {abResult.abTestId} · Variant B added to queue for review.</p>
+        <div className="bg-purple-50 border border-purple-200 rounded-2xl p-4 flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 bg-purple-100 rounded-xl flex items-center justify-center shrink-0 mt-0.5">
+              <FlaskConical className="w-4 h-4 text-purple-600" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-purple-800">A/B variant generated</p>
+              <p className="text-xs text-purple-600 mt-0.5">
+                Variant B is now in your review queue. Review and approve both variants, then track performance on the A/B Tests page.
+              </p>
+              <Link
+                href="/dashboard/ab-tests"
+                className="inline-flex items-center gap-1 mt-2 text-xs font-semibold text-purple-700 hover:text-purple-900 underline underline-offset-2"
+              >
+                View A/B Tests <ArrowRight className="w-3 h-3" />
+              </Link>
+            </div>
           </div>
-          <button onClick={() => setAbResult(null)} className="text-purple-400 hover:text-purple-600"><X className="w-4 h-4" /></button>
+          <button onClick={() => setAbResult(null)} className="text-purple-400 hover:text-purple-600 shrink-0"><X className="w-4 h-4" /></button>
         </div>
       )}
 
@@ -523,12 +544,21 @@ export default function ReviewQueuePage() {
                   </button>
                   {statusTab === "pending_review" && (
                     <>
+                      {abTestPostIds.has(post.id) ? (
+                        <Link
+                          href="/dashboard/ab-tests"
+                          className="flex items-center gap-1.5 text-xs text-purple-600 bg-purple-50 border border-purple-200 px-2.5 py-1.5 rounded-lg hover:bg-purple-100 transition-colors font-medium"
+                        >
+                          <FlaskConical className="w-3 h-3" /> A/B test running
+                        </Link>
+                      ) : (
                       <button
                         onClick={() => { setAbTestId(post.id); }}
                         className="flex items-center gap-1.5 text-xs text-purple-600 hover:text-purple-800 px-2.5 py-1.5 rounded-lg hover:bg-purple-50 transition-colors"
                       >
                         <FlaskConical className="w-3 h-3" /> A/B test
                       </button>
+                      )}
                       <button
                         onClick={() => { setEditingId(post.id); setEditText(post.contentText); setVetoId(null); }}
                         className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-800 px-2.5 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
