@@ -24,6 +24,20 @@ export async function parseMarkdown(filePath: string): Promise<ParsedContent> {
 
 const BOT_UA = "Mozilla/5.0 (compatible; AnthyxBot/1.0; +https://anthyx.ai/bot)";
 
+async function resolve4WithRetry(hostname: string): Promise<string> {
+  let lastErr: unknown;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const addrs = await dns.resolve4(hostname);
+      return addrs[0]!;
+    } catch (err) {
+      lastErr = err;
+      if (i < 2) await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 // Alpine musl getaddrinfo is unreliable inside Docker. We resolve the hostname
 // via Node's c-ares resolver first, then rewrite the URL to use the IPv4 address
 // directly so TLS cert validation still uses the original hostname via Host header.
@@ -35,13 +49,13 @@ async function fetchWithFallback(url: string): Promise<Response> {
     return await fetch(url, { headers, signal });
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException & { cause?: NodeJS.ErrnoException })?.cause?.code;
-    if (code !== "ETIMEDOUT" && code !== "ECONNREFUSED" && code !== "EAI_AGAIN" && code !== "ENETUNREACH") {
+    if (code !== "ETIMEDOUT" && code !== "ECONNREFUSED" && code !== "EAI_AGAIN" && code !== "ENETUNREACH" && code !== "ESERVFAIL") {
       throw err;
     }
 
     // Resolve hostname via c-ares (bypasses musl getaddrinfo), then fetch by IP
     const parsed = new URL(url);
-    const [ipv4] = await dns.resolve4(parsed.hostname);
+    const ipv4 = await resolve4WithRetry(parsed.hostname);
     const ipUrl = `${parsed.protocol}//${ipv4}${parsed.pathname}${parsed.search}`;
     return fetch(ipUrl, {
       headers: { ...headers, Host: parsed.hostname },

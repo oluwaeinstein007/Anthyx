@@ -65,6 +65,20 @@ const FETCH_HEADERS = {
   "Accept-Language": "en-US,en;q=0.5",
 };
 
+async function resolve4WithRetry(hostname: string): Promise<string> {
+  let lastErr: unknown;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const addrs = await dns.resolve4(hostname);
+      return addrs[0]!;
+    } catch (err) {
+      lastErr = err;
+      if (i < 2) await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 // Alpine musl getaddrinfo is unreliable inside Docker. fetch() only throws on
 // network-level errors (not HTTP errors), so any exception means DNS/connect
 // failed — always retry via Node's c-ares resolver and fetch by IPv4 directly,
@@ -74,7 +88,7 @@ async function fetchWithFallback(url: string): Promise<Response> {
     return await fetch(url, { headers: FETCH_HEADERS, signal: AbortSignal.timeout(20_000) });
   } catch {
     const parsed = new URL(url);
-    const [ipv4] = await dns.resolve4(parsed.hostname);
+    const ipv4 = await resolve4WithRetry(parsed.hostname);
     const ipUrl = `${parsed.protocol}//${ipv4}${parsed.pathname}${parsed.search}`;
     return fetch(ipUrl, {
       headers: { ...FETCH_HEADERS, Host: parsed.hostname },
