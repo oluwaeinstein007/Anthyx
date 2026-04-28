@@ -89,6 +89,7 @@ interface CompetitorAnalysis {
 interface IntelData {
   analysis: CompetitorAnalysis | null;
   competitors: Competitor[];
+  suggestions: string[];
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -164,17 +165,19 @@ function FormatDonut({ mix }: { mix: { video: number; image: number; text: numbe
 function CompetitorFormModal({
   brandId,
   existing,
+  prefillName,
   onClose,
   onSaved,
 }: {
   brandId: string;
   existing?: Competitor;
+  prefillName?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const isEdit = !!existing;
   const [form, setForm] = useState({
-    name: existing?.name ?? "",
+    name: existing?.name ?? prefillName ?? "",
     websiteUrl: existing?.websiteUrl ?? "",
     tier: (existing?.tier ?? "direct") as Competitor["tier"],
     twitterHandle: existing?.socialHandles?.["twitter"] ?? "",
@@ -480,6 +483,7 @@ export default function CompetitiveIntelligencePage() {
   const { id: brandId } = useParams<{ id: string }>();
   const qc = useQueryClient();
   const [showAddModal, setShowAddModal] = useState(false);
+  const [trackSuggestion, setTrackSuggestion] = useState<string | null>(null);
   const [selectedCompetitor, setSelectedCompetitor] = useState<Competitor | null>(null);
   const [refreshError, setRefreshError] = useState("");
 
@@ -497,8 +501,24 @@ export default function CompetitiveIntelligencePage() {
     onError: (err) => setRefreshError(err instanceof Error ? err.message : "Analysis failed"),
   });
 
+  const refreshSuggestions = useMutation({
+    mutationFn: () => api.post<{ suggestions: string[] }>(`/brands/${brandId}/competitor-suggestions/refresh`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["competitive-intel", brandId] }),
+  });
+
+  async function dismissSuggestion(name: string) {
+    await api.post(`/brands/${brandId}/competitor-suggestions/dismiss`, { name });
+    qc.invalidateQueries({ queryKey: ["competitive-intel", brandId] });
+  }
+
+  function invalidateAll() {
+    qc.invalidateQueries({ queryKey: ["competitive-intel", brandId] });
+    qc.invalidateQueries({ queryKey: ["competitors", brandId] });
+  }
+
   const competitors = data?.competitors ?? [];
   const analysis = data?.analysis ?? null;
+  const suggestions = data?.suggestions ?? [];
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -541,6 +561,47 @@ export default function CompetitiveIntelligencePage() {
           </div>
         )}
       </div>
+
+      {/* Suggested Competitors */}
+      {suggestions.length > 0 && (
+        <div className="bg-purple-50 border border-purple-200 rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h2 className="text-sm font-semibold text-purple-900">Suggested competitors</h2>
+              <p className="text-xs text-purple-600 mt-0.5">AI-discovered based on your brand's industry and positioning</p>
+            </div>
+            <button
+              onClick={() => refreshSuggestions.mutate()}
+              disabled={refreshSuggestions.isPending}
+              className="flex items-center gap-1 text-xs text-purple-600 hover:text-purple-800 font-medium disabled:opacity-50"
+            >
+              {refreshSuggestions.isPending
+                ? <><Loader2 className="w-3 h-3 animate-spin" /> Refreshing…</>
+                : <><RefreshCw className="w-3 h-3" /> Refresh</>}
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {suggestions.map((name) => (
+              <div key={name} className="flex items-center gap-1 bg-white border border-purple-200 rounded-full pl-3 pr-1 py-1">
+                <span className="text-xs font-medium text-gray-800">{name}</span>
+                <button
+                  onClick={() => setTrackSuggestion(name)}
+                  className="ml-1 text-xs px-2 py-0.5 bg-purple-600 hover:bg-purple-700 text-white rounded-full transition-colors"
+                >
+                  Track
+                </button>
+                <button
+                  onClick={() => dismissSuggestion(name)}
+                  className="p-0.5 text-purple-300 hover:text-purple-600 transition-colors"
+                  title="Dismiss"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Competitor Tracking */}
       <SectionCard title="Competitor Tracking" icon={<Target className="w-5 h-5" />}>
@@ -892,7 +953,20 @@ export default function CompetitiveIntelligencePage() {
         <CompetitorFormModal
           brandId={brandId}
           onClose={() => setShowAddModal(false)}
-          onSaved={() => qc.invalidateQueries({ queryKey: ["competitive-intel", brandId] })}
+          onSaved={invalidateAll}
+        />
+      )}
+
+      {trackSuggestion && (
+        <CompetitorFormModal
+          brandId={brandId}
+          prefillName={trackSuggestion}
+          onClose={() => setTrackSuggestion(null)}
+          onSaved={async () => {
+            await dismissSuggestion(trackSuggestion);
+            setTrackSuggestion(null);
+            invalidateAll();
+          }}
         />
       )}
 
@@ -901,14 +975,8 @@ export default function CompetitiveIntelligencePage() {
           competitor={selectedCompetitor}
           brandId={brandId}
           onClose={() => setSelectedCompetitor(null)}
-          onEdited={() => {
-            setSelectedCompetitor(null);
-            qc.invalidateQueries({ queryKey: ["competitive-intel", brandId] });
-          }}
-          onDeleted={() => {
-            setSelectedCompetitor(null);
-            qc.invalidateQueries({ queryKey: ["competitive-intel", brandId] });
-          }}
+          onEdited={() => { setSelectedCompetitor(null); invalidateAll(); }}
+          onDeleted={() => { setSelectedCompetitor(null); invalidateAll(); }}
         />
       )}
     </div>

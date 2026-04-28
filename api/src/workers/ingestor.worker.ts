@@ -6,6 +6,7 @@ import { redisConnection } from "../queue/client";
 import { parsePdf, parseUrl, parseMarkdown } from "../services/brand-ingestion/parser";
 import { extractBrandData } from "../services/brand-ingestion/extractor";
 import { ingestBrandDocument } from "../services/brand-ingestion/embedder";
+import { suggestCompetitors } from "../services/agent/competitive-analyst";
 
 interface IngestJobData {
   brandId: string;
@@ -22,6 +23,38 @@ export type IngestProgress = {
   message: string;
 };
 
+// ── Merge helpers ──────────────────────────────────────────────────────────────
+
+function mergeArr<T>(existing: T[] | null | undefined, incoming: T[] | null | undefined): T[] {
+  return Array.from(new Set([...(existing ?? []), ...(incoming ?? [])]));
+}
+
+function mergeCoreValues(
+  existing: { label: string; description?: string }[] | null | undefined,
+  incoming: { label: string; description?: string }[] | null | undefined,
+): { label: string; description?: string }[] {
+  const map = new Map((existing ?? []).map((v) => [v.label.toLowerCase(), v]));
+  for (const val of incoming ?? []) {
+    if (!map.has(val.label.toLowerCase())) map.set(val.label.toLowerCase(), val);
+    // Existing entry wins — don't overwrite manually-written descriptions
+  }
+  return Array.from(map.values());
+}
+
+function mergeVoiceTraits(
+  existing: Record<string, boolean> | null | undefined,
+  incoming: Record<string, boolean> | null | undefined,
+): Record<string, boolean> {
+  const result: Record<string, boolean> = { ...(incoming ?? {}) };
+  // Preserve any trait the user explicitly enabled — never flip a true back to false
+  for (const [k, v] of Object.entries(existing ?? {})) {
+    if (v === true) result[k] = true;
+  }
+  return result;
+}
+
+// ── Worker ─────────────────────────────────────────────────────────────────────
+
 const worker = new Worker<IngestJobData>(
   "anthyx-ingestor",
   async (job: Job<IngestJobData>) => {
@@ -34,20 +67,22 @@ const worker = new Worker<IngestJobData>(
       .set({ ingestStatus: "processing", updatedAt: new Date() })
       .where(eq(brandProfiles.id, brandId));
 
+    // Fetch current brand for fill-gaps comparison
+    const currentBrand = await db.query.brandProfiles.findFirst({
+      where: eq(brandProfiles.id, brandId),
+    });
+    if (!currentBrand) throw new Error(`Brand ${brandId} not found`);
+
     // Step 1: Parse
     await job.updateProgress({ step: "parsing", message: "Parsing document…" } satisfies IngestProgress);
 
     let text: string;
-
     if (sourceType === "pdf" && filePath) {
-      const parsed = await parsePdf(filePath);
-      text = parsed.text;
+      text = (await parsePdf(filePath)).text;
     } else if (sourceType === "markdown" && filePath) {
-      const parsed = await parseMarkdown(filePath);
-      text = parsed.text;
+      text = (await parseMarkdown(filePath)).text;
     } else if (sourceType === "url" && url) {
-      const parsed = await parseUrl(url);
-      text = parsed.text;
+      text = (await parseUrl(url)).text;
     } else if (sourceType === "plaintext" && rawText) {
       text = rawText;
     } else {
@@ -81,7 +116,50 @@ const worker = new Worker<IngestJobData>(
       }
     }
 
-    // Persist extracted data + append to ingest_history
+    // Read full competitor list — used for brandContext and to filter suggestions
+    const allCompetitors = await db.query.competitors.findMany({
+      where: eq(competitors.brandProfileId, brandId),
+      columns: { name: true },
+    });
+    const allCompetitorNames = allCompetitors.map((c) => c.name);
+
+    // Generate competitor suggestions via LLM (non-critical — silently skip on failure)
+    const ctx = (currentBrand.brandContext ?? {}) as {
+      brandStatements?: string[];
+      audienceNotes?: string[];
+      productsServices?: string[];
+      valueProposition?: string | null;
+      targetMarket?: string | null;
+      contentPillars?: string[];
+      competitors?: string[];
+      competitorSuggestions?: string[];
+    };
+
+    let competitorSuggestions: string[] = ctx.competitorSuggestions ?? [];
+    try {
+      const industry = extraction.industry || currentBrand.industry || "general";
+      const positioning = extraction.valueProposition ?? ctx.valueProposition ?? null;
+      const fresh = await suggestCompetitors(currentBrand.name, industry, positioning, allCompetitorNames);
+      // Filter out any that were just auto-discovered this ingestion
+      competitorSuggestions = fresh.filter(
+        (s) => !allCompetitorNames.some((n) => n.toLowerCase() === s.toLowerCase()),
+      );
+    } catch (err) {
+      console.warn("[IngestorWorker] Competitor suggestion failed (non-critical):", err);
+    }
+
+    // Build the merged brandContext — fill-gaps for scalar fields, union for arrays
+    const mergedContext = {
+      brandStatements: mergeArr(ctx.brandStatements, extraction.brandStatements),
+      audienceNotes: mergeArr(ctx.audienceNotes, extraction.audienceNotes),
+      productsServices: mergeArr(ctx.productsServices, extraction.productsServices),
+      valueProposition: ctx.valueProposition ?? extraction.valueProposition ?? null,
+      targetMarket: ctx.targetMarket ?? extraction.targetMarket ?? null,
+      contentPillars: mergeArr(ctx.contentPillars, extraction.contentPillars),
+      competitors: allCompetitorNames,
+      competitorSuggestions,
+    };
+
     const historyEntry = {
       sourceType,
       sourceName: sourceName ?? "document",
@@ -92,33 +170,45 @@ const worker = new Worker<IngestJobData>(
     await db
       .update(brandProfiles)
       .set({
-        ...(extraction.industry ? { industry: extraction.industry } : {}),
-        // Only overwrite fields that have a real extracted value — never clobber manually entered data with null
-        ...(extraction.tagline ? { tagline: extraction.tagline } : {}),
-        ...(extraction.websiteUrl ? { websiteUrl: extraction.websiteUrl } : {}),
-        ...(extraction.brandEmail ? { brandEmail: extraction.brandEmail } : {}),
+        // ── Scalar fill-gaps: only write if the DB field is currently empty ──
+        ...(!currentBrand.industry && extraction.industry ? { industry: extraction.industry } : {}),
+        ...(!currentBrand.tagline && extraction.tagline ? { tagline: extraction.tagline } : {}),
+        ...(!currentBrand.websiteUrl && extraction.websiteUrl ? { websiteUrl: extraction.websiteUrl } : {}),
+        ...(!currentBrand.brandEmail && extraction.brandEmail ? { brandEmail: extraction.brandEmail } : {}),
         ...(extraction.brandStage ? { brandStage: extraction.brandStage } : {}),
-        ...(extraction.missionStatement ? { missionStatement: extraction.missionStatement } : {}),
-        ...(extraction.visionStatement ? { visionStatement: extraction.visionStatement } : {}),
-        ...(extraction.originStory ? { originStory: extraction.originStory } : {}),
-        ...((extraction.coreValues?.length ?? 0) > 0 ? { coreValues: extraction.coreValues } : {}),
-        ...((extraction.voiceExamples?.length ?? 0) > 0 ? { voiceExamples: extraction.voiceExamples } : {}),
-        ...((extraction.contentDos?.length ?? 0) > 0 ? { contentDos: extraction.contentDos } : {}),
-        ...((extraction.bannedWords?.length ?? 0) > 0 ? { bannedWords: extraction.bannedWords } : {}),
-        voiceTraits: extraction.voiceTraits,
-        toneDescriptors: extraction.toneDescriptors,
-        primaryColors: extraction.primaryColors,
-        secondaryColors: extraction.secondaryColors,
-        typography: extraction.typography,
-        brandContext: {
-          brandStatements: extraction.brandStatements,
-          audienceNotes: extraction.audienceNotes,
-          productsServices: extraction.productsServices ?? [],
-          valueProposition: extraction.valueProposition ?? null,
-          targetMarket: extraction.targetMarket ?? null,
-          contentPillars: extraction.contentPillars ?? [],
-          competitors: extraction.competitors ?? [],
-        },
+        ...(!currentBrand.missionStatement && extraction.missionStatement ? { missionStatement: extraction.missionStatement } : {}),
+        ...(!currentBrand.visionStatement && extraction.visionStatement ? { visionStatement: extraction.visionStatement } : {}),
+        ...(!currentBrand.originStory && extraction.originStory ? { originStory: extraction.originStory } : {}),
+        // ── Array merge: union existing + extracted ──
+        ...((extraction.coreValues?.length ?? 0) > 0
+          ? { coreValues: mergeCoreValues(currentBrand.coreValues as { label: string; description?: string }[] | null, extraction.coreValues) }
+          : {}),
+        ...((extraction.voiceExamples?.length ?? 0) > 0
+          ? { voiceExamples: mergeArr(currentBrand.voiceExamples, extraction.voiceExamples) }
+          : {}),
+        ...((extraction.contentDos?.length ?? 0) > 0
+          ? { contentDos: mergeArr(currentBrand.contentDos, extraction.contentDos) }
+          : {}),
+        ...((extraction.bannedWords?.length ?? 0) > 0
+          ? { bannedWords: mergeArr(currentBrand.bannedWords, extraction.bannedWords) }
+          : {}),
+        // ── Voice traits: OR-merge so user-enabled traits are never cleared ──
+        voiceTraits: mergeVoiceTraits(
+          currentBrand.voiceTraits as Record<string, boolean> | null,
+          extraction.voiceTraits,
+        ),
+        // ── Tone descriptors: union ──
+        toneDescriptors: mergeArr(currentBrand.toneDescriptors, extraction.toneDescriptors),
+        // ── Colors / typography: fill-gaps only (never overwrite designer choices) ──
+        ...((currentBrand.primaryColors?.length ?? 0) === 0 && (extraction.primaryColors?.length ?? 0) > 0
+          ? { primaryColors: extraction.primaryColors }
+          : {}),
+        ...((currentBrand.secondaryColors?.length ?? 0) === 0 && (extraction.secondaryColors?.length ?? 0) > 0
+          ? { secondaryColors: extraction.secondaryColors }
+          : {}),
+        ...(!currentBrand.typography && extraction.typography?.primary ? { typography: extraction.typography } : {}),
+        // ── brandContext: smart-merged ──
+        brandContext: mergedContext,
         qdrantCollectionId: `brand_${brandId}`,
         ingestStatus: "done",
         ingestHistory: sql`COALESCE(ingest_history, '[]'::jsonb) || ${JSON.stringify([historyEntry])}::jsonb`,
@@ -127,7 +217,6 @@ const worker = new Worker<IngestJobData>(
       .where(eq(brandProfiles.id, brandId));
 
     await job.updateProgress({ step: "done", message: "Ingestion complete" } satisfies IngestProgress);
-
     console.log(`[IngestorWorker] Ingestion complete for brand ${brandId}`);
   },
   {

@@ -3,7 +3,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { db } from "../db/client";
 import { brandProfiles, competitors, competitorAnalyses } from "../db/schema";
 import { auth } from "../middleware/auth";
-import { generateCompetitiveAnalysis, lookupCompetitorInfo } from "../services/agent/competitive-analyst";
+import { generateCompetitiveAnalysis, lookupCompetitorInfo, suggestCompetitors } from "../services/agent/competitive-analyst";
 import { parseUrl } from "../services/brand-ingestion/parser";
 
 const router = Router();
@@ -150,17 +150,74 @@ router.get("/:brandId/competitive-intelligence", auth, async (req, res) => {
   });
   if (!brand) return res.status(404).json({ error: "Brand not found" });
 
-  const analysis = await db.query.competitorAnalyses.findFirst({
-    where: eq(competitorAnalyses.brandProfileId, brand.id),
-    orderBy: [desc(competitorAnalyses.generatedAt)],
+  const [analysis, competitorList] = await Promise.all([
+    db.query.competitorAnalyses.findFirst({
+      where: eq(competitorAnalyses.brandProfileId, brand.id),
+      orderBy: [desc(competitorAnalyses.generatedAt)],
+    }),
+    db.query.competitors.findMany({
+      where: eq(competitors.brandProfileId, brand.id),
+      orderBy: [desc(competitors.createdAt)],
+    }),
+  ]);
+
+  const ctx = (brand.brandContext ?? {}) as { competitorSuggestions?: string[] };
+  const suggestions: string[] = ctx.competitorSuggestions ?? [];
+
+  return res.json({ analysis: analysis ?? null, competitors: competitorList, suggestions });
+});
+
+// POST /brands/:brandId/competitor-suggestions/refresh — regenerate suggestions via LLM
+router.post("/:brandId/competitor-suggestions/refresh", auth, async (req, res) => {
+  const brand = await db.query.brandProfiles.findFirst({
+    where: and(eq(brandProfiles.id, req.params.brandId!), eq(brandProfiles.organizationId, req.user.orgId)),
   });
+  if (!brand) return res.status(404).json({ error: "Brand not found" });
 
   const competitorList = await db.query.competitors.findMany({
     where: eq(competitors.brandProfileId, brand.id),
-    orderBy: [desc(competitors.createdAt)],
+    columns: { name: true },
   });
+  const existingNames = competitorList.map((c) => c.name);
 
-  return res.json({ analysis: analysis ?? null, competitors: competitorList });
+  const ctx = (brand.brandContext ?? {}) as Record<string, unknown>;
+  const positioning = (ctx.valueProposition as string | null) ?? null;
+
+  const suggestions = await suggestCompetitors(
+    brand.name,
+    brand.industry ?? "general",
+    positioning,
+    existingNames,
+  );
+
+  await db
+    .update(brandProfiles)
+    .set({ brandContext: { ...ctx, competitorSuggestions: suggestions }, updatedAt: new Date() })
+    .where(eq(brandProfiles.id, brand.id));
+
+  return res.json({ suggestions });
+});
+
+// POST /brands/:brandId/competitor-suggestions/dismiss — remove one suggestion by name
+router.post("/:brandId/competitor-suggestions/dismiss", auth, async (req, res) => {
+  const brand = await db.query.brandProfiles.findFirst({
+    where: and(eq(brandProfiles.id, req.params.brandId!), eq(brandProfiles.organizationId, req.user.orgId)),
+  });
+  if (!brand) return res.status(404).json({ error: "Brand not found" });
+
+  const { name } = req.body as { name: string };
+  if (!name?.trim()) return res.status(400).json({ error: "name is required" });
+
+  const ctx = (brand.brandContext ?? {}) as Record<string, unknown>;
+  const current = (ctx.competitorSuggestions ?? []) as string[];
+  const updated = current.filter((s) => s.toLowerCase() !== name.trim().toLowerCase());
+
+  await db
+    .update(brandProfiles)
+    .set({ brandContext: { ...ctx, competitorSuggestions: updated }, updatedAt: new Date() })
+    .where(eq(brandProfiles.id, brand.id));
+
+  return res.json({ ok: true });
 });
 
 // POST /brands/:brandId/competitive-intelligence/refresh — trigger fresh AI analysis

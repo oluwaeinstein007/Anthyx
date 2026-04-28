@@ -116,6 +116,51 @@ export interface CompetitiveAnalysisResult {
   };
 }
 
+export async function suggestCompetitors(
+  brandName: string,
+  industry: string,
+  positioning: string | null,
+  existingNames: string[],
+): Promise<string[]> {
+  const prompt = `You are a competitive intelligence researcher.
+
+Brand: "${brandName}"
+Industry: "${industry}"
+${positioning ? `Positioning: "${positioning}"` : ""}
+${existingNames.length > 0 ? `Already tracking (exclude these): ${existingNames.join(", ")}` : ""}
+
+List the 6–8 most relevant direct competitors for this brand based on its industry and positioning.
+Return ONLY a JSON array of company name strings, ordered by relevance. Example:
+["Company A", "Company B", "Company C"]
+
+Rules:
+- Only real, known companies
+- Direct competitors operating in the same market segment
+- Do NOT include the brand itself
+- Do NOT repeat any names from the "Already tracking" list`;
+
+  const raw = await generateWithFallback({
+    systemPrompt: "You are a competitive intelligence researcher. Return ONLY a valid JSON array of strings — no prose, no markdown.",
+    userMessage: prompt,
+    geminiModel: GEMINI_FLASH,
+    claudeModel: CLAUDE_HAIKU,
+    maxTokens: 256,
+  });
+
+  const match = raw.trim().match(/\[[\s\S]*\]/);
+  if (!match) return [];
+  try {
+    const parsed = JSON.parse(match[0]) as unknown[];
+    return parsed
+      .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+      .map((s) => s.trim())
+      .filter((name) => !existingNames.some((e) => e.toLowerCase() === name.toLowerCase()))
+      .slice(0, 8);
+  } catch {
+    return [];
+  }
+}
+
 export async function generateCompetitiveAnalysis(
   brandName: string,
   industry: string,
