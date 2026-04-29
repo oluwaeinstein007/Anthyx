@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   TrendingUp, Plus, Trash2, RefreshCw, Globe, Target,
   BarChart2, Zap, Share2, MessageCircle, Award, AlertCircle,
@@ -71,7 +72,7 @@ interface BenchmarkMetric {
   metric: string;
   brandValue: string;
   competitorValues: Record<string, string>;
-  status: "ahead" | "at_par" | "behind";
+  status: "ahead" | "at_par" | "behind" | "neutral";
 }
 
 interface CompetitorAnalysis {
@@ -109,6 +110,7 @@ const STATUS_COLORS = {
 const STATUS_LABELS: Record<BenchmarkMetric["status"], { label: string; cls: string }> = {
   ahead: { label: "Ahead", cls: "bg-green-100 text-green-700" },
   at_par: { label: "At par", cls: "bg-gray-100 text-gray-600" },
+  neutral: { label: "Neutral", cls: "bg-gray-100 text-gray-600" },
   behind: { label: "Behind", cls: "bg-red-100 text-red-700" },
 };
 
@@ -367,16 +369,21 @@ function CompetitorDetailModal({
 }) {
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   async function handleDelete() {
-    if (!confirm(`Remove ${competitor.name} from your competitors?`)) return;
     setDeleting(true);
+    setDeleteError("");
     try {
       await api.delete(`/brands/${brandId}/competitors/${competitor.id}`);
       onDeleted();
       onClose();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Failed to remove competitor");
     } finally {
       setDeleting(false);
+      setConfirmDelete(false);
     }
   }
 
@@ -455,6 +462,11 @@ function CompetitorDetailModal({
           </div>
         </div>
 
+        {deleteError && (
+          <div className="px-6 pb-2">
+            <p className="text-xs text-red-600 bg-red-50 p-2.5 rounded-lg">{deleteError}</p>
+          </div>
+        )}
         <div className="px-6 pb-5 flex gap-3">
           <button
             onClick={() => setEditing(true)}
@@ -463,16 +475,26 @@ function CompetitorDetailModal({
             <Pencil className="w-3.5 h-3.5" /> Edit
           </button>
           <button
-            onClick={handleDelete} disabled={deleting}
+            onClick={() => setConfirmDelete(true)} disabled={deleting}
             className="flex items-center gap-1.5 px-4 py-2.5 border border-red-200 text-red-600 hover:bg-red-50 rounded-xl text-sm font-medium transition-colors disabled:opacity-50"
           >
-            <Trash2 className="w-3.5 h-3.5" /> {deleting ? "Removing…" : "Remove"}
+            <Trash2 className="w-3.5 h-3.5" /> Remove
           </button>
           <button onClick={onClose} className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-500 hover:bg-gray-50">
             Close
           </button>
         </div>
       </div>
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Remove competitor"
+          description={`Remove ${competitor.name} from your competitors? This cannot be undone.`}
+          confirmLabel="Remove"
+          isPending={deleting}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      )}
     </div>
   );
 }
@@ -925,7 +947,7 @@ export default function CompetitiveIntelligencePage() {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {analysis.benchmarkScorecard.metrics.map((m) => {
-                      const s = STATUS_LABELS[m.status];
+                      const s = STATUS_LABELS[m.status] ?? { label: m.status, cls: "bg-gray-100 text-gray-600" };
                       return (
                         <tr key={m.metric}>
                           <td className="py-3 pr-4 text-gray-700 font-medium">{m.metric}</td>

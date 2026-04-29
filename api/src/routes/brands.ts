@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { eq, and, isNull, isNotNull, count } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, count, inArray } from "drizzle-orm";
 import multer from "multer";
 import * as path from "path";
 import { db } from "../db/client";
-import { brandProfiles, scheduledPosts } from "../db/schema";
+import { brandProfiles, scheduledPosts, agents, socialAccounts } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { requireLimit } from "../middleware/plan-limits";
@@ -308,6 +308,38 @@ Write only the post itself. No commentary, no hashtags, no labels.`;
   } catch {
     return res.status(500).json({ error: "Preview generation failed" });
   }
+});
+
+// GET /brands/:id/channels — social accounts linked to agents of this brand
+router.get("/:id/channels", auth, async (req, res) => {
+  const brand = await db.query.brandProfiles.findFirst({
+    where: and(
+      eq(brandProfiles.id, req.params.id!),
+      eq(brandProfiles.organizationId, req.user.orgId),
+    ),
+  });
+  if (!brand) return res.status(404).json({ error: "Not found" });
+
+  const brandAgents = await db.query.agents.findMany({
+    where: and(
+      eq(agents.brandProfileId, req.params.id!),
+      eq(agents.organizationId, req.user.orgId),
+    ),
+  });
+
+  if (brandAgents.length === 0) return res.json([]);
+
+  const agentIds = brandAgents.map((a) => a.id);
+  const accounts = await db.query.socialAccounts.findMany({
+    where: and(
+      eq(socialAccounts.organizationId, req.user.orgId),
+      inArray(socialAccounts.agentId, agentIds),
+    ),
+  });
+
+  return res.json(
+    accounts.map(({ accessToken, refreshToken, ...rest }) => rest),
+  );
 });
 
 export { router as brandsRouter };

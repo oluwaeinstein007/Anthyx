@@ -14,7 +14,7 @@ const NAV = [
   { label: "Overview",     href: "/dashboard",             icon: LayoutDashboard },
   { label: "Brands",       href: "/dashboard/brands",      icon: Building2 },
   { label: "Agents",       href: "/dashboard/agents",      icon: Bot },
-  { label: "Accounts",     href: "/dashboard/accounts",    icon: Link2 },
+  { label: "Channels",     href: "/dashboard/accounts",    icon: Link2 },
   { label: "Plans",        href: "/dashboard/plans",       icon: Calendar },
   { label: "Posts",        href: "/dashboard/posts",       icon: ListChecks },
   { label: "Create Post",  href: "/dashboard/posts/create", icon: FilePen },

@@ -137,8 +137,12 @@ router.post("/:brandId/competitors/lookup", auth, async (req, res) => {
     }
   }
 
-  const result = await lookupCompetitorInfo(name.trim(), websiteUrl, scrapedContent);
-  return res.json(result);
+  try {
+    const result = await lookupCompetitorInfo(name.trim(), websiteUrl, scrapedContent);
+    return res.json(result);
+  } catch {
+    return res.status(503).json({ error: "Lookup unavailable — AI service error" });
+  }
 });
 
 // ── Competitive Analysis ───────────────────────────────────────────────────────
@@ -183,12 +187,17 @@ router.post("/:brandId/competitor-suggestions/refresh", auth, async (req, res) =
   const ctx = (brand.brandContext ?? {}) as Record<string, unknown>;
   const positioning = (ctx.valueProposition as string | null) ?? null;
 
-  const suggestions = await suggestCompetitors(
-    brand.name,
-    brand.industry ?? "general",
-    positioning,
-    existingNames,
-  );
+  let suggestions: string[];
+  try {
+    suggestions = await suggestCompetitors(
+      brand.name,
+      brand.industry ?? "general",
+      positioning,
+      existingNames,
+    );
+  } catch {
+    return res.status(503).json({ error: "Suggestions unavailable — AI service error" });
+  }
 
   await db
     .update(brandProfiles)
@@ -240,16 +249,21 @@ router.post("/:brandId/competitive-intelligence/refresh", auth, async (req, res)
 
   const industry = brand.industry ?? "general";
 
-  const result = await generateCompetitiveAnalysis(
-    brand.name,
-    industry,
-    competitorList.map((c) => ({
-      name: c.name,
-      websiteUrl: c.websiteUrl,
-      tier: c.tier ?? "direct",
-      socialHandles: c.socialHandles as Record<string, string> | null,
-    })),
-  );
+  let result: Awaited<ReturnType<typeof generateCompetitiveAnalysis>>;
+  try {
+    result = await generateCompetitiveAnalysis(
+      brand.name,
+      industry,
+      competitorList.map((c) => ({
+        name: c.name,
+        websiteUrl: c.websiteUrl,
+        tier: c.tier ?? "direct",
+        socialHandles: c.socialHandles as Record<string, string> | null,
+      })),
+    );
+  } catch {
+    return res.status(503).json({ error: "Analysis unavailable — AI service error" });
+  }
 
   const [analysis] = await db
     .insert(competitorAnalyses)

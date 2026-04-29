@@ -1,9 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
-import { Link2, CheckCircle2, AlertTriangle, ExternalLink, Shield } from "lucide-react";
+import {
+  Link2, CheckCircle2, AlertTriangle, ExternalLink, Shield,
+  ChevronDown, ChevronLeft, X, Loader2, Tag, Bot,
+} from "lucide-react";
 import { TelegramConnectModal } from "@/components/accounts/TelegramConnectModal";
 import {
   DiscordConnectModal,
@@ -15,6 +19,15 @@ import {
 } from "@/components/accounts/TokenConnectModal";
 import { EmailConnectModal } from "@/components/accounts/EmailConnectModal";
 
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+interface BrandInfo {
+  agentId: string;
+  agentName: string;
+  brandId: string;
+  brandName: string;
+}
+
 interface SocialAccount {
   id: string;
   platform: string;
@@ -22,7 +35,21 @@ interface SocialAccount {
   isActive: boolean;
   tokenExpiresAt: string | null;
   createdAt: string;
+  agentId: string | null;
+  brandInfo: BrandInfo | null;
   platformConfig?: Record<string, unknown>;
+}
+
+interface Brand {
+  id: string;
+  name: string;
+}
+
+interface Agent {
+  id: string;
+  name: string;
+  brandProfileId: string;
+  isActive: boolean;
 }
 
 interface PlatformMeta {
@@ -61,15 +88,298 @@ const PLATFORM_ORDER = [
 
 type ModalPlatform = "telegram" | "discord" | "slack" | "whatsapp" | "bluesky" | "mastodon" | "pinterest" | "email" | null;
 
-export default function AccountsPage() {
+// ── Brand assign dropdown (two-step for multi-agent brands) ────────────────────
+
+function AssignDropdown({
+  accountId,
+  current,
+  brands,
+  agents,
+  onClose,
+}: {
+  accountId: string;
+  current: BrandInfo | null;
+  brands: Brand[];
+  agents: Agent[];
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
+  const [step, setStep] = useState<"brand" | "agent">("brand");
+  const [pendingBrand, setPendingBrand] = useState<Brand | null>(null);
+
+  const assign = useMutation({
+    mutationFn: (body: { brandId?: string | null; agentId?: string | null }) =>
+      api.put(`/accounts/${accountId}/assign`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["accounts"] });
+      onClose();
+    },
+  });
+
+  function handleBrandClick(brand: Brand) {
+    const brandAgents = agents.filter((a) => a.brandProfileId === brand.id && a.isActive);
+    if (brandAgents.length <= 1) {
+      // 0 agents → API will surface 422; 1 agent → auto-assign
+      assign.mutate({ brandId: brand.id });
+    } else {
+      setPendingBrand(brand);
+      setStep("agent");
+    }
+  }
+
+  const PANEL = "w-56 bg-white border border-gray-200 rounded-xl shadow-xl py-1";
+
+  if (step === "agent" && pendingBrand) {
+    const brandAgents = agents.filter((a) => a.brandProfileId === pendingBrand.id && a.isActive);
+    return (
+      <div className={PANEL}>
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100">
+          <button
+            onClick={() => { setStep("brand"); setPendingBrand(null); }}
+            className="text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+          <p className="text-xs font-medium text-gray-700 truncate">{pendingBrand.name}</p>
+          <p className="text-xs text-gray-400 ml-auto shrink-0">pick agent</p>
+        </div>
+        {brandAgents.map((agent) => (
+          <button
+            key={agent.id}
+            onClick={() => assign.mutate({ agentId: agent.id })}
+            disabled={assign.isPending || current?.agentId === agent.id}
+            className={`w-full text-left px-3 py-2 text-sm transition-colors flex items-center gap-2 ${
+              current?.agentId === agent.id
+                ? "bg-green-50 text-green-700 font-medium cursor-default"
+                : "text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <Bot className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+            {current?.agentId === agent.id && <CheckCircle2 className="w-3 h-3 text-green-500 shrink-0" />}
+            <span className="truncate">{agent.name}</span>
+          </button>
+        ))}
+        {assign.isPending && (
+          <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-400">
+            <Loader2 className="w-3 h-3 animate-spin" /> Saving…
+          </div>
+        )}
+        {assign.isError && (
+          <p className="px-3 py-1.5 text-xs text-red-500 border-t border-gray-100">
+            {assign.error instanceof Error ? assign.error.message : "Failed"}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className={PANEL}>
+      <p className="px-3 pt-2 pb-1 text-xs font-medium text-gray-400 uppercase tracking-wide">Assign to brand</p>
+      {brands.length === 0 ? (
+        <p className="px-3 py-2 text-xs text-gray-400">No brands yet</p>
+      ) : (
+        brands.map((b) => {
+          const agentCount = agents.filter((a) => a.brandProfileId === b.id && a.isActive).length;
+          const isCurrent = current?.brandId === b.id;
+          return (
+            <button
+              key={b.id}
+              onClick={() => handleBrandClick(b)}
+              disabled={assign.isPending}
+              className={`w-full text-left px-3 py-2 text-sm transition-colors flex items-center gap-2 ${
+                isCurrent
+                  ? "bg-green-50 text-green-700 font-medium"
+                  : "text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              {isCurrent
+                ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                : <div className="w-3.5 h-3.5 shrink-0" />}
+              <span className="truncate flex-1">{b.name}</span>
+              {agentCount === 0 ? (
+                <span className="text-xs text-amber-500 shrink-0">no agent</span>
+              ) : agentCount > 1 ? (
+                <span className="text-xs text-gray-400 shrink-0">{agentCount} agents</span>
+              ) : null}
+              {agentCount > 1 && <ChevronLeft className="w-3 h-3 text-gray-400 shrink-0 rotate-180" />}
+            </button>
+          );
+        })
+      )}
+      {current && (
+        <>
+          <div className="my-1 border-t border-gray-100" />
+          <button
+            onClick={() => assign.mutate({ brandId: null })}
+            disabled={assign.isPending}
+            className="w-full text-left px-3 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors"
+          >
+            Unassign
+          </button>
+        </>
+      )}
+      {assign.isPending && (
+        <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-400">
+          <Loader2 className="w-3 h-3 animate-spin" /> Saving…
+        </div>
+      )}
+      {assign.isError && (
+        <p className="px-3 py-1.5 text-xs text-red-500 border-t border-gray-100">
+          {assign.error instanceof Error ? assign.error.message : "Failed"}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Connected account row ──────────────────────────────────────────────────────
+
+function AccountRow({
+  account,
+  brands,
+  agents,
+  onDisconnect,
+  onEditEmail,
+  highlight,
+  isFirst,
+  isLast,
+}: {
+  account: SocialAccount;
+  brands: Brand[];
+  agents: Agent[];
+  onDisconnect: () => void;
+  onEditEmail?: () => void;
+  highlight: boolean;
+  isFirst: boolean;
+  isLast: boolean;
+}) {
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const meta = PLATFORM_META[account.platform] ?? {
+    label: account.platform, textColor: "text-gray-700",
+    bgColor: "bg-gray-100", dotColor: "bg-gray-400",
+  };
+  const expiring =
+    account.tokenExpiresAt &&
+    new Date(account.tokenExpiresAt).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000;
+
+  return (
+    <div
+      className={`px-5 py-4 flex items-center gap-4 transition-colors ${
+        highlight ? "bg-green-50" : "bg-white"
+      } ${isFirst ? "rounded-t-2xl" : ""} ${isLast ? "rounded-b-2xl" : ""}`}
+    >
+      <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${meta.bgColor}`}>
+        <div className={`w-2.5 h-2.5 rounded-full ${meta.dotColor}`} />
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`text-xs font-semibold ${meta.textColor}`}>{meta.label}</span>
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${account.isActive ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+            {account.isActive ? "active" : "inactive"}
+          </span>
+          {account.brandInfo ? (
+            <span className="flex items-center gap-1 text-xs px-2 py-0.5 bg-purple-50 text-purple-700 rounded-full border border-purple-100">
+              <Tag className="w-2.5 h-2.5" />
+              {account.brandInfo.brandName}
+              <span className="text-purple-400">·</span>
+              <Bot className="w-2.5 h-2.5" />
+              {account.brandInfo.agentName}
+            </span>
+          ) : (
+            <span className="text-xs px-2 py-0.5 bg-amber-50 text-amber-600 rounded-full border border-amber-200">
+              Unassigned
+            </span>
+          )}
+        </div>
+        <p className="text-sm font-medium text-gray-900 truncate mt-0.5">@{account.accountHandle}</p>
+        {expiring && (
+          <div className="flex items-center gap-1 mt-0.5 text-xs text-amber-600">
+            <AlertTriangle className="w-3 h-3" />
+            Token expiring soon — reconnect to avoid interruptions
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-3 shrink-0">
+        {account.platform === "email" && onEditEmail && (
+          <button
+            onClick={onEditEmail}
+            className="text-xs text-amber-600 hover:text-amber-800 font-medium transition-colors"
+          >
+            Edit
+          </button>
+        )}
+
+        {/* Assign button — portal-safe: dropdown sits in a relative wrapper outside overflow-hidden */}
+        <div className="relative">
+          <button
+            onClick={() => setDropdownOpen((v) => !v)}
+            className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 font-medium transition-colors"
+          >
+            {account.brandInfo ? "Reassign" : "Assign"}
+            <ChevronDown className={`w-3 h-3 transition-transform ${dropdownOpen ? "rotate-180" : ""}`} />
+          </button>
+          {dropdownOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setDropdownOpen(false)} />
+              <div className="absolute right-0 top-7 z-20">
+                <AssignDropdown
+                  accountId={account.id}
+                  current={account.brandInfo}
+                  brands={brands}
+                  agents={agents}
+                  onClose={() => setDropdownOpen(false)}
+                />
+              </div>
+            </>
+          )}
+        </div>
+
+        <button
+          onClick={onDisconnect}
+          className="text-xs text-red-500 hover:text-red-700 font-medium transition-colors"
+        >
+          Disconnect
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Main page ──────────────────────────────────────────────────────────────────
+
+function AccountsPageContent() {
+  const qc = useQueryClient();
+  const searchParams = useSearchParams();
   const [connecting, setConnecting] = useState<string | null>(null);
   const [openModal, setOpenModal] = useState<ModalPlatform>(null);
   const [editingEmail, setEditingEmail] = useState<SocialAccount | null>(null);
+  const [brandFilter, setBrandFilter] = useState<string>("all");
+  const [justConnected, setJustConnected] = useState<string | null>(null);
+  const [connectBanner, setConnectBanner] = useState<string | null>(null);
 
   const { data: accounts = [], isLoading } = useQuery<SocialAccount[]>({
     queryKey: ["accounts"],
     queryFn: () => api.get<SocialAccount[]>("/accounts"),
+  });
+
+  const { data: brands = [] } = useQuery<Brand[]>({
+    queryKey: ["brands"],
+    queryFn: () => api.get<Brand[]>("/brands"),
+    select: (data) => data.map(({ id, name }: { id: string; name: string }) => ({ id, name })),
+  });
+
+  const { data: agents = [] } = useQuery<Agent[]>({
+    queryKey: ["agents"],
+    queryFn: () => api.get<Agent[]>("/agents"),
+    select: (data) => data.map(({ id, name, brandProfileId, isActive }: Agent) => ({ id, name, brandProfileId, isActive })),
+  });
+
+  const disconnect = useMutation({
+    mutationFn: (id: string) => api.delete(`/accounts/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["accounts"] }),
   });
 
   const connect = useMutation({
@@ -80,17 +390,24 @@ export default function AccountsPage() {
     onSettled: () => setConnecting(null),
   });
 
-  const disconnect = useMutation({
-    mutationFn: (id: string) => api.delete(`/accounts/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["accounts"] }),
-  });
+  useEffect(() => {
+    const connected = searchParams.get("connected");
+    const error = searchParams.get("error");
+    if (connected) {
+      setJustConnected(connected);
+      setConnectBanner(connected);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("connected");
+      window.history.replaceState({}, "", url.toString());
+    }
+    if (error) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("error");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, [searchParams]);
 
   const connectedPlatforms = new Set(accounts.map((a) => a.platform));
-
-  const isExpiringSoon = (expiresAt: string | null) => {
-    if (!expiresAt) return false;
-    return new Date(expiresAt).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000;
-  };
 
   function handleConnect(platform: string) {
     const meta = PLATFORM_META[platform];
@@ -103,21 +420,96 @@ export default function AccountsPage() {
     }
   }
 
+  const filteredAccounts = accounts.filter((a) => {
+    if (brandFilter === "all") return true;
+    if (brandFilter === "unassigned") return !a.brandInfo;
+    return a.brandInfo?.brandId === brandFilter;
+  });
+
+  const brandsWithAccounts = brands.filter((b) =>
+    accounts.some((a) => a.brandInfo?.brandId === b.id),
+  );
+  const unassignedCount = accounts.filter((a) => !a.brandInfo).length;
+
+  function closeModal() {
+    setOpenModal(null);
+    qc.invalidateQueries({ queryKey: ["accounts"] });
+  }
+
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Social Accounts</h1>
-        <p className="text-sm text-gray-500 mt-1">Connect accounts to enable autonomous publishing across 16 platforms.</p>
+        <h1 className="text-2xl font-bold text-gray-900">Channels</h1>
+        <p className="text-sm text-gray-500 mt-1">Connect and assign social accounts to brands for autonomous publishing across 16 platforms.</p>
       </div>
+
+      {connectBanner && (
+        <div className="flex items-start justify-between gap-3 p-4 bg-green-50 border border-green-200 rounded-2xl">
+          <div>
+            <p className="text-sm font-semibold text-green-800">
+              {PLATFORM_META[connectBanner]?.label ?? connectBanner} connected successfully!
+            </p>
+            <p className="text-xs text-green-600 mt-0.5">
+              Assign it to a brand below so the agent knows which voice to use.
+            </p>
+          </div>
+          <button onClick={() => setConnectBanner(null)} className="text-green-400 hover:text-green-600 shrink-0">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Connected accounts */}
       <div>
-        <h2 className="text-sm font-semibold text-gray-700 mb-3">
-          Connected accounts
-          {accounts.length > 0 && (
-            <span className="ml-2 text-xs font-normal text-gray-400">{accounts.length} connected</span>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h2 className="text-sm font-semibold text-gray-700">
+            Connected accounts
+            {accounts.length > 0 && (
+              <span className="ml-2 text-xs font-normal text-gray-400">{accounts.length} connected</span>
+            )}
+          </h2>
+
+          {(brandsWithAccounts.length > 0 || unassignedCount > 0) && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                onClick={() => setBrandFilter("all")}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                  brandFilter === "all"
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                }`}
+              >
+                All
+              </button>
+              {brandsWithAccounts.map((b) => (
+                <button
+                  key={b.id}
+                  onClick={() => setBrandFilter(b.id)}
+                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                    brandFilter === b.id
+                      ? "bg-purple-600 text-white border-purple-600"
+                      : "bg-white text-gray-600 border-gray-200 hover:border-purple-300"
+                  }`}
+                >
+                  {b.name}
+                </button>
+              ))}
+              {unassignedCount > 0 && (
+                <button
+                  onClick={() => setBrandFilter("unassigned")}
+                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                    brandFilter === "unassigned"
+                      ? "bg-amber-500 text-white border-amber-500"
+                      : "bg-white text-amber-600 border-amber-200 hover:border-amber-400"
+                  }`}
+                >
+                  Unassigned ({unassignedCount})
+                </button>
+              )}
+            </div>
           )}
-        </h2>
+        </div>
+
         {isLoading ? (
           <div className="space-y-2 animate-pulse">
             {[...Array(2)].map((_, i) => <div key={i} className="h-16 bg-gray-100 rounded-2xl" />)}
@@ -127,54 +519,26 @@ export default function AccountsPage() {
             <Link2 className="w-7 h-7 text-gray-300 mx-auto mb-2" />
             <p className="text-sm text-gray-400">No accounts connected yet.</p>
           </div>
+        ) : filteredAccounts.length === 0 ? (
+          <div className="py-8 bg-white border border-dashed border-gray-200 rounded-2xl text-center">
+            <p className="text-sm text-gray-400">No accounts match this filter.</p>
+          </div>
         ) : (
-          <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden divide-y divide-gray-100">
-            {accounts.map((account) => {
-              const meta = PLATFORM_META[account.platform] ?? {
-                label: account.platform, textColor: "text-gray-700",
-                bgColor: "bg-gray-100", dotColor: "bg-gray-400",
-              };
-              const expiring = isExpiringSoon(account.tokenExpiresAt);
-              return (
-                <div key={account.id} className="px-5 py-4 flex items-center gap-4">
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${meta.bgColor}`}>
-                    <div className={`w-2.5 h-2.5 rounded-full ${meta.dotColor}`} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-xs font-semibold ${meta.textColor}`}>{meta.label}</span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${account.isActive ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
-                        {account.isActive ? "active" : "inactive"}
-                      </span>
-                    </div>
-                    <p className="text-sm font-medium text-gray-900 truncate">@{account.accountHandle}</p>
-                    {expiring && (
-                      <div className="flex items-center gap-1 mt-0.5 text-xs text-amber-600">
-                        <AlertTriangle className="w-3 h-3" />
-                        Token expiring soon — reconnect to avoid interruptions
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    {account.platform === "email" && (
-                      <button
-                        onClick={() => setEditingEmail(account)}
-                        className="text-xs text-amber-600 hover:text-amber-800 font-medium transition-colors"
-                      >
-                        Edit
-                      </button>
-                    )}
-                    <button
-                      onClick={() => disconnect.mutate(account.id)}
-                      disabled={disconnect.isPending}
-                      className="text-xs text-red-500 hover:text-red-700 font-medium disabled:opacity-50 transition-colors"
-                    >
-                      Disconnect
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+          /* overflow-visible so the assign dropdown isn't clipped by the container */
+          <div className="border border-gray-200 rounded-2xl divide-y divide-gray-100">
+            {filteredAccounts.map((account, i) => (
+              <AccountRow
+                key={account.id}
+                account={account}
+                brands={brands}
+                agents={agents}
+                highlight={justConnected === account.platform}
+                isFirst={i === 0}
+                isLast={i === filteredAccounts.length - 1}
+                onDisconnect={() => disconnect.mutate(account.id)}
+                onEditEmail={account.platform === "email" ? () => setEditingEmail(account) : undefined}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -221,7 +585,6 @@ export default function AccountsPage() {
             );
           })}
         </div>
-
         <p className="text-xs text-gray-400 mt-3">
           <ExternalLink className="w-3 h-3 inline mr-1" />
           OAuth platforms open in a new tab. Bot/token platforms use a setup modal.
@@ -235,18 +598,17 @@ export default function AccountsPage() {
         </p>
       </div>
 
-      {/* Modals */}
-      {openModal === "telegram" && <TelegramConnectModal onClose={() => setOpenModal(null)} />}
-      {openModal === "discord" && <DiscordConnectModal onClose={() => setOpenModal(null)} />}
-      {openModal === "slack" && <SlackConnectModal onClose={() => setOpenModal(null)} />}
-      {openModal === "whatsapp" && <WhatsAppConnectModal onClose={() => setOpenModal(null)} />}
-      {openModal === "bluesky" && <BlueskyConnectModal onClose={() => setOpenModal(null)} />}
-      {openModal === "mastodon" && <MastodonConnectModal onClose={() => setOpenModal(null)} />}
-      {openModal === "pinterest" && <PinterestConnectModal onClose={() => setOpenModal(null)} />}
-      {openModal === "email" && <EmailConnectModal onClose={() => setOpenModal(null)} />}
+      {openModal === "telegram" && <TelegramConnectModal onClose={closeModal} />}
+      {openModal === "discord" && <DiscordConnectModal onClose={closeModal} />}
+      {openModal === "slack" && <SlackConnectModal onClose={closeModal} />}
+      {openModal === "whatsapp" && <WhatsAppConnectModal onClose={closeModal} />}
+      {openModal === "bluesky" && <BlueskyConnectModal onClose={closeModal} />}
+      {openModal === "mastodon" && <MastodonConnectModal onClose={closeModal} />}
+      {openModal === "pinterest" && <PinterestConnectModal onClose={closeModal} />}
+      {openModal === "email" && <EmailConnectModal onClose={closeModal} />}
       {editingEmail && (
         <EmailConnectModal
-          onClose={() => setEditingEmail(null)}
+          onClose={() => { setEditingEmail(null); qc.invalidateQueries({ queryKey: ["accounts"] }); }}
           existing={{
             id: editingEmail.id,
             accountHandle: editingEmail.accountHandle,
@@ -255,5 +617,13 @@ export default function AccountsPage() {
         />
       )}
     </div>
+  );
+}
+
+export default function AccountsPage() {
+  return (
+    <Suspense>
+      <AccountsPageContent />
+    </Suspense>
   );
 }

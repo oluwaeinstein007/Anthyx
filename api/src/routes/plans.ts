@@ -13,7 +13,7 @@ const router = Router();
 // POST /plans/generate
 router.post("/generate", auth, validate(GeneratePlanSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { brandProfileId, agentId, platforms, goals, startDate, feedbackLoopEnabled, durationDays = 30, postsPerPlatformPerDay = 1, targetLocale, campaignId } = req.body;
+    const { brandProfileId, agentId, platforms, goals, startDate, feedbackLoopEnabled, durationDays = 30, postsPerPlatformPerDay = 1, targetLocale, campaignId, budgetAllocatedCents } = req.body;
 
     const brand = await db.query.brandProfiles.findFirst({
       where: and(
@@ -63,6 +63,7 @@ router.post("/generate", auth, validate(GeneratePlanSchema), async (req: Request
         platforms: validPlatforms,
         feedbackLoopEnabled: feedbackLoopEnabled ?? false,
         ...(campaignId && { campaignId }),
+        ...(budgetAllocatedCents != null && { budgetAllocatedCents }),
       })
       .returning();
 
@@ -145,11 +146,12 @@ router.put("/:id", auth, async (req: Request, res: Response, next: NextFunction)
     });
     if (!plan) return res.status(404).json({ error: "Not found" });
 
-    const { name, goals, feedbackLoopEnabled, campaignId } = req.body as {
+    const { name, goals, feedbackLoopEnabled, campaignId, budgetAllocatedCents } = req.body as {
       name?: string;
       goals?: string[];
       feedbackLoopEnabled?: boolean;
       campaignId?: string | null;
+      budgetAllocatedCents?: number | null;
     };
 
     const [updated] = await db
@@ -159,6 +161,7 @@ router.put("/:id", auth, async (req: Request, res: Response, next: NextFunction)
         ...(goals !== undefined && { goals }),
         ...(feedbackLoopEnabled !== undefined && { feedbackLoopEnabled }),
         ...(campaignId !== undefined && { campaignId }),
+        ...(budgetAllocatedCents !== undefined && { budgetAllocatedCents }),
         updatedAt: new Date(),
       })
       .where(eq(marketingPlans.id, plan.id))

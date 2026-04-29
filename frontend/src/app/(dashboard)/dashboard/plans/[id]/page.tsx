@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
-import { Pencil, X, Check, Trash2, AlertCircle, ChevronLeft, ChevronRight } from "lucide-react";
+import { Pencil, X, Check, Trash2, AlertCircle, ChevronLeft, ChevronRight, Link2, Megaphone } from "lucide-react";
 
 const POSTS_PER_PAGE = 20;
 
@@ -52,8 +52,11 @@ interface MarketingPlan {
   goals: string[];
   failReason: string | null;
   feedbackLoopEnabled: boolean;
+  campaignId: string | null;
   posts: ScheduledPost[];
 }
+
+interface Campaign { id: string; name: string; }
 
 const STATUS_DOT: Record<string, string> = {
   draft: "bg-gray-300",
@@ -112,6 +115,10 @@ export default function PlanDetailPage() {
   const [editFeedback, setEditFeedback] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // Campaign assignment state
+  const [assigningCampaign, setAssigningCampaign] = useState(false);
+  const [campaignDraft, setCampaignDraft] = useState<string>("");
+
   // Per-post edit state
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
@@ -162,12 +169,19 @@ export default function PlanDetailPage() {
   });
 
   const updatePlan = useMutation({
-    mutationFn: (body: { name?: string; goals?: string[]; feedbackLoopEnabled?: boolean }) =>
+    mutationFn: (body: { name?: string; goals?: string[]; feedbackLoopEnabled?: boolean; campaignId?: string | null }) =>
       api.put(`/plans/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["plan", id] });
+      qc.invalidateQueries({ queryKey: ["plans"] });
       setEditing(false);
+      setAssigningCampaign(false);
     },
+  });
+
+  const { data: campaigns = [] } = useQuery<Campaign[]>({
+    queryKey: ["campaigns"],
+    queryFn: () => api.get<Campaign[]>("/campaigns"),
   });
 
   const deletePlan = useMutation({
@@ -372,6 +386,56 @@ export default function PlanDetailPage() {
                   ))}
                 </div>
               )}
+
+              {/* Campaign assignment */}
+              <div className="mt-3">
+                {assigningCampaign ? (
+                  <div className="flex items-center gap-2">
+                    <Megaphone className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                    <select
+                      autoFocus
+                      value={campaignDraft}
+                      onChange={(e) => setCampaignDraft(e.target.value)}
+                      className="px-2.5 py-1 border border-gray-300 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                    >
+                      <option value="">No campaign</option>
+                      {campaigns.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => updatePlan.mutate({ campaignId: campaignDraft || null })}
+                      disabled={updatePlan.isPending}
+                      className="p-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setAssigningCampaign(false)}
+                      className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setCampaignDraft(plan.campaignId ?? "");
+                      setAssigningCampaign(true);
+                    }}
+                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-green-600 transition-colors group"
+                  >
+                    <Megaphone className="w-3.5 h-3.5" />
+                    {plan.campaignId
+                      ? <span className="group-hover:underline">
+                          {campaigns.find((c) => c.id === plan.campaignId)?.name ?? "Campaign"}
+                        </span>
+                      : <span className="group-hover:underline">Assign to campaign</span>
+                    }
+                    <Link2 className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </button>
+                )}
+              </div>
             </>
           )}
         </div>

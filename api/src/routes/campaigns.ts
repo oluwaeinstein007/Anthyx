@@ -87,6 +87,7 @@ router.get("/:id/analytics", auth, async (req, res) => {
       eq(marketingPlans.campaignId, campaign.id),
       eq(marketingPlans.organizationId, req.user.orgId),
     ),
+    columns: { id: true, name: true, status: true, budgetAllocatedCents: true },
   });
 
   const planIds = plans.map((p) => p.id);

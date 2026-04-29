@@ -1,7 +1,7 @@
 import { Router } from "express";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, inArray } from "drizzle-orm";
 import { db } from "../db/client";
-import { socialAccounts, organizations, scheduledPosts } from "../db/schema";
+import { socialAccounts, organizations, scheduledPosts, agents, brandProfiles } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { encryptToken } from "../services/oauth-proxy/crypto";
 import { PlanLimitsEnforcer } from "../services/billing/limits";
@@ -291,8 +291,19 @@ router.post("/telegram", auth, async (req, res) => {
     const token = botToken.trim();
     const chat = chatId.trim();
 
+    const tgFetch = (url: string) =>
+      fetch(url, { signal: AbortSignal.timeout(10_000) });
+
     // Validate bot token
-    const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+    let meRes: Response;
+    try {
+      meRes = await tgFetch(`https://api.telegram.org/bot${token}/getMe`);
+    } catch (e) {
+      const msg = e instanceof Error && e.name === "TimeoutError"
+        ? "Timed out reaching Telegram API — check your server's outbound network access."
+        : "Cannot reach Telegram API — check your network connection.";
+      return res.status(502).json({ error: msg });
+    }
     const meData = (await meRes.json()) as { ok: boolean; result?: { id: number; username: string; first_name: string } };
     if (!meData.ok) {
       return res.status(400).json({ error: "Invalid bot token. Double-check what @BotFather gave you." });
@@ -300,7 +311,7 @@ router.post("/telegram", auth, async (req, res) => {
     const bot = meData.result!;
 
     // Validate bot has access to the specified chat
-    const chatRes = await fetch(
+    const chatRes = await tgFetch(
       `https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(chat)}`,
     );
     const chatData = (await chatRes.json()) as {
@@ -316,7 +327,7 @@ router.post("/telegram", auth, async (req, res) => {
 
     // Verify bot is actually an admin (for channels/groups)
     if (chatInfo.type !== "private") {
-      const memberRes = await fetch(
+      const memberRes = await tgFetch(
         `https://api.telegram.org/bot${token}/getChatMember?chat_id=${encodeURIComponent(chat)}&user_id=${bot.id}`,
       );
       const memberData = (await memberRes.json()) as { ok: boolean; result?: { status: string } };
@@ -888,10 +899,93 @@ router.get("/", auth, async (req, res) => {
   const list = await db.query.socialAccounts.findMany({
     where: eq(socialAccounts.organizationId, req.user.orgId),
   });
-  // Never return raw tokens
+
+  // Enrich each account with agent + brand info
+  const agentIds = [...new Set(list.map((a) => a.agentId).filter(Boolean) as string[])];
+  type BrandInfo = { agentId: string; agentName: string; brandId: string; brandName: string };
+  const agentBrandMap = new Map<string, BrandInfo>();
+
+  if (agentIds.length > 0) {
+    const agentRows = await db.query.agents.findMany({
+      where: inArray(agents.id, agentIds),
+    });
+    const brandIds = [...new Set(agentRows.map((a) => a.brandProfileId))];
+    const brandRows = await db.query.brandProfiles.findMany({
+      where: inArray(brandProfiles.id, brandIds),
+    });
+    const brandMap = new Map(brandRows.map((b) => [b.id, b]));
+    for (const agent of agentRows) {
+      const brand = brandMap.get(agent.brandProfileId);
+      if (brand) {
+        agentBrandMap.set(agent.id, {
+          agentId: agent.id,
+          agentName: agent.name,
+          brandId: brand.id,
+          brandName: brand.name,
+        });
+      }
+    }
+  }
+
   return res.json(
-    list.map(({ accessToken, refreshToken, ...rest }) => rest),
+    list.map(({ accessToken, refreshToken, ...rest }) => ({
+      ...rest,
+      brandInfo: rest.agentId ? (agentBrandMap.get(rest.agentId) ?? null) : null,
+    })),
   );
+});
+
+// PUT /accounts/:id/assign — assign/unassign account to a brand or specific agent
+// Body: { agentId } for direct assignment, { brandId } to auto-pick first agent, null either to unassign
+router.put("/:id/assign", auth, async (req, res) => {
+  const { brandId, agentId: directAgentId } = req.body as { brandId?: string | null; agentId?: string | null };
+
+  let agentId: string | null = null;
+
+  if (directAgentId) {
+    // Direct agent assignment — verify it belongs to this org
+    const agent = await db.query.agents.findFirst({
+      where: and(
+        eq(agents.id, directAgentId),
+        eq(agents.organizationId, req.user.orgId),
+        eq(agents.isActive, true),
+      ),
+    });
+    if (!agent) return res.status(404).json({ error: "Agent not found" });
+    agentId = agent.id;
+  } else if (brandId) {
+    // Brand-level assignment — auto-pick first active agent
+    const brand = await db.query.brandProfiles.findFirst({
+      where: and(
+        eq(brandProfiles.id, brandId),
+        eq(brandProfiles.organizationId, req.user.orgId),
+      ),
+    });
+    if (!brand) return res.status(404).json({ error: "Brand not found" });
+
+    const agent = await db.query.agents.findFirst({
+      where: and(
+        eq(agents.brandProfileId, brandId),
+        eq(agents.organizationId, req.user.orgId),
+        eq(agents.isActive, true),
+      ),
+    });
+    if (!agent) return res.status(422).json({ error: "This brand has no active agent. Create one first." });
+    agentId = agent.id;
+  }
+  // null brandId + null agentId = unassign
+
+  const [updated] = await db
+    .update(socialAccounts)
+    .set({ agentId, updatedAt: new Date() })
+    .where(and(
+      eq(socialAccounts.id, req.params.id!),
+      eq(socialAccounts.organizationId, req.user.orgId),
+    ))
+    .returning();
+
+  if (!updated) return res.status(404).json({ error: "Account not found" });
+  return res.json({ ok: true });
 });
 
 // DELETE /accounts/:id

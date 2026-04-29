@@ -5,14 +5,23 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import Link from "next/link";
+import Image from "next/image";
 import {
-  Pencil, Check, X, Trash2, TrendingUp, TrendingDown, Minus, Sparkles,
-  Plus, Globe, Mail, BookOpen, Target, Megaphone, Shield, Languages,
-  AlertCircle, Archive, ArchiveRestore, Copy, Loader2, RefreshCw,
+  Pencil, X, Trash2, TrendingUp, TrendingDown, Minus, Sparkles,
+  Plus, Globe, BookOpen, Target, Megaphone, Shield, Languages,
+  AlertCircle, Archive, ArchiveRestore, Copy, Loader2, Wifi, WifiOff,
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
+
+interface ConnectedChannel {
+  id: string;
+  platform: string;
+  accountHandle: string;
+  isActive: boolean;
+  agentId: string | null;
+}
 
 interface QualityStats {
   score: number;
@@ -32,6 +41,7 @@ interface BrandContext {
   targetMarket?: string | null;
   contentPillars?: string[];
   competitors?: string[];
+  competitorSuggestions?: string[];
 }
 
 interface BrandProfile {
@@ -84,7 +94,7 @@ interface BrandProfile {
 
 // ── Health score ───────────────────────────────────────────────────────────────
 
-function computeHealthScore(brand: BrandProfile): { score: number; missing: string[] } {
+function computeHealthScore(brand: BrandProfile, connectedChannels: number): { score: number; missing: string[] } {
   const checks: [boolean, string][] = [
     [!!brand.industry, "Industry"],
     [!!brand.tagline, "Tagline / slogan"],
@@ -100,6 +110,7 @@ function computeHealthScore(brand: BrandProfile): { score: number; missing: stri
     [!!brand.websiteUrl, "Website URL"],
     [!!brand.logoUrl, "Logo"],
     [!!(brand.brandContext?.audienceNotes?.length) || (brand.audiencePersonas?.length ?? 0) > 0, "Audience info"],
+    [connectedChannels > 0, "Connected social channel"],
   ];
 
   const passed = checks.filter(([ok]) => ok).length;
@@ -108,8 +119,8 @@ function computeHealthScore(brand: BrandProfile): { score: number; missing: stri
   return { score, missing };
 }
 
-function HealthScore({ brand }: { brand: BrandProfile }) {
-  const { score, missing } = computeHealthScore(brand);
+function HealthScore({ brand, connectedChannels }: { brand: BrandProfile; connectedChannels: number }) {
+  const { score, missing } = computeHealthScore(brand, connectedChannels);
   const [expanded, setExpanded] = useState(false);
   const color = score >= 75 ? "text-green-600" : score >= 50 ? "text-amber-600" : "text-red-600";
   const bar = score >= 75 ? "bg-green-500" : score >= 50 ? "bg-amber-500" : "bg-red-500";
@@ -378,6 +389,30 @@ export default function BrandDetailPage() {
     enabled: !!id,
   });
 
+  const { data: channels = [] } = useQuery<ConnectedChannel[]>({
+    queryKey: ["brand-channels", id],
+    queryFn: () => api.get<ConnectedChannel[]>(`/brands/${id}/channels`),
+    enabled: !!id,
+  });
+
+  const discoverSuggestions = useMutation({
+    mutationFn: () => api.post<{ suggestions: string[] }>(`/brands/${id}/competitor-suggestions/refresh`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["brand", id] }),
+  });
+
+  const dismissSuggestion = useMutation({
+    mutationFn: (name: string) => api.post(`/brands/${id}/competitor-suggestions/dismiss`, { name }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["brand", id] }),
+  });
+
+  const trackSuggestion = useMutation({
+    mutationFn: (name: string) => api.post(`/brands/${id}/competitors`, { name, tier: "direct" }),
+    onSuccess: (_data, name) => {
+      dismissSuggestion.mutate(name);
+      qc.invalidateQueries({ queryKey: ["competitors", id] });
+    },
+  });
+
   const update = useMutation({
     mutationFn: (body: Partial<BrandProfile>) => api.put(`/brands/${id}`, body),
     onSuccess: () => {
@@ -412,6 +447,8 @@ export default function BrandDetailPage() {
   const activeVoiceTraits = brand.voiceTraits
     ? Object.entries(brand.voiceTraits).filter(([, v]) => v).map(([t]) => t)
     : [];
+  const trackedCompetitors = competitorsList ?? [];
+  const competitorSuggestions = brand.brandContext?.competitorSuggestions ?? [];
 
   function patch(body: Partial<BrandProfile>) {
     update.mutate(body);
@@ -429,7 +466,7 @@ export default function BrandDetailPage() {
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3 min-w-0">
             {brand.logoUrl ? (
-              <img src={brand.logoUrl} alt={brand.name} className="w-12 h-12 rounded-xl object-cover border border-gray-100 shrink-0" />
+              <Image src={brand.logoUrl} alt={brand.name} width={48} height={48} className="rounded-xl object-cover border border-gray-100 shrink-0" />
             ) : (
               <div
                 className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-lg shrink-0"
@@ -501,7 +538,7 @@ export default function BrandDetailPage() {
       </div>
 
       {/* Health score */}
-      <HealthScore brand={brand} />
+      <HealthScore brand={brand} connectedChannels={channels.length} />
 
       {/* Ingestion status */}
       {brand.ingestStatus === "processing" && (
@@ -680,23 +717,93 @@ export default function BrandDetailPage() {
         />
       </div>
 
-      {/* Social handles */}
+      {/* Social handles (ingest-derived metadata) */}
       {(Object.keys(brand.socialHandles ?? {}).length > 0) && (
         <div className="bg-white border border-gray-200 rounded-2xl p-5 space-y-3">
-          <div className="flex items-center gap-2">
-            <Globe className="w-4 h-4 text-gray-400" />
-            <h2 className="text-sm font-semibold text-gray-900">Social handles</h2>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Globe className="w-4 h-4 text-gray-400" />
+              <h2 className="text-sm font-semibold text-gray-900">Known handles</h2>
+            </div>
+            <span className="text-xs text-gray-400 italic">from brand documents</span>
           </div>
+          <p className="text-xs text-gray-400">
+            These were extracted from ingested documents. To actually publish, connect them as channels above.
+          </p>
           <div className="grid grid-cols-2 gap-2">
-            {Object.entries(brand.socialHandles!).map(([platform, handle]) => (
-              <div key={platform} className="flex items-center gap-2 p-2.5 bg-gray-50 rounded-xl border border-gray-100">
-                <span className="text-xs font-medium text-gray-500 capitalize w-20 shrink-0">{platform}</span>
-                <span className="text-xs text-gray-700 truncate">{handle}</span>
-              </div>
-            ))}
+            {Object.entries(brand.socialHandles!).map(([platform, handle]) => {
+              const isLive = channels.some(
+                (ch) => ch.platform === platform && ch.accountHandle === handle,
+              );
+              return (
+                <div
+                  key={platform}
+                  className={`flex items-center gap-2 p-2.5 rounded-xl border ${
+                    isLive
+                      ? "bg-green-50 border-green-200"
+                      : "bg-gray-50 border-gray-100"
+                  }`}
+                >
+                  <span className="text-xs font-medium text-gray-500 capitalize w-20 shrink-0">{platform}</span>
+                  <span className="text-xs text-gray-700 truncate flex-1">{handle}</span>
+                  {isLive ? (
+                    <span className="text-xs text-green-600 font-medium shrink-0">Live</span>
+                  ) : (
+                    <span className="text-xs text-gray-400 shrink-0">Not connected</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
+
+      {/* Connected channels */}
+      <div className="bg-white border border-gray-200 rounded-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            {channels.length > 0
+              ? <Wifi className="w-4 h-4 text-green-500" />
+              : <WifiOff className="w-4 h-4 text-gray-400" />}
+            <h2 className="text-sm font-semibold text-gray-900">Connected channels</h2>
+          </div>
+          <a
+            href="/dashboard/accounts"
+            className="text-xs text-purple-600 hover:text-purple-700 font-medium"
+          >
+            Manage →
+          </a>
+        </div>
+
+        {channels.length === 0 ? (
+          <div className="flex items-start gap-3 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+            <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-medium text-amber-800">No channels connected to this brand</p>
+              <p className="text-xs text-amber-600 mt-0.5">
+                Go to Channels, connect a platform and assign it to this brand so the agent can publish.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {channels.map((ch) => (
+              <div
+                key={ch.id}
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium ${
+                  ch.isActive
+                    ? "bg-green-50 border-green-200 text-green-800"
+                    : "bg-gray-50 border-gray-200 text-gray-500"
+                }`}
+              >
+                <div className={`w-2 h-2 rounded-full ${ch.isActive ? "bg-green-500" : "bg-gray-400"}`} />
+                <span className="capitalize font-semibold">{ch.platform}</span>
+                <span className="opacity-70">@{ch.accountHandle}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Audience */}
       {((brand.brandContext?.audienceNotes?.length ?? 0) > 0 || (brand.audiencePersonas?.length ?? 0) > 0) && (
@@ -757,28 +864,70 @@ export default function BrandDetailPage() {
         </div>
       )}
 
-      <div className="bg-white border border-gray-200 rounded-2xl p-5 space-y-3">
-        <div className="flex items-center justify-between">
+      <div className="bg-white border border-gray-200 rounded-2xl p-5 space-y-4">
+        {/* Header — always shows discover button */}
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <h2 className="text-sm font-semibold text-gray-900">Known competitors</h2>
-          <Link
-            href={`/dashboard/brands/${id}/competitive`}
-            className="text-xs text-purple-600 hover:text-purple-700 font-medium"
-          >
-            {(competitorsList?.length ?? 0) > 0 ? "View intel →" : "Add competitors →"}
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => discoverSuggestions.mutate()}
+              disabled={discoverSuggestions.isPending}
+              className="flex items-center gap-1 text-xs text-purple-600 hover:text-purple-800 font-medium disabled:opacity-50 transition-colors"
+            >
+              {discoverSuggestions.isPending
+                ? <><Loader2 className="w-3 h-3 animate-spin" /> Discovering…</>
+                : <><Sparkles className="w-3 h-3" /> Discover</>}
+            </button>
+            <span className="text-gray-200 text-sm">|</span>
+            <Link href={`/dashboard/brands/${id}/competitive`} className="text-xs text-purple-600 hover:text-purple-700 font-medium">
+              {trackedCompetitors.length > 0 ? "View intel →" : "Manage →"}
+            </Link>
+          </div>
         </div>
-        {(competitorsList?.length ?? 0) > 0 ? (
+
+        {/* Tracked competitors */}
+        {trackedCompetitors.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
-            {competitorsList!.map((c) => (
+            {trackedCompetitors.map((c) => (
               <span key={c.id} className="text-xs bg-purple-50 text-purple-700 border border-purple-100 px-2.5 py-1 rounded-full font-medium">
                 {c.name}
               </span>
             ))}
           </div>
-        ) : (
-          <p className="text-sm text-gray-400">No competitors tracked yet. Ingest a document mentioning competitors, or add them manually.</p>
         )}
-        <p className="text-xs text-gray-400">Auto-discovered from ingested documents. Manage in Competitive Intelligence.</p>
+
+        {/* AI suggestions */}
+        {competitorSuggestions.length > 0 && (
+          <div>
+            <p className="text-xs text-gray-400 mb-2">AI-suggested — click Track to add</p>
+            <div className="flex flex-wrap gap-1.5">
+              {competitorSuggestions.map((name) => (
+                <div key={name} className="flex items-center gap-0.5 bg-purple-50 border border-purple-200 rounded-full pl-2.5 pr-1 py-0.5">
+                  <span className="text-xs text-purple-700 font-medium">{name}</span>
+                  <button
+                    onClick={() => trackSuggestion.mutate(name)}
+                    disabled={trackSuggestion.isPending}
+                    className="ml-1 text-[10px] px-1.5 py-0.5 bg-purple-600 hover:bg-purple-700 text-white rounded-full transition-colors disabled:opacity-50"
+                  >
+                    Track
+                  </button>
+                  <button
+                    onClick={() => dismissSuggestion.mutate(name)}
+                    className="p-0.5 text-purple-300 hover:text-purple-600 transition-colors"
+                    title="Dismiss"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Empty state */}
+        {trackedCompetitors.length === 0 && competitorSuggestions.length === 0 && !discoverSuggestions.isPending && (
+          <p className="text-xs text-gray-400">No competitors yet. Click Discover to find suggestions, or add manually via Manage.</p>
+        )}
       </div>
 
       {/* AI Quality Improvement */}

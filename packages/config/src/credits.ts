@@ -8,3 +8,4 @@ export const CREDIT_COSTS = {
 } as const;
 
 export type CreditAction = keyof typeof CREDIT_COSTS;
+

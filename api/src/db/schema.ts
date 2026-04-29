@@ -262,6 +262,7 @@ export const marketingPlans = pgTable("marketing_plans", {
   platforms: text("platforms").array(),
   failReason: text("fail_reason"),
   feedbackLoopEnabled: boolean("feedback_loop_enabled").default(false),
+  budgetAllocatedCents: integer("budget_allocated_cents"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
