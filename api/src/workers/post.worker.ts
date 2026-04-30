@@ -35,6 +35,8 @@ const worker = new Worker<PostJobData>(
       return;
     }
 
+    if (!post.agentId || !post.socialAccountId) throw new Error(`Post ${postId} missing agentId or socialAccountId`);
+
     // Rule 20: Check agent is still active
     const agent = await db.query.agents.findFirst({
       where: eq(agents.id, post.agentId),

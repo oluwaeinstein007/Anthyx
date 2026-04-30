@@ -270,7 +270,7 @@ function AccountRow({
   brands,
   agents,
   onDisconnect,
-  onEditEmail,
+  onEdit,
   highlight,
   isFirst,
   isLast,
@@ -279,7 +279,7 @@ function AccountRow({
   brands: Brand[];
   agents: Agent[];
   onDisconnect: () => void;
-  onEditEmail?: () => void;
+  onEdit?: () => void;
   highlight: boolean;
   isFirst: boolean;
   isLast: boolean;
@@ -341,10 +341,10 @@ function AccountRow({
       </div>
 
       <div className="flex items-center gap-3 shrink-0">
-        {account.platform === "email" && onEditEmail && (
+        {PLATFORM_META[account.platform]?.connectionType === "modal" && onEdit && (
           <button
-            onClick={onEditEmail}
-            className="text-xs text-amber-600 hover:text-amber-800 font-medium transition-colors"
+            onClick={onEdit}
+            className="text-xs text-gray-500 hover:text-gray-800 font-medium transition-colors"
           >
             Edit
           </button>
@@ -393,7 +393,7 @@ function AccountsPageContent() {
   const searchParams = useSearchParams();
   const [connecting, setConnecting] = useState<string | null>(null);
   const [openModal, setOpenModal] = useState<ModalPlatform>(null);
-  const [editingEmail, setEditingEmail] = useState<SocialAccount | null>(null);
+  const [editingAccount, setEditingAccount] = useState<SocialAccount | null>(null);
   const [brandFilter, setBrandFilter] = useState<string>("all");
   const [justConnected, setJustConnected] = useState<string | null>(null);
   const [connectBanner, setConnectBanner] = useState<string | null>(null);
@@ -445,7 +445,10 @@ function AccountsPageContent() {
     }
   }, [searchParams]);
 
-  const connectedPlatforms = new Set(accounts.map((a) => a.platform));
+  const accountsByPlatform = accounts.reduce<Record<string, number>>((acc, a) => {
+    acc[a.platform] = (acc[a.platform] ?? 0) + 1;
+    return acc;
+  }, {});
 
   function handleConnect(platform: string) {
     const meta = PLATFORM_META[platform];
@@ -471,6 +474,11 @@ function AccountsPageContent() {
 
   function closeModal() {
     setOpenModal(null);
+    qc.invalidateQueries({ queryKey: ["accounts"] });
+  }
+
+  function closeEditModal() {
+    setEditingAccount(null);
     qc.invalidateQueries({ queryKey: ["accounts"] });
   }
 
@@ -573,7 +581,11 @@ function AccountsPageContent() {
                 isFirst={i === 0}
                 isLast={i === filteredAccounts.length - 1}
                 onDisconnect={() => disconnect.mutate(account.id)}
-                onEditEmail={account.platform === "email" ? () => setEditingEmail(account) : undefined}
+                onEdit={
+                  PLATFORM_META[account.platform]?.connectionType === "modal"
+                    ? () => setEditingAccount(account)
+                    : undefined
+                }
               />
             ))}
           </div>
@@ -587,17 +599,18 @@ function AccountsPageContent() {
           {PLATFORM_ORDER.map((platform) => {
             const meta = PLATFORM_META[platform];
             if (!meta) return null;
-            const isConnected = connectedPlatforms.has(platform);
+            const count = accountsByPlatform[platform] ?? 0;
+            const isConnected = count > 0;
             const isOAuth = meta.connectionType === "oauth";
             return (
               <button
                 key={platform}
-                onClick={() => !isConnected && handleConnect(platform)}
-                disabled={isConnected || connecting === platform || connect.isPending}
+                onClick={() => handleConnect(platform)}
+                disabled={connecting === platform || connect.isPending}
                 className={`flex items-center gap-3 p-4 rounded-2xl border text-left transition-all group ${
                   isConnected
-                    ? "border-green-200 bg-green-50 cursor-default"
-                    : "border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm cursor-pointer"
+                    ? "border-green-200 bg-green-50 hover:border-green-300 hover:shadow-sm"
+                    : "border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm"
                 }`}
               >
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${meta.bgColor}`}>
@@ -608,10 +621,13 @@ function AccountsPageContent() {
                   <p className="text-xs text-gray-400 truncate">{meta.description}</p>
                 </div>
                 <div className="shrink-0 ml-1">
-                  {isConnected ? (
-                    <CheckCircle2 className="w-4 h-4 text-green-500" />
-                  ) : connecting === platform ? (
+                  {connecting === platform ? (
                     <ExternalLink className="w-3.5 h-3.5 text-gray-400 animate-pulse" />
+                  ) : isConnected ? (
+                    <div className="flex items-center gap-1">
+                      <CheckCircle2 className="w-4 h-4 text-green-500" />
+                      {count > 1 && <span className="text-xs text-green-600 font-medium">{count}</span>}
+                    </div>
                   ) : isOAuth ? (
                     <ExternalLink className="w-3.5 h-3.5 text-gray-300 group-hover:text-gray-500 transition-colors" />
                   ) : (
@@ -643,13 +659,36 @@ function AccountsPageContent() {
       {openModal === "mastodon" && <MastodonConnectModal onClose={closeModal} />}
       {openModal === "pinterest" && <PinterestConnectModal onClose={closeModal} />}
       {openModal === "email" && <EmailConnectModal onClose={closeModal} />}
-      {editingEmail && (
+
+      {/* Edit modals */}
+      {editingAccount?.platform === "telegram" && (
+        <TelegramConnectModal existing={{ id: editingAccount.id, platformConfig: editingAccount.platformConfig }} onClose={closeEditModal} />
+      )}
+      {editingAccount?.platform === "discord" && (
+        <DiscordConnectModal existing={{ id: editingAccount.id, platformConfig: editingAccount.platformConfig }} onClose={closeEditModal} />
+      )}
+      {editingAccount?.platform === "slack" && (
+        <SlackConnectModal existing={{ id: editingAccount.id, platformConfig: editingAccount.platformConfig }} onClose={closeEditModal} />
+      )}
+      {editingAccount?.platform === "whatsapp" && (
+        <WhatsAppConnectModal existing={{ id: editingAccount.id, platformConfig: editingAccount.platformConfig }} onClose={closeEditModal} />
+      )}
+      {editingAccount?.platform === "bluesky" && (
+        <BlueskyConnectModal existing={{ id: editingAccount.id, accountHandle: editingAccount.accountHandle, platformConfig: editingAccount.platformConfig }} onClose={closeEditModal} />
+      )}
+      {editingAccount?.platform === "mastodon" && (
+        <MastodonConnectModal existing={{ id: editingAccount.id, platformConfig: editingAccount.platformConfig }} onClose={closeEditModal} />
+      )}
+      {editingAccount?.platform === "pinterest" && (
+        <PinterestConnectModal existing={{ id: editingAccount.id, platformConfig: editingAccount.platformConfig }} onClose={closeEditModal} />
+      )}
+      {editingAccount?.platform === "email" && (
         <EmailConnectModal
-          onClose={() => { setEditingEmail(null); qc.invalidateQueries({ queryKey: ["accounts"] }); }}
+          onClose={closeEditModal}
           existing={{
-            id: editingEmail.id,
-            accountHandle: editingEmail.accountHandle,
-            platformConfig: (editingEmail.platformConfig ?? {}) as any,
+            id: editingAccount.id,
+            accountHandle: editingAccount.accountHandle,
+            platformConfig: (editingAccount.platformConfig ?? {}) as any,
           }}
         />
       )}

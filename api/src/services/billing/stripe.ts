@@ -6,7 +6,7 @@ import type { PlanTier } from "@anthyx/types";
 import { productConfig } from "@anthyx/config";
 
 export const stripe = new Stripe(process.env["STRIPE_SECRET_KEY"] ?? "", {
-  apiVersion: "2024-12-18.acacia" as Parameters<typeof Stripe>[1]["apiVersion"],
+  apiVersion: "2024-12-18.acacia" as Stripe.LatestApiVersion,
 });
 
 const PRICE_ID_TO_TIER: Record<string, PlanTier> = {};

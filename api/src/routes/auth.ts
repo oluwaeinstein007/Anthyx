@@ -446,7 +446,7 @@ router.get("/google/callback", async (req, res) => {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        code,
+        code: code ?? "",
         client_id: clientId,
         client_secret: clientSecret,
         redirect_uri: callbackUrl,
@@ -566,6 +566,8 @@ router.post("/admin/accept-invite", async (req, res) => {
     .update(adminInvites)
     .set({ acceptedAt: new Date() })
     .where(eq(adminInvites.id, invite.id));
+
+  if (!newUser) return res.status(500).json({ error: "Failed to create user" });
 
   // Issue admin token
   const adminToken = issueToken(

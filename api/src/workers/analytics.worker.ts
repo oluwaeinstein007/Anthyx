@@ -20,7 +20,7 @@ const worker = new Worker<AnalyticsJobData>(
       where: eq(scheduledPosts.id, postId),
     });
 
-    if (!post?.platformPostId) return;
+    if (!post?.platformPostId || !post.socialAccountId) return;
 
     try {
       const token = await oauthProxy.getValidToken(post.socialAccountId);

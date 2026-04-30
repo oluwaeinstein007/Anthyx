@@ -11,6 +11,7 @@ interface Field {
   placeholder: string;
   type?: "text" | "password";
   hint?: string;
+  optional?: boolean;
 }
 
 interface Step {
@@ -28,26 +29,33 @@ interface Props {
   fields: Field[];
   steps: Step[];
   onClose: () => void;
+  initialValues?: Record<string, string>;
+  isEdit?: boolean;
+  existingId?: string;
 }
 
 export function TokenConnectModal({
   label, accentColor, accentRing, accentBtn,
-  endpoint, fields, steps, onClose,
+  endpoint, fields, steps, onClose, initialValues, isEdit, existingId,
 }: Props) {
   const qc = useQueryClient();
-  const [values, setValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(fields.map((f) => [f.key, ""])),
-  );
+  const [values, setValues] = useState<Record<string, string>>(() => ({
+    ...Object.fromEntries(fields.map((f) => [f.key, ""])),
+    ...(initialValues ?? {}),
+  }));
 
   const connect = useMutation({
-    mutationFn: () => api.post(endpoint, values),
+    mutationFn: () =>
+      isEdit && existingId
+        ? api.put(`${endpoint}/${existingId}`, values)
+        : api.post(endpoint, values),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["accounts"] });
       onClose();
     },
   });
 
-  const canSubmit = fields.every((f) => values[f.key]?.trim());
+  const canSubmit = fields.filter((f) => !f.optional).every((f) => values[f.key]?.trim());
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -58,8 +66,12 @@ export function TokenConnectModal({
               <div className={`w-2.5 h-2.5 rounded-full ${accentColor}`} />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-gray-900">Connect {label}</h2>
-              <p className="text-xs text-gray-500">Manual token setup</p>
+              <h2 className="text-sm font-semibold text-gray-900">
+                {isEdit ? "Edit" : "Connect"} {label}
+              </h2>
+              <p className="text-xs text-gray-500">
+                {isEdit ? "Update credentials or target channel" : "Manual token setup"}
+              </p>
             </div>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -68,7 +80,7 @@ export function TokenConnectModal({
         </div>
 
         <div className="px-6 py-5 space-y-5">
-          {steps.length > 0 && (
+          {steps.length > 0 && !isEdit && (
             <div className="space-y-3">
               {steps.map(({ n, text }) => (
                 <div key={n} className="flex gap-3">
@@ -81,7 +93,7 @@ export function TokenConnectModal({
             </div>
           )}
 
-          {steps.length > 0 && <div className="border-t border-gray-100" />}
+          {steps.length > 0 && !isEdit && <div className="border-t border-gray-100" />}
 
           <div className="space-y-3">
             {fields.map((f) => (
@@ -118,7 +130,9 @@ export function TokenConnectModal({
               disabled={!canSubmit || connect.isPending}
               className={`px-4 py-2 text-sm rounded-xl text-white font-medium disabled:opacity-50 transition-colors ${accentBtn}`}
             >
-              {connect.isPending ? "Connecting…" : `Connect ${label}`}
+              {connect.isPending
+                ? (isEdit ? "Saving…" : "Connecting…")
+                : (isEdit ? "Save Changes" : `Connect ${label}`)}
             </button>
           </div>
         </div>
@@ -129,7 +143,10 @@ export function TokenConnectModal({
 
 // ── Pre-configured modals for each manual-token platform ──────────────────────
 
-export function DiscordConnectModal({ onClose }: { onClose: () => void }) {
+type ExistingAccount = { id?: string; accountHandle?: string; platformConfig?: Record<string, unknown> };
+
+export function DiscordConnectModal({ onClose, existing }: { onClose: () => void; existing?: ExistingAccount }) {
+  const initialValues = existing ? { channelId: (existing.platformConfig?.channelId as string) ?? "" } : undefined;
   return (
     <TokenConnectModal
       platform="discord"
@@ -138,6 +155,9 @@ export function DiscordConnectModal({ onClose }: { onClose: () => void }) {
       accentRing="focus:ring-indigo-400"
       accentBtn="bg-indigo-600 hover:bg-indigo-700"
       endpoint="/accounts/discord"
+      isEdit={!!existing}
+      existingId={existing?.id}
+      initialValues={initialValues}
       fields={[
         { key: "botToken", label: "Bot Token", placeholder: "MTIz...", type: "password",
           hint: "From the Discord Developer Portal → Your App → Bot → Token" },
@@ -154,7 +174,8 @@ export function DiscordConnectModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function SlackConnectModal({ onClose }: { onClose: () => void }) {
+export function SlackConnectModal({ onClose, existing }: { onClose: () => void; existing?: ExistingAccount }) {
+  const initialValues = existing ? { channelId: (existing.platformConfig?.channelId as string) ?? "" } : undefined;
   return (
     <TokenConnectModal
       platform="slack"
@@ -163,6 +184,9 @@ export function SlackConnectModal({ onClose }: { onClose: () => void }) {
       accentRing="focus:ring-purple-400"
       accentBtn="bg-purple-600 hover:bg-purple-700"
       endpoint="/accounts/slack"
+      isEdit={!!existing}
+      existingId={existing?.id}
+      initialValues={initialValues}
       fields={[
         { key: "botToken", label: "Bot OAuth Token", placeholder: "xoxb-...", type: "password",
           hint: "From api.slack.com → Your App → OAuth & Permissions → Bot User OAuth Token" },
@@ -179,7 +203,8 @@ export function SlackConnectModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function WhatsAppConnectModal({ onClose }: { onClose: () => void }) {
+export function WhatsAppConnectModal({ onClose, existing }: { onClose: () => void; existing?: ExistingAccount }) {
+  const initialValues = existing ? { phoneNumberId: (existing.platformConfig?.phoneNumberId as string) ?? "" } : undefined;
   return (
     <TokenConnectModal
       platform="whatsapp"
@@ -188,13 +213,16 @@ export function WhatsAppConnectModal({ onClose }: { onClose: () => void }) {
       accentRing="focus:ring-green-400"
       accentBtn="bg-green-600 hover:bg-green-700"
       endpoint="/accounts/whatsapp"
+      isEdit={!!existing}
+      existingId={existing?.id}
+      initialValues={initialValues}
       fields={[
         { key: "accessToken", label: "System User Access Token", placeholder: "EAAx...", type: "password",
           hint: "From Meta Business Suite → WhatsApp → API Setup → Permanent token" },
         { key: "phoneNumberId", label: "Phone Number ID", placeholder: "1234567890",
           hint: "From Meta WhatsApp API Setup page — not the phone number itself, but the numeric ID" },
         { key: "displayName", label: "Display Name (optional)", placeholder: "My Brand WA",
-          hint: "A label to identify this account in the dashboard" },
+          hint: "A label to identify this account in the dashboard", optional: true },
       ]}
       steps={[
         { n: 1, text: <><a href="https://developers.facebook.com" target="_blank" rel="noreferrer" className="text-green-600 underline inline-flex items-center gap-0.5">Meta Developer Portal <ExternalLink className="w-3 h-3" /></a> → Create App → Business → Add WhatsApp product.</> },
@@ -206,7 +234,8 @@ export function WhatsAppConnectModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function BlueskyConnectModal({ onClose }: { onClose: () => void }) {
+export function BlueskyConnectModal({ onClose, existing }: { onClose: () => void; existing?: ExistingAccount }) {
+  const initialValues = existing ? { identifier: existing.accountHandle ?? "" } : undefined;
   return (
     <TokenConnectModal
       platform="bluesky"
@@ -215,6 +244,9 @@ export function BlueskyConnectModal({ onClose }: { onClose: () => void }) {
       accentRing="focus:ring-sky-400"
       accentBtn="bg-sky-600 hover:bg-sky-700"
       endpoint="/accounts/bluesky"
+      isEdit={!!existing}
+      existingId={existing?.id}
+      initialValues={initialValues}
       fields={[
         { key: "identifier", label: "Handle or Email", placeholder: "yourhandle.bsky.social",
           hint: "Your Bluesky handle (e.g. @you.bsky.social) or the email used to sign up" },
@@ -230,7 +262,8 @@ export function BlueskyConnectModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function MastodonConnectModal({ onClose }: { onClose: () => void }) {
+export function MastodonConnectModal({ onClose, existing }: { onClose: () => void; existing?: ExistingAccount }) {
+  const initialValues = existing ? { instanceUrl: (existing.platformConfig?.instance as string) ?? "" } : undefined;
   return (
     <TokenConnectModal
       platform="mastodon"
@@ -239,6 +272,9 @@ export function MastodonConnectModal({ onClose }: { onClose: () => void }) {
       accentRing="focus:ring-violet-400"
       accentBtn="bg-violet-600 hover:bg-violet-700"
       endpoint="/accounts/mastodon"
+      isEdit={!!existing}
+      existingId={existing?.id}
+      initialValues={initialValues}
       fields={[
         { key: "instanceUrl", label: "Instance URL", placeholder: "mastodon.social",
           hint: "Just the domain — no https:// needed" },
@@ -254,7 +290,11 @@ export function MastodonConnectModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function PinterestConnectModal({ onClose }: { onClose: () => void }) {
+export function PinterestConnectModal({ onClose, existing }: { onClose: () => void; existing?: ExistingAccount }) {
+  const initialValues = existing ? {
+    boardId: (existing.platformConfig?.boardId as string) ?? "",
+    boardName: (existing.platformConfig?.boardName as string) ?? "",
+  } : undefined;
   return (
     <TokenConnectModal
       platform="pinterest"
@@ -263,13 +303,16 @@ export function PinterestConnectModal({ onClose }: { onClose: () => void }) {
       accentRing="focus:ring-red-400"
       accentBtn="bg-red-600 hover:bg-red-700"
       endpoint="/accounts/pinterest"
+      isEdit={!!existing}
+      existingId={existing?.id}
+      initialValues={initialValues}
       fields={[
         { key: "accessToken", label: "Access Token", placeholder: "your-token", type: "password",
           hint: "From Pinterest Developer Portal → Your App → Generate Access Token. Needs boards:read and pins:write scopes." },
         { key: "boardId", label: "Board ID", placeholder: "username/board-name",
           hint: "From the board URL: pinterest.com/username/board-name — use the username/board-name slug" },
         { key: "boardName", label: "Board Display Name (optional)", placeholder: "My Brand Board",
-          hint: "A friendly label for this board shown in the dashboard" },
+          hint: "A friendly label for this board shown in the dashboard", optional: true },
       ]}
       steps={[
         { n: 1, text: <><a href="https://developers.pinterest.com/apps/" target="_blank" rel="noreferrer" className="text-red-600 underline inline-flex items-center gap-0.5">Pinterest Developer Portal <ExternalLink className="w-3 h-3" /></a> → Create App → request scopes <code className="bg-gray-100 px-1 rounded text-xs">boards:read</code> and <code className="bg-gray-100 px-1 rounded text-xs">pins:write</code>.</> },

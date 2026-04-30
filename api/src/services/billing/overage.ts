@@ -27,9 +27,9 @@ export async function calculateAndInvoiceOverage(usageRecordId: string): Promise
   const brandsOverage = Math.max(0, (record.brandsActive ?? 0) - (record.brandsIncluded ?? 0));
 
   const totalCents =
-    postsOverage * tier.overagePricePerPost +
-    accountsOverage * tier.overagePricePerAccount +
-    brandsOverage * tier.overagePricePerBrand;
+    postsOverage * (tier.overagePricePerPost ?? 0) +
+    accountsOverage * (tier.overagePricePerAccount ?? 0) +
+    brandsOverage * (tier.overagePricePerBrand ?? 0);
 
   if (totalCents <= 0) {
     await db

@@ -7,8 +7,8 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "paths": {
-      "@anthyx/types": ["../packages/types/src"],
-      "@anthyx/config": ["../packages/config/src"]
+      "@anthyx/types": ["../packages/types/dist"],
+      "@anthyx/config": ["../packages/config/dist"]
     }
   },
   "include": ["src"],

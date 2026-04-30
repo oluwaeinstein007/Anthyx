@@ -109,7 +109,7 @@ router.get("/:id/analytics", auth, async (req, res) => {
     ),
   });
 
-  const campaignPosts = posts.filter((p) => planIds.includes(p.planId));
+  const campaignPosts = posts.filter((p) => p.planId !== null && planIds.includes(p.planId));
   const publishedPostIds = campaignPosts.filter((p) => p.status === "published").map((p) => p.id);
 
   const analytics = publishedPostIds.length > 0
@@ -140,15 +140,16 @@ router.get("/:id/analytics", auth, async (req, res) => {
     const a = analyticsMap.get(post.id);
     const plat = post.platform;
     if (!byPlatform[plat]) byPlatform[plat] = { published: 0, likes: 0, impressions: 0, engagementRate: 0 };
-    byPlatform[plat].published++;
-    byPlatform[plat].likes += a?.likes ?? 0;
-    byPlatform[plat].impressions += a?.impressions ?? 0;
-    byPlatform[plat].engagementRate += parseFloat(a?.engagementRate ?? "0");
+    const entry = byPlatform[plat]!;
+    entry.published++;
+    entry.likes += a?.likes ?? 0;
+    entry.impressions += a?.impressions ?? 0;
+    entry.engagementRate += parseFloat(a?.engagementRate ?? "0");
   }
   // Average the engagement rate per platform
   for (const plat of Object.keys(byPlatform)) {
-    const count = byPlatform[plat].published;
-    if (count > 0) byPlatform[plat].engagementRate /= count;
+    const entry = byPlatform[plat]!;
+    if (entry.published > 0) entry.engagementRate /= entry.published;
   }
 
   return res.json({ campaign, plans, totals, byPlatform });

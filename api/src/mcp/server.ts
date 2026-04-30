@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import type { z } from "zod";
 import { retrieveBrandContextTool } from "./tools/retrieve-brand-context";
 import { retrieveBrandVoiceTool } from "./tools/retrieve-brand-voice";
 import { webSearchTrendsTool } from "./tools/web-search-trends";
@@ -15,53 +16,51 @@ const mcpServer = new McpServer({
   version: "1.0.0",
 });
 
+// The MCP SDK's registerTool<OutputArgs, InputArgs> hits TypeScript's type
+// instantiation depth limit (TS2589) when called with generic ZodObject types.
+// We break the inference chain with a loose alias that's still structurally safe.
+type LooseRegisterTool = (
+  name: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  config: { description?: string; inputSchema?: any },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  cb: (args: any) => Promise<{ content: { type: string; text: string }[] }>,
+) => void;
+
+function registerMcpTool(
+  server: McpServer,
+  tool: {
+    name: string;
+    description: string;
+    inputSchema: z.ZodTypeAny;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    handler: (args: any) => Promise<unknown>;
+  },
+) {
+  (server.registerTool as unknown as LooseRegisterTool)(
+    tool.name,
+    { description: tool.description, inputSchema: tool.inputSchema },
+    async (args) => ({
+      content: [{ type: "text", text: JSON.stringify(await tool.handler(args)) }],
+    }),
+  );
+}
+
 // Strategist tools
-mcpServer.tool(
-  retrieveBrandContextTool.name,
-  retrieveBrandContextTool.inputSchema.shape as Record<string, unknown>,
-  retrieveBrandContextTool.handler,
-);
-mcpServer.tool(
-  webSearchTrendsTool.name,
-  webSearchTrendsTool.inputSchema.shape as Record<string, unknown>,
-  webSearchTrendsTool.handler,
-);
-mcpServer.tool(
-  readEngagementAnalyticsTool.name,
-  readEngagementAnalyticsTool.inputSchema.shape as Record<string, unknown>,
-  readEngagementAnalyticsTool.handler,
-);
+registerMcpTool(mcpServer, retrieveBrandContextTool);
+registerMcpTool(mcpServer, webSearchTrendsTool);
+registerMcpTool(mcpServer, readEngagementAnalyticsTool);
 
 // Copywriter tools
-mcpServer.tool(
-  retrieveBrandVoiceTool.name,
-  retrieveBrandVoiceTool.inputSchema.shape as Record<string, unknown>,
-  retrieveBrandVoiceTool.handler,
-);
-mcpServer.tool(
-  generateImageAssetTool.name,
-  generateImageAssetTool.inputSchema.shape as Record<string, unknown>,
-  generateImageAssetTool.handler,
-);
+registerMcpTool(mcpServer, retrieveBrandVoiceTool);
+registerMcpTool(mcpServer, generateImageAssetTool);
 
 // Reviewer tools
-mcpServer.tool(
-  retrieveDietInstructionsTool.name,
-  retrieveDietInstructionsTool.inputSchema.shape as Record<string, unknown>,
-  retrieveDietInstructionsTool.handler,
-);
-mcpServer.tool(
-  retrieveBrandRulesTool.name,
-  retrieveBrandRulesTool.inputSchema.shape as Record<string, unknown>,
-  retrieveBrandRulesTool.handler,
-);
+registerMcpTool(mcpServer, retrieveDietInstructionsTool);
+registerMcpTool(mcpServer, retrieveBrandRulesTool);
 
 // Shared
-mcpServer.tool(
-  schedulePostTool.name,
-  schedulePostTool.inputSchema.shape as Record<string, unknown>,
-  schedulePostTool.handler,
-);
+registerMcpTool(mcpServer, schedulePostTool);
 
 // One transport per SSE connection, keyed by sessionId
 const activeTransports = new Map<string, SSEServerTransport>();

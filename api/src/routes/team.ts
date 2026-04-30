@@ -50,10 +50,11 @@ router.post("/invite", auth, async (req, res) => {
   const tier = sub ? await db.query.planTiers.findFirst({ where: eq(planTiers.tier, sub.tier) }) : null;
 
   if (tier?.maxTeamMembers && tier.maxTeamMembers > 0) {
-    const [{ value: currentSeats }] = await db
+    const seatResult = await db
       .select({ value: count() })
       .from(workflowParticipants)
       .where(eq(workflowParticipants.organizationId, req.user.orgId));
+    const currentSeats = seatResult[0]?.value ?? 0;
 
     if (currentSeats >= tier.maxTeamMembers) {
       return res.status(402).json({

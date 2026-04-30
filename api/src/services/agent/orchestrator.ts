@@ -171,7 +171,7 @@ export async function generateAndReviewPost(
       return {
         content: currentContent,
         hashtags: currentHashtags,
-        segments: draft.segments ?? undefined,
+        segments: undefined,
         mediaPrompt: draft.suggestedMediaPrompt,
       };
     }
@@ -247,6 +247,8 @@ export async function generateContentForPlan(planId: string, organizationId: str
     draftPosts.map((post) =>
       limit(async () => {
         try {
+          if (!post.agentId || !post.brandProfileId) return;
+
           const agent = await db.query.agents.findFirst({
             where: eq(agents.id, post.agentId),
           });

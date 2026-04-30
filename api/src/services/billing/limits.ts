@@ -39,11 +39,8 @@ export class PlanLimitsEnforcer {
     switch (resource) {
       case "brand": {
         if (tier.maxBrands === -1) return; // unlimited
-        const [{ value: brandCount }] = await db
-          .select({ value: count() })
-          .from(brandProfiles)
-          .where(eq(brandProfiles.organizationId, organizationId));
-        if ((brandCount ?? 0) >= tier.maxBrands) {
+        const brandResult = await db.select({ value: count() }).from(brandProfiles).where(eq(brandProfiles.organizationId, organizationId));
+        if ((brandResult[0]?.value ?? 0) >= tier.maxBrands) {
           throw new PlanLimitError(
             "brands",
             `Your ${sub.tier} plan allows ${tier.maxBrands} brand(s). Upgrade to add more.`,
@@ -53,11 +50,8 @@ export class PlanLimitsEnforcer {
       }
       case "agent": {
         if (tier.maxAgents === -1) return;
-        const [{ value: agentCount }] = await db
-          .select({ value: count() })
-          .from(agents)
-          .where(eq(agents.organizationId, organizationId));
-        if ((agentCount ?? 0) >= tier.maxAgents) {
+        const agentResult = await db.select({ value: count() }).from(agents).where(eq(agents.organizationId, organizationId));
+        if ((agentResult[0]?.value ?? 0) >= tier.maxAgents) {
           throw new PlanLimitError(
             "agents",
             `Your ${sub.tier} plan allows ${tier.maxAgents} agent(s). Upgrade to add more.`,
@@ -67,16 +61,8 @@ export class PlanLimitsEnforcer {
       }
       case "account": {
         if (tier.maxSocialAccounts === -1) return;
-        const [{ value: accountCount }] = await db
-          .select({ value: count() })
-          .from(socialAccounts)
-          .where(
-            and(
-              eq(socialAccounts.organizationId, organizationId),
-              eq(socialAccounts.isActive, true),
-            ),
-          );
-        if ((accountCount ?? 0) >= tier.maxSocialAccounts) {
+        const accountResult = await db.select({ value: count() }).from(socialAccounts).where(and(eq(socialAccounts.organizationId, organizationId), eq(socialAccounts.isActive, true)));
+        if ((accountResult[0]?.value ?? 0) >= tier.maxSocialAccounts) {
           throw new PlanLimitError(
             "accounts",
             `Your ${sub.tier} plan allows ${tier.maxSocialAccounts} social account(s). Upgrade to connect more.`,
@@ -92,7 +78,7 @@ export class PlanLimitsEnforcer {
         if (tier.maxPostsPerMonth === -1) return;
         // Check overage cap
         if (published >= included) {
-          const overageCost = ((published - included) + 1) * tier.overagePricePerPost;
+          const overageCost = ((published - included) + 1) * (tier.overagePricePerPost ?? 0);
           const sub2 = await db.query.subscriptions.findFirst({
             where: eq(subscriptions.organizationId, organizationId),
           });

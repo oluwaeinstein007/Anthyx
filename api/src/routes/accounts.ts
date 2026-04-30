@@ -3,7 +3,7 @@ import { eq, and, isNull, inArray } from "drizzle-orm";
 import { db } from "../db/client";
 import { socialAccounts, organizations, scheduledPosts, agents, brandProfiles, agentSocialAccounts } from "../db/schema";
 import { auth } from "../middleware/auth";
-import { encryptToken } from "../services/oauth-proxy/crypto";
+import { encryptToken, decryptToken } from "../services/oauth-proxy/crypto";
 import { PlanLimitsEnforcer } from "../services/billing/limits";
 import type { Platform } from "@anthyx/types";
 import { randomBytes, createHash } from "crypto";
@@ -343,41 +343,57 @@ router.post("/telegram", auth, async (req, res) => {
 
     const handle = chatInfo.title ?? chatInfo.username ?? `chat_${chatInfo.id}`;
     const resolvedChatId = String(chatInfo.id);
+    const platformConfig = {
+      chatId: resolvedChatId,
+      chatTitle: handle,
+      chatType: chatInfo.type,
+      botUsername: bot.username,
+    };
 
-    const [account] = await db
-      .insert(socialAccounts)
-      .values({
-        organizationId: req.user.orgId,
-        platform: "telegram",
-        accountHandle: handle,
-        accountId: resolvedChatId,
-        accessToken: encryptToken(token),
-        platformConfig: {
-          chatId: resolvedChatId,
-          chatTitle: handle,
-          chatType: chatInfo.type,
-          botUsername: bot.username,
-        },
-        isActive: true,
-      })
-      .onConflictDoUpdate({
-        target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [
-          typeof socialAccounts.organizationId,
-          typeof socialAccounts.platform,
-          typeof socialAccounts.accountHandle,
-        ],
-        set: {
+    // Identify by chatId (the canonical Telegram identifier) rather than title,
+    // so two channels with the same title don't collapse into one account.
+    const existingByChatId = await db.query.socialAccounts.findFirst({
+      where: and(
+        eq(socialAccounts.organizationId, req.user.orgId),
+        eq(socialAccounts.platform, "telegram"),
+        eq(socialAccounts.accountId, resolvedChatId),
+      ),
+    });
+
+    let account: typeof socialAccounts.$inferSelect;
+
+    if (existingByChatId) {
+      const [updated] = await db
+        .update(socialAccounts)
+        .set({ accessToken: encryptToken(token), platformConfig, updatedAt: new Date() })
+        .where(eq(socialAccounts.id, existingByChatId.id))
+        .returning();
+      account = updated!;
+    } else {
+      // If the display name collides with an existing account, append the chat ID.
+      const handleConflict = await db.query.socialAccounts.findFirst({
+        where: and(
+          eq(socialAccounts.organizationId, req.user.orgId),
+          eq(socialAccounts.platform, "telegram"),
+          eq(socialAccounts.accountHandle, handle),
+        ),
+      });
+      const finalHandle = handleConflict ? `${handle} (${resolvedChatId})` : handle;
+
+      const [inserted] = await db
+        .insert(socialAccounts)
+        .values({
+          organizationId: req.user.orgId,
+          platform: "telegram",
+          accountHandle: finalHandle,
+          accountId: resolvedChatId,
           accessToken: encryptToken(token),
-          platformConfig: {
-            chatId: resolvedChatId,
-            chatTitle: handle,
-            chatType: chatInfo.type,
-            botUsername: bot.username,
-          },
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
+          platformConfig,
+          isActive: true,
+        })
+        .returning();
+      account = inserted!;
+    }
 
     await backfillPlanPosts(req.user.orgId, account!.id, "telegram");
 
@@ -892,6 +908,309 @@ router.put("/email/:id", auth, async (req, res) => {
     console.error("[accounts] email update error:", err);
     return res.status(500).json({ error: "Failed to update email account" });
   }
+});
+
+// PUT /accounts/telegram/:id — update credentials / target chat for an existing Telegram account
+router.put("/telegram/:id", auth, async (req, res) => {
+  try {
+    const { botToken, chatId } = req.body as { botToken?: string; chatId?: string };
+    const chat = chatId?.trim();
+    if (!chat) return res.status(400).json({ error: "Chat ID is required" });
+
+    const existing = await db.query.socialAccounts.findFirst({
+      where: and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+    });
+    if (!existing) return res.status(404).json({ error: "Account not found" });
+
+    if (!botToken?.trim() && !existing.accessToken) return res.status(400).json({ error: "Bot token is required" });
+    const token = botToken?.trim() ?? decryptToken(existing.accessToken!);
+
+    const tgFetch = (url: string) => fetch(url, { signal: AbortSignal.timeout(10_000) });
+
+    let meRes: Response;
+    try {
+      meRes = await tgFetch(`https://api.telegram.org/bot${token}/getMe`);
+    } catch (e) {
+      const msg = e instanceof Error && e.name === "TimeoutError"
+        ? "Timed out reaching Telegram API — check your server's outbound network access."
+        : "Cannot reach Telegram API — check your network connection.";
+      return res.status(502).json({ error: msg });
+    }
+    const meData = (await meRes.json()) as { ok: boolean; result?: { id: number; username: string } };
+    if (!meData.ok) return res.status(400).json({ error: "Invalid bot token. Double-check what @BotFather gave you." });
+    const bot = meData.result!;
+
+    const chatRes = await tgFetch(`https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(chat)}`);
+    const chatData = (await chatRes.json()) as { ok: boolean; result?: { id: number; title?: string; username?: string; type: string } };
+    if (!chatData.ok) return res.status(400).json({ error: "Bot can't access that chat. Make sure it's been added as an admin." });
+    const chatInfo = chatData.result!;
+
+    if (chatInfo.type !== "private") {
+      const memberRes = await tgFetch(
+        `https://api.telegram.org/bot${token}/getChatMember?chat_id=${encodeURIComponent(chat)}&user_id=${bot.id}`,
+      );
+      const memberData = (await memberRes.json()) as { ok: boolean; result?: { status: string } };
+      const status = memberData.result?.status;
+      if (!memberData.ok || !["administrator", "creator"].includes(status ?? "")) {
+        return res.status(400).json({ error: "Bot must be an admin of the channel or group to post." });
+      }
+    }
+
+    const handle = chatInfo.title ?? chatInfo.username ?? `chat_${chatInfo.id}`;
+    const resolvedChatId = String(chatInfo.id);
+
+    // If the new chat title collides with a DIFFERENT account, append the chat ID.
+    const handleConflict = await db.query.socialAccounts.findFirst({
+      where: and(
+        eq(socialAccounts.organizationId, req.user.orgId),
+        eq(socialAccounts.platform, "telegram"),
+        eq(socialAccounts.accountHandle, handle),
+      ),
+    });
+    const finalHandle =
+      handleConflict && handleConflict.id !== req.params.id
+        ? `${handle} (${resolvedChatId})`
+        : handle;
+
+    const updateSet: Record<string, unknown> = {
+      accountHandle: finalHandle,
+      accountId: resolvedChatId,
+      platformConfig: { chatId: resolvedChatId, chatTitle: finalHandle, chatType: chatInfo.type, botUsername: bot.username },
+      updatedAt: new Date(),
+    };
+    if (botToken?.trim()) updateSet["accessToken"] = encryptToken(botToken.trim());
+
+    await db.update(socialAccounts).set(updateSet as any).where(
+      and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+    );
+    return res.json({ id: existing.id, platform: "telegram", accountHandle: finalHandle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] telegram update error:", err);
+    return res.status(500).json({ error: "Failed to update Telegram bot. Check your token and try again." });
+  }
+});
+
+// PUT /accounts/discord/:id — update an existing Discord account
+router.put("/discord/:id", auth, async (req, res) => {
+  const { botToken, channelId } = req.body as { botToken?: string; channelId?: string };
+  const channel = channelId?.trim();
+  if (!channel) return res.status(400).json({ error: "Channel ID is required" });
+
+  const existing = await db.query.socialAccounts.findFirst({
+    where: and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  });
+  if (!existing) return res.status(404).json({ error: "Account not found" });
+
+  if (!botToken?.trim() && !existing.accessToken) return res.status(400).json({ error: "Bot token is required" });
+  const token = botToken?.trim() ?? decryptToken(existing.accessToken!);
+
+  const meRes = await fetch("https://discord.com/api/v10/users/@me", {
+    headers: { Authorization: `Bot ${token}` },
+  });
+  if (!meRes.ok) return res.status(400).json({ error: "Invalid Discord bot token" });
+  const me = (await meRes.json()) as { id: string; username: string };
+
+  const chRes = await fetch(`https://discord.com/api/v10/channels/${channel}`, {
+    headers: { Authorization: `Bot ${token}` },
+  });
+  if (!chRes.ok) return res.status(400).json({ error: "Bot cannot access that channel — make sure it has been added to the server with Send Messages permission" });
+  const ch = (await chRes.json()) as { id: string; name?: string };
+
+  const handle = ch.name ?? `channel_${ch.id}`;
+  const updateSet: Record<string, unknown> = {
+    accountHandle: handle,
+    accountId: ch.id,
+    platformConfig: { channelId: ch.id, channelName: ch.name, botUsername: me.username },
+    updatedAt: new Date(),
+  };
+  if (botToken?.trim()) updateSet["accessToken"] = encryptToken(botToken.trim());
+
+  await db.update(socialAccounts).set(updateSet as any).where(
+    and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  );
+  return res.json({ id: existing.id, platform: "discord", accountHandle: handle, isActive: true });
+});
+
+// PUT /accounts/slack/:id — update an existing Slack account
+router.put("/slack/:id", auth, async (req, res) => {
+  const { botToken, channelId } = req.body as { botToken?: string; channelId?: string };
+  const channel = channelId?.trim();
+  if (!channel) return res.status(400).json({ error: "Channel ID is required" });
+
+  const existing = await db.query.socialAccounts.findFirst({
+    where: and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  });
+  if (!existing) return res.status(404).json({ error: "Account not found" });
+
+  if (!botToken?.trim() && !existing.accessToken) return res.status(400).json({ error: "Bot token is required" });
+  const token = botToken?.trim() ?? decryptToken(existing.accessToken!);
+
+  const authRes = await fetch("https://slack.com/api/auth.test", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const authData = (await authRes.json()) as { ok: boolean; user?: string; team?: string; error?: string };
+  if (!authData.ok) return res.status(400).json({ error: `Invalid Slack token: ${authData.error}` });
+
+  const handle = `${authData.team ?? "workspace"}#${channel}`;
+  const updateSet: Record<string, unknown> = {
+    accountHandle: handle,
+    accountId: channel,
+    platformConfig: { channelId: channel, workspace: authData.team, botUser: authData.user },
+    updatedAt: new Date(),
+  };
+  if (botToken?.trim()) updateSet["accessToken"] = encryptToken(botToken.trim());
+
+  await db.update(socialAccounts).set(updateSet as any).where(
+    and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  );
+  return res.json({ id: existing.id, platform: "slack", accountHandle: handle, isActive: true });
+});
+
+// PUT /accounts/whatsapp/:id — update an existing WhatsApp account
+router.put("/whatsapp/:id", auth, async (req, res) => {
+  const { accessToken, phoneNumberId, displayName } = req.body as { accessToken?: string; phoneNumberId?: string; displayName?: string };
+  const phoneId = phoneNumberId?.trim();
+  if (!phoneId) return res.status(400).json({ error: "Phone number ID is required" });
+
+  const existing = await db.query.socialAccounts.findFirst({
+    where: and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  });
+  if (!existing) return res.status(404).json({ error: "Account not found" });
+
+  if (!accessToken?.trim() && !existing.accessToken) return res.status(400).json({ error: "Access token is required" });
+  const token = accessToken?.trim() ?? decryptToken(existing.accessToken!);
+
+  const validRes = await fetch(
+    `https://graph.facebook.com/v19.0/${phoneId}?fields=display_phone_number,verified_name&access_token=${token}`,
+  );
+  if (!validRes.ok) return res.status(400).json({ error: "Invalid access token or phone number ID" });
+  const info = (await validRes.json()) as { display_phone_number?: string; verified_name?: string; error?: { message: string } };
+  if (info.error) return res.status(400).json({ error: info.error.message });
+
+  const handle = displayName?.trim() || info.verified_name || info.display_phone_number || phoneId;
+  const updateSet: Record<string, unknown> = {
+    accountHandle: handle,
+    accountId: phoneId,
+    platformConfig: { phoneNumberId: phoneId, displayPhoneNumber: info.display_phone_number },
+    updatedAt: new Date(),
+  };
+  if (accessToken?.trim()) updateSet["accessToken"] = encryptToken(accessToken.trim());
+
+  await db.update(socialAccounts).set(updateSet as any).where(
+    and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  );
+  return res.json({ id: existing.id, platform: "whatsapp", accountHandle: handle, isActive: true });
+});
+
+// PUT /accounts/bluesky/:id — update an existing Bluesky account (always requires new credentials to create a fresh session)
+router.put("/bluesky/:id", auth, async (req, res) => {
+  const { identifier, appPassword } = req.body as { identifier?: string; appPassword?: string };
+  if (!identifier?.trim() || !appPassword?.trim()) {
+    return res.status(400).json({ error: "Identifier and app password are required" });
+  }
+
+  const existing = await db.query.socialAccounts.findFirst({
+    where: and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  });
+  if (!existing) return res.status(404).json({ error: "Account not found" });
+
+  const sessionRes = await fetch("https://bsky.social/xrpc/com.atproto.server.createSession", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier: identifier.trim(), password: appPassword.trim() }),
+  });
+  if (!sessionRes.ok) return res.status(400).json({ error: "Invalid Bluesky identifier or app password" });
+  const session = (await sessionRes.json()) as { did: string; handle: string; accessJwt: string; refreshJwt: string };
+
+  await db.update(socialAccounts).set({
+    accountHandle: session.handle,
+    accountId: session.did,
+    accessToken: encryptToken(session.accessJwt),
+    refreshToken: session.refreshJwt ? encryptToken(session.refreshJwt) : null,
+    platformConfig: { did: session.did, handle: session.handle },
+    updatedAt: new Date(),
+  }).where(
+    and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  );
+  return res.json({ id: existing.id, platform: "bluesky", accountHandle: session.handle, isActive: true });
+});
+
+// PUT /accounts/mastodon/:id — update an existing Mastodon account
+router.put("/mastodon/:id", auth, async (req, res) => {
+  const { instanceUrl, accessToken } = req.body as { instanceUrl?: string; accessToken?: string };
+  const rawInstance = instanceUrl?.trim();
+  if (!rawInstance) return res.status(400).json({ error: "Instance URL is required" });
+
+  const existing = await db.query.socialAccounts.findFirst({
+    where: and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  });
+  if (!existing) return res.status(404).json({ error: "Account not found" });
+
+  const instance = rawInstance.replace(/\/$/, "").replace(/^https?:\/\//, "");
+  if (!accessToken?.trim() && !existing.accessToken) return res.status(400).json({ error: "Access token is required" });
+  const token = accessToken?.trim() ?? decryptToken(existing.accessToken!);
+
+  const verifyRes = await fetch(`https://${instance}/api/v1/accounts/verify_credentials`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!verifyRes.ok) return res.status(400).json({ error: "Invalid Mastodon token or instance URL" });
+  const acct = (await verifyRes.json()) as { id: string; username: string; acct: string };
+
+  const handle = `@${acct.acct}`;
+  const updateSet: Record<string, unknown> = {
+    accountHandle: handle,
+    accountId: acct.id,
+    platformConfig: { instance, accountId: acct.id, username: acct.username },
+    updatedAt: new Date(),
+  };
+  if (accessToken?.trim()) updateSet["accessToken"] = encryptToken(accessToken.trim());
+
+  await db.update(socialAccounts).set(updateSet as any).where(
+    and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  );
+  return res.json({ id: existing.id, platform: "mastodon", accountHandle: handle, isActive: true });
+});
+
+// PUT /accounts/pinterest/:id — update an existing Pinterest account
+router.put("/pinterest/:id", auth, async (req, res) => {
+  const { accessToken, boardId, boardName } = req.body as { accessToken?: string; boardId?: string; boardName?: string };
+  const board = boardId?.trim();
+  if (!board) return res.status(400).json({ error: "Board ID is required" });
+
+  const existing = await db.query.socialAccounts.findFirst({
+    where: and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  });
+  if (!existing) return res.status(404).json({ error: "Account not found" });
+
+  if (!accessToken?.trim() && !existing.accessToken) return res.status(400).json({ error: "Access token is required" });
+  const token = accessToken?.trim() ?? decryptToken(existing.accessToken!);
+
+  const verifyRes = await fetch("https://api.pinterest.com/v5/user_account", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!verifyRes.ok) return res.status(400).json({ error: "Invalid Pinterest access token" });
+  const user = (await verifyRes.json()) as { username?: string };
+
+  const boardRes = await fetch(`https://api.pinterest.com/v5/boards/${encodeURIComponent(board)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!boardRes.ok) return res.status(400).json({ error: "Board not found — check the board ID and ensure the token has boards:read scope" });
+  const boardData = (await boardRes.json()) as { id: string; name?: string };
+
+  const handle = user.username ?? "pinterest_user";
+  const resolvedBoardName = boardName?.trim() || boardData.name || board;
+  const updateSet: Record<string, unknown> = {
+    accountHandle: handle,
+    accountId: user.username,
+    platformConfig: { boardId: boardData.id, boardName: resolvedBoardName, username: user.username },
+    updatedAt: new Date(),
+  };
+  if (accessToken?.trim()) updateSet["accessToken"] = encryptToken(accessToken.trim());
+
+  await db.update(socialAccounts).set(updateSet as any).where(
+    and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  );
+  return res.json({ id: existing.id, platform: "pinterest", accountHandle: handle, isActive: true });
 });
 
 // GET /accounts

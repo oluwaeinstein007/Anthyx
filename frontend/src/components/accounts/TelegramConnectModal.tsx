@@ -7,6 +7,7 @@ import { X, ExternalLink } from "lucide-react";
 
 interface Props {
   onClose: () => void;
+  existing?: { id?: string; platformConfig?: Record<string, unknown> };
 }
 
 const STEPS = [
@@ -59,14 +60,19 @@ const STEPS = [
   },
 ];
 
-export function TelegramConnectModal({ onClose }: Props) {
+export function TelegramConnectModal({ onClose, existing }: Props) {
   const qc = useQueryClient();
+  const isEdit = !!existing;
   const [botToken, setBotToken] = useState("");
-  const [chatId, setChatId] = useState("");
+  const [chatId, setChatId] = useState(
+    (existing?.platformConfig?.chatId as string) ?? "",
+  );
 
   const connect = useMutation({
     mutationFn: () =>
-      api.post("/accounts/telegram", { botToken: botToken.trim(), chatId: chatId.trim() }),
+      isEdit && existing?.id
+        ? api.put(`/accounts/telegram/${existing.id}`, { botToken: botToken.trim() || undefined, chatId: chatId.trim() })
+        : api.post("/accounts/telegram", { botToken: botToken.trim(), chatId: chatId.trim() }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["accounts"] });
       onClose();
@@ -83,8 +89,12 @@ export function TelegramConnectModal({ onClose }: Props) {
               <div className="w-2.5 h-2.5 rounded-full bg-sky-500" />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-gray-900">Connect Telegram</h2>
-              <p className="text-xs text-gray-500">Post to a channel or group via a bot</p>
+              <h2 className="text-sm font-semibold text-gray-900">
+                {isEdit ? "Edit Telegram" : "Connect Telegram"}
+              </h2>
+              <p className="text-xs text-gray-500">
+                {isEdit ? "Update credentials or target chat" : "Post to a channel or group via a bot"}
+              </p>
             </div>
           </div>
           <button
@@ -96,8 +106,8 @@ export function TelegramConnectModal({ onClose }: Props) {
         </div>
 
         <div className="px-6 py-5 space-y-5">
-          {/* Steps */}
-          <div className="space-y-3">
+          {/* Steps — only shown for new connections */}
+          {!isEdit && <div className="space-y-3">
             {STEPS.map(({ n, text }) => (
               <div key={n} className="flex gap-3">
                 <span className="shrink-0 w-5 h-5 rounded-full bg-sky-100 text-sky-700 text-xs font-bold flex items-center justify-center mt-0.5">
@@ -106,9 +116,9 @@ export function TelegramConnectModal({ onClose }: Props) {
                 <p className="text-sm text-gray-600 leading-relaxed">{text}</p>
               </div>
             ))}
-          </div>
+          </div>}
 
-          <div className="border-t border-gray-100" />
+          {!isEdit && <div className="border-t border-gray-100" />}
 
           {/* Form */}
           <div className="space-y-3">
@@ -153,10 +163,12 @@ export function TelegramConnectModal({ onClose }: Props) {
             </button>
             <button
               onClick={() => connect.mutate()}
-              disabled={!botToken.trim() || !chatId.trim() || connect.isPending}
+              disabled={(!isEdit && !botToken.trim()) || !chatId.trim() || connect.isPending}
               className="px-4 py-2 text-sm rounded-xl bg-sky-500 text-white font-medium hover:bg-sky-600 disabled:opacity-50 transition-colors"
             >
-              {connect.isPending ? "Connecting…" : "Connect bot"}
+              {connect.isPending
+                ? (isEdit ? "Saving…" : "Connecting…")
+                : (isEdit ? "Save Changes" : "Connect bot")}
             </button>
           </div>
         </div>
