@@ -277,6 +277,7 @@ router.post("/:brandId/competitive-intelligence/refresh", auth, async (req, res)
       shareOfVoice: result.shareOfVoice,
       sentimentAnalysis: result.sentimentAnalysis,
       benchmarkScorecard: result.benchmarkScorecard,
+      dataBasis: result.dataBasis,
     })
     .returning();
 

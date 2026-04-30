@@ -21,11 +21,9 @@ import { EmailConnectModal } from "@/components/accounts/EmailConnectModal";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-interface BrandInfo {
-  agentId: string;
-  agentName: string;
-  brandId: string;
-  brandName: string;
+interface AssignedAgent {
+  id: string;
+  name: string;
 }
 
 interface SocialAccount {
@@ -35,8 +33,9 @@ interface SocialAccount {
   isActive: boolean;
   tokenExpiresAt: string | null;
   createdAt: string;
-  agentId: string | null;
-  brandInfo: BrandInfo | null;
+  brandProfileId: string | null;
+  brandName: string | null;
+  agents: AssignedAgent[];
   platformConfig?: Record<string, unknown>;
 }
 
@@ -88,27 +87,30 @@ const PLATFORM_ORDER = [
 
 type ModalPlatform = "telegram" | "discord" | "slack" | "whatsapp" | "bluesky" | "mastodon" | "pinterest" | "email" | null;
 
-// ── Brand assign dropdown (two-step for multi-agent brands) ────────────────────
+// ── Assign dropdown — brand then multi-select agents ──────────────────────────
 
 function AssignDropdown({
   accountId,
-  current,
+  account,
   brands,
   agents,
   onClose,
 }: {
   accountId: string;
-  current: BrandInfo | null;
+  account: SocialAccount;
   brands: Brand[];
   agents: Agent[];
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const [step, setStep] = useState<"brand" | "agent">("brand");
+  const [step, setStep] = useState<"brand" | "agents">("brand");
   const [pendingBrand, setPendingBrand] = useState<Brand | null>(null);
+  const [selectedAgentIds, setSelectedAgentIds] = useState<Set<string>>(
+    new Set(account.agents.map((a) => a.id)),
+  );
 
   const assign = useMutation({
-    mutationFn: (body: { brandId?: string | null; agentId?: string | null }) =>
+    mutationFn: (body: { brandId: string | null; agentIds: string[] }) =>
       api.put(`/accounts/${accountId}/assign`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["accounts"] });
@@ -118,18 +120,32 @@ function AssignDropdown({
 
   function handleBrandClick(brand: Brand) {
     const brandAgents = agents.filter((a) => a.brandProfileId === brand.id && a.isActive);
-    if (brandAgents.length <= 1) {
-      // 0 agents → API will surface 422; 1 agent → auto-assign
-      assign.mutate({ brandId: brand.id });
+    if (brandAgents.length === 0) {
+      assign.mutate({ brandId: brand.id, agentIds: [] });
+    } else if (brandAgents.length === 1) {
+      assign.mutate({ brandId: brand.id, agentIds: [brandAgents[0]!.id] });
     } else {
+      // Carry over any already-selected agents from this brand
+      const carried = new Set(
+        account.brandProfileId === brand.id ? account.agents.map((a) => a.id) : [],
+      );
+      setSelectedAgentIds(carried);
       setPendingBrand(brand);
-      setStep("agent");
+      setStep("agents");
     }
   }
 
-  const PANEL = "w-56 bg-white border border-gray-200 rounded-xl shadow-xl py-1";
+  function toggleAgent(agentId: string) {
+    setSelectedAgentIds((prev) => {
+      const next = new Set(prev);
+      next.has(agentId) ? next.delete(agentId) : next.add(agentId);
+      return next;
+    });
+  }
 
-  if (step === "agent" && pendingBrand) {
+  const PANEL = "w-60 bg-white border border-gray-200 rounded-xl shadow-xl py-1";
+
+  if (step === "agents" && pendingBrand) {
     const brandAgents = agents.filter((a) => a.brandProfileId === pendingBrand.id && a.isActive);
     return (
       <div className={PANEL}>
@@ -140,30 +156,44 @@ function AssignDropdown({
           >
             <ChevronLeft className="w-3.5 h-3.5" />
           </button>
-          <p className="text-xs font-medium text-gray-700 truncate">{pendingBrand.name}</p>
-          <p className="text-xs text-gray-400 ml-auto shrink-0">pick agent</p>
+          <p className="text-xs font-medium text-gray-700 truncate flex-1">{pendingBrand.name}</p>
+          <p className="text-xs text-gray-400 shrink-0">select agents</p>
         </div>
-        {brandAgents.map((agent) => (
+
+        {brandAgents.map((agent) => {
+          const checked = selectedAgentIds.has(agent.id);
+          return (
+            <button
+              key={agent.id}
+              onClick={() => toggleAgent(agent.id)}
+              className="w-full text-left px-3 py-2 text-sm transition-colors flex items-center gap-2 text-gray-700 hover:bg-gray-50"
+            >
+              <div className={`w-3.5 h-3.5 shrink-0 rounded border flex items-center justify-center transition-colors ${
+                checked ? "bg-purple-600 border-purple-600" : "border-gray-300"
+              }`}>
+                {checked && <CheckCircle2 className="w-2.5 h-2.5 text-white" />}
+              </div>
+              <Bot className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+              <span className="truncate">{agent.name}</span>
+            </button>
+          );
+        })}
+
+        <div className="px-3 pt-2 pb-1 border-t border-gray-100">
           <button
-            key={agent.id}
-            onClick={() => assign.mutate({ agentId: agent.id })}
-            disabled={assign.isPending || current?.agentId === agent.id}
-            className={`w-full text-left px-3 py-2 text-sm transition-colors flex items-center gap-2 ${
-              current?.agentId === agent.id
-                ? "bg-green-50 text-green-700 font-medium cursor-default"
-                : "text-gray-700 hover:bg-gray-50"
-            }`}
+            onClick={() => assign.mutate({ brandId: pendingBrand.id, agentIds: [...selectedAgentIds] })}
+            disabled={assign.isPending}
+            className="w-full text-center text-xs font-medium px-3 py-1.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            <Bot className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-            {current?.agentId === agent.id && <CheckCircle2 className="w-3 h-3 text-green-500 shrink-0" />}
-            <span className="truncate">{agent.name}</span>
+            {assign.isPending
+              ? <Loader2 className="w-3 h-3 animate-spin mx-auto" />
+              : selectedAgentIds.size === 0
+                ? "Save (no agents)"
+                : `Save (${selectedAgentIds.size} agent${selectedAgentIds.size !== 1 ? "s" : ""})`
+            }
           </button>
-        ))}
-        {assign.isPending && (
-          <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-400">
-            <Loader2 className="w-3 h-3 animate-spin" /> Saving…
-          </div>
-        )}
+        </div>
+
         {assign.isError && (
           <p className="px-3 py-1.5 text-xs text-red-500 border-t border-gray-100">
             {assign.error instanceof Error ? assign.error.message : "Failed"}
@@ -180,8 +210,8 @@ function AssignDropdown({
         <p className="px-3 py-2 text-xs text-gray-400">No brands yet</p>
       ) : (
         brands.map((b) => {
-          const agentCount = agents.filter((a) => a.brandProfileId === b.id && a.isActive).length;
-          const isCurrent = current?.brandId === b.id;
+          const brandAgents = agents.filter((a) => a.brandProfileId === b.id && a.isActive);
+          const isCurrent = account.brandProfileId === b.id;
           return (
             <button
               key={b.id}
@@ -197,21 +227,21 @@ function AssignDropdown({
                 ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
                 : <div className="w-3.5 h-3.5 shrink-0" />}
               <span className="truncate flex-1">{b.name}</span>
-              {agentCount === 0 ? (
+              {brandAgents.length === 0 ? (
                 <span className="text-xs text-amber-500 shrink-0">no agent</span>
-              ) : agentCount > 1 ? (
-                <span className="text-xs text-gray-400 shrink-0">{agentCount} agents</span>
+              ) : brandAgents.length > 1 ? (
+                <span className="text-xs text-gray-400 shrink-0">{brandAgents.length} agents</span>
               ) : null}
-              {agentCount > 1 && <ChevronLeft className="w-3 h-3 text-gray-400 shrink-0 rotate-180" />}
+              {brandAgents.length > 1 && <ChevronLeft className="w-3 h-3 text-gray-400 shrink-0 rotate-180" />}
             </button>
           );
         })
       )}
-      {current && (
+      {account.brandProfileId && (
         <>
           <div className="my-1 border-t border-gray-100" />
           <button
-            onClick={() => assign.mutate({ brandId: null })}
+            onClick={() => assign.mutate({ brandId: null, agentIds: [] })}
             disabled={assign.isPending}
             className="w-full text-left px-3 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors"
           >
@@ -263,6 +293,8 @@ function AccountRow({
     account.tokenExpiresAt &&
     new Date(account.tokenExpiresAt).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000;
 
+  const isAssigned = !!account.brandProfileId;
+
   return (
     <div
       className={`px-5 py-4 flex items-center gap-4 transition-colors ${
@@ -279,13 +311,19 @@ function AccountRow({
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${account.isActive ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
             {account.isActive ? "active" : "inactive"}
           </span>
-          {account.brandInfo ? (
+          {isAssigned ? (
             <span className="flex items-center gap-1 text-xs px-2 py-0.5 bg-purple-50 text-purple-700 rounded-full border border-purple-100">
               <Tag className="w-2.5 h-2.5" />
-              {account.brandInfo.brandName}
-              <span className="text-purple-400">·</span>
-              <Bot className="w-2.5 h-2.5" />
-              {account.brandInfo.agentName}
+              {account.brandName}
+              {account.agents.length > 0 && (
+                <>
+                  <span className="text-purple-400">·</span>
+                  <Bot className="w-2.5 h-2.5" />
+                  {account.agents.length === 1
+                    ? account.agents[0]!.name
+                    : `${account.agents.length} agents`}
+                </>
+              )}
             </span>
           ) : (
             <span className="text-xs px-2 py-0.5 bg-amber-50 text-amber-600 rounded-full border border-amber-200">
@@ -312,13 +350,13 @@ function AccountRow({
           </button>
         )}
 
-        {/* Assign button — portal-safe: dropdown sits in a relative wrapper outside overflow-hidden */}
+        {/* Assign button */}
         <div className="relative">
           <button
             onClick={() => setDropdownOpen((v) => !v)}
             className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 font-medium transition-colors"
           >
-            {account.brandInfo ? "Reassign" : "Assign"}
+            {isAssigned ? "Reassign" : "Assign"}
             <ChevronDown className={`w-3 h-3 transition-transform ${dropdownOpen ? "rotate-180" : ""}`} />
           </button>
           {dropdownOpen && (
@@ -327,7 +365,7 @@ function AccountRow({
               <div className="absolute right-0 top-7 z-20">
                 <AssignDropdown
                   accountId={account.id}
-                  current={account.brandInfo}
+                  account={account}
                   brands={brands}
                   agents={agents}
                   onClose={() => setDropdownOpen(false)}
@@ -422,14 +460,14 @@ function AccountsPageContent() {
 
   const filteredAccounts = accounts.filter((a) => {
     if (brandFilter === "all") return true;
-    if (brandFilter === "unassigned") return !a.brandInfo;
-    return a.brandInfo?.brandId === brandFilter;
+    if (brandFilter === "unassigned") return !a.brandProfileId;
+    return a.brandProfileId === brandFilter;
   });
 
   const brandsWithAccounts = brands.filter((b) =>
-    accounts.some((a) => a.brandInfo?.brandId === b.id),
+    accounts.some((a) => a.brandProfileId === b.id),
   );
-  const unassignedCount = accounts.filter((a) => !a.brandInfo).length;
+  const unassignedCount = accounts.filter((a) => !a.brandProfileId).length;
 
   function closeModal() {
     setOpenModal(null);
@@ -524,7 +562,6 @@ function AccountsPageContent() {
             <p className="text-sm text-gray-400">No accounts match this filter.</p>
           </div>
         ) : (
-          /* overflow-visible so the assign dropdown isn't clipped by the container */
           <div className="border border-gray-200 rounded-2xl divide-y divide-gray-100">
             {filteredAccounts.map((account, i) => (
               <AccountRow

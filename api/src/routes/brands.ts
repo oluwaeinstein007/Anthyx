@@ -3,7 +3,7 @@ import { eq, and, isNull, isNotNull, count, inArray } from "drizzle-orm";
 import multer from "multer";
 import * as path from "path";
 import { db } from "../db/client";
-import { brandProfiles, scheduledPosts, agents, socialAccounts } from "../db/schema";
+import { brandProfiles, scheduledPosts, agents, socialAccounts, agentSocialAccounts } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { requireLimit } from "../middleware/plan-limits";
@@ -330,12 +330,20 @@ router.get("/:id/channels", auth, async (req, res) => {
   if (brandAgents.length === 0) return res.json([]);
 
   const agentIds = brandAgents.map((a) => a.id);
-  const accounts = await db.query.socialAccounts.findMany({
-    where: and(
-      eq(socialAccounts.organizationId, req.user.orgId),
-      inArray(socialAccounts.agentId, agentIds),
-    ),
+
+  // Fetch all social accounts assigned to any agent of this brand
+  const links = await db.query.agentSocialAccounts.findMany({
+    where: inArray(agentSocialAccounts.agentId, agentIds),
   });
+  const accountIds = [...new Set(links.map((l) => l.socialAccountId))];
+  const accounts = accountIds.length > 0
+    ? await db.query.socialAccounts.findMany({
+        where: and(
+          eq(socialAccounts.organizationId, req.user.orgId),
+          inArray(socialAccounts.id, accountIds),
+        ),
+      })
+    : [];
 
   return res.json(
     accounts.map(({ accessToken, refreshToken, ...rest }) => rest),

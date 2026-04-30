@@ -10,6 +10,7 @@ import {
   numeric,
   pgEnum,
   uniqueIndex,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 
 // ── Enums ──────────────────────────────────────────────────────────────────────
@@ -180,7 +181,7 @@ export const agents = pgTable("agents", {
     .references(() => organizations.id)
     .notNull(),
   brandProfileId: uuid("brand_profile_id")
-    .references(() => brandProfiles.id)
+    .references(() => brandProfiles.id, { onDelete: "cascade" })
     .notNull(),
   name: text("name").notNull(),
   description: text("description"),
@@ -202,7 +203,7 @@ export const socialAccounts = pgTable(
     organizationId: uuid("organization_id")
       .references(() => organizations.id)
       .notNull(),
-    agentId: uuid("agent_id").references(() => agents.id),
+    brandProfileId: uuid("brand_profile_id").references(() => brandProfiles.id, { onDelete: "set null" }),
     platform: platformEnum("platform").notNull(),
     accountHandle: text("account_handle").notNull(),
     accountId: text("account_id"),
@@ -220,6 +221,21 @@ export const socialAccounts = pgTable(
       t.platform,
       t.accountHandle,
     ),
+  }),
+);
+
+// ── Agent ↔ Social Account assignments (many-to-many) ─────────────────────────
+
+export const agentSocialAccounts = pgTable(
+  "agent_social_accounts",
+  {
+    agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+    socialAccountId: uuid("social_account_id").notNull().references(() => socialAccounts.id, { onDelete: "cascade" }),
+    isDefault: boolean("is_default").default(true),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.agentId, t.socialAccountId] }),
   }),
 );
 
@@ -632,6 +648,7 @@ export const competitorAnalyses = pgTable("competitor_analyses", {
   shareOfVoice: jsonb("share_of_voice"),
   sentimentAnalysis: jsonb("sentiment_analysis"),
   benchmarkScorecard: jsonb("benchmark_scorecard"),
+  dataBasis: jsonb("data_basis"),
   generatedAt: timestamp("generated_at").defaultNow(),
 });
 

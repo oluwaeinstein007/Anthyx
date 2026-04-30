@@ -1,7 +1,7 @@
 import { Router, NextFunction, Request, Response } from "express";
-import { eq, and, inArray, or, isNull } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/client";
-import { marketingPlans, scheduledPosts, brandProfiles, agents, socialAccounts, postAnalytics, agentLogs } from "../db/schema";
+import { marketingPlans, scheduledPosts, brandProfiles, agents, socialAccounts, agentSocialAccounts, postAnalytics, agentLogs } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { GeneratePlanSchema } from "@anthyx/config";
@@ -29,14 +29,20 @@ router.post("/generate", auth, validate(GeneratePlanSchema), async (req: Request
     if (!agent) return res.status(404).json({ error: "Agent not found" });
     if (!agent.isActive) return res.status(400).json({ error: "Agent is silenced and cannot generate plans" });
 
-    // Resolve social accounts for the requested platforms (agent-linked + org-level)
-    const accounts = await db.query.socialAccounts.findMany({
-      where: and(
-        eq(socialAccounts.organizationId, req.user.orgId),
-        or(eq(socialAccounts.agentId, agentId), isNull(socialAccounts.agentId)),
-        eq(socialAccounts.isActive, true),
-      ),
+    // Resolve social accounts the agent has access to via the join table
+    const agentAccountLinks = await db.query.agentSocialAccounts.findMany({
+      where: eq(agentSocialAccounts.agentId, agentId),
     });
+    const linkedIds = agentAccountLinks.map((r) => r.socialAccountId);
+    const accounts = linkedIds.length > 0
+      ? await db.query.socialAccounts.findMany({
+          where: and(
+            inArray(socialAccounts.id, linkedIds),
+            eq(socialAccounts.organizationId, req.user.orgId),
+            eq(socialAccounts.isActive, true),
+          ),
+        })
+      : [];
 
     const validPlatforms: string[] = [];
     const socialAccountIds: (string | null)[] = [];
@@ -214,15 +220,22 @@ router.post("/:id/retry", auth, async (req: Request, res: Response, next: NextFu
 
     if (!plan.agentId) return res.status(400).json({ error: "Plan has no agent assigned" });
 
+    const agentAccountLinks = await db.query.agentSocialAccounts.findMany({
+      where: eq(agentSocialAccounts.agentId, plan.agentId!),
+    });
+    const linkedIds = agentAccountLinks.map((r) => r.socialAccountId);
+
     const [brand, accounts] = await Promise.all([
       db.query.brandProfiles.findFirst({ where: eq(brandProfiles.id, plan.brandProfileId) }),
-      db.query.socialAccounts.findMany({
-        where: and(
-          eq(socialAccounts.organizationId, req.user.orgId),
-          or(eq(socialAccounts.agentId, plan.agentId!), isNull(socialAccounts.agentId)),
-          eq(socialAccounts.isActive, true),
-        ),
-      }),
+      linkedIds.length > 0
+        ? db.query.socialAccounts.findMany({
+            where: and(
+              inArray(socialAccounts.id, linkedIds),
+              eq(socialAccounts.organizationId, req.user.orgId),
+              eq(socialAccounts.isActive, true),
+            ),
+          })
+        : Promise.resolve([]),
     ]);
 
     // Use stored platforms from original generation; fall back to account-linked platforms

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/client";
-import { agents, scheduledPosts, agentLogs } from "../db/schema";
+import { agents, scheduledPosts, agentLogs, socialAccounts, agentSocialAccounts } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { requireLimit } from "../middleware/plan-limits";
@@ -121,23 +121,54 @@ router.post("/:id/resume", auth, async (req, res) => {
   return res.json({ resumed: true });
 });
 
-// POST /agents/:id/assign
+// POST /agents/:id/assign — convenience endpoint to assign/remove a social account from this agent
+// Body: { socialAccountId, assign: true | false }
 router.post("/:id/assign", auth, async (req, res) => {
-  const { socialAccountId } = req.body;
+  const agentId = req.params.id!;
+  const { socialAccountId, assign } = req.body as { socialAccountId?: string; assign?: boolean };
   if (!socialAccountId) return res.status(400).json({ error: "socialAccountId required" });
 
-  const { socialAccounts } = await import("../db/schema");
-  const [updated] = await db
-    .update(socialAccounts)
-    .set({ agentId: req.params.id, updatedAt: new Date() })
-    .where(and(
-      eq(socialAccounts.id, socialAccountId),
-      eq(socialAccounts.organizationId, req.user.orgId),
-    ))
-    .returning();
+  // Verify agent belongs to this org
+  const agent = await db.query.agents.findFirst({
+    where: and(eq(agents.id, agentId), eq(agents.organizationId, req.user.orgId)),
+  });
+  if (!agent) return res.status(404).json({ error: "Agent not found" });
 
-  if (!updated) return res.status(404).json({ error: "Social account not found" });
-  return res.json(updated);
+  // Verify account belongs to this org
+  const account = await db.query.socialAccounts.findFirst({
+    where: and(eq(socialAccounts.id, socialAccountId), eq(socialAccounts.organizationId, req.user.orgId)),
+  });
+  if (!account) return res.status(404).json({ error: "Social account not found" });
+
+  if (assign === false) {
+    await db
+      .delete(agentSocialAccounts)
+      .where(and(
+        eq(agentSocialAccounts.agentId, agentId),
+        eq(agentSocialAccounts.socialAccountId, socialAccountId),
+      ));
+  } else {
+    // Check if this account has any existing assignments (to decide isDefault)
+    const existing = await db.query.agentSocialAccounts.findFirst({
+      where: eq(agentSocialAccounts.socialAccountId, socialAccountId),
+    });
+
+    await db.transaction(async (tx) => {
+      await tx
+        .insert(agentSocialAccounts)
+        .values({ agentId, socialAccountId, isDefault: !existing })
+        .onConflictDoNothing();
+
+      if (!account.brandProfileId) {
+        await tx
+          .update(socialAccounts)
+          .set({ brandProfileId: agent.brandProfileId, updatedAt: new Date() })
+          .where(and(eq(socialAccounts.id, socialAccountId), eq(socialAccounts.organizationId, req.user.orgId)));
+      }
+    });
+  }
+
+  return res.json({ ok: true });
 });
 
 // GET /agents/:id/logs

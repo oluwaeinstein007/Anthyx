@@ -8,7 +8,7 @@ import Link from "next/link";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   TrendingUp, Plus, Trash2, RefreshCw, Globe, Target,
-  BarChart2, Zap, Share2, MessageCircle, Award, AlertCircle,
+  BarChart2, Zap, Share2, MessageCircle, Award, AlertCircle, Clock,
   ChevronDown, ChevronUp, ExternalLink, Loader2, Search, Pencil, X,
 } from "lucide-react";
 
@@ -75,6 +75,14 @@ interface BenchmarkMetric {
   status: "ahead" | "at_par" | "behind" | "neutral";
 }
 
+interface AnalysisDataBasis {
+  engagementBenchmarks: "api" | "llm_inference";
+  shareOfVoice: "web_search" | "llm_inference";
+  industryOverview: "web_search" | "scraped" | "llm_inference";
+  contentAnalysis: "scraped" | "web_search" | "llm_inference";
+  sentimentAnalysis: "web_search" | "llm_inference";
+}
+
 interface CompetitorAnalysis {
   id: string;
   generatedAt: string;
@@ -85,6 +93,7 @@ interface CompetitorAnalysis {
   shareOfVoice: ShareOfVoice | null;
   sentimentAnalysis: SentimentAnalysis | null;
   benchmarkScorecard: { metrics: BenchmarkMetric[] } | null;
+  dataBasis: AnalysisDataBasis | null;
 }
 
 interface IntelData {
@@ -114,7 +123,36 @@ const STATUS_LABELS: Record<BenchmarkMetric["status"], { label: string; cls: str
   behind: { label: "Behind", cls: "bg-red-100 text-red-700" },
 };
 
-function SectionCard({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+const DATA_BASIS_CONFIG: Record<
+  AnalysisDataBasis[keyof AnalysisDataBasis],
+  { label: string; cls: string }
+> = {
+  api: { label: "via API", cls: "bg-green-50 text-green-700 border-green-200" },
+  web_search: { label: "via web search", cls: "bg-blue-50 text-blue-700 border-blue-200" },
+  scraped: { label: "via scraping", cls: "bg-gray-100 text-gray-600 border-gray-200" },
+  llm_inference: { label: "AI estimate", cls: "bg-amber-50 text-amber-700 border-amber-200" },
+};
+
+function DataBasisBadge({ basis }: { basis: AnalysisDataBasis[keyof AnalysisDataBasis] }) {
+  const cfg = DATA_BASIS_CONFIG[basis];
+  return (
+    <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${cfg.cls}`}>
+      {cfg.label}
+    </span>
+  );
+}
+
+function SectionCard({
+  title,
+  icon,
+  dataBasis,
+  children,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  dataBasis?: AnalysisDataBasis[keyof AnalysisDataBasis];
+  children: React.ReactNode;
+}) {
   const [open, setOpen] = useState(true);
   return (
     <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
@@ -125,6 +163,7 @@ function SectionCard({ title, icon, children }: { title: string; icon: React.Rea
         <div className="flex items-center gap-2.5">
           <span className="text-purple-600">{icon}</span>
           <span className="font-semibold text-gray-900 text-sm">{title}</span>
+          {dataBasis && <DataBasisBadge basis={dataBasis} />}
         </div>
         {open ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
       </button>
@@ -582,6 +621,17 @@ export default function CompetitiveIntelligencePage() {
             <AlertCircle className="w-4 h-4 shrink-0" /> {refreshError}
           </div>
         )}
+        {analysis && (() => {
+          const ageMs = Date.now() - new Date(analysis.generatedAt).getTime();
+          const ageDays = Math.floor(ageMs / 86_400_000);
+          if (ageDays < 7) return null;
+          return (
+            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800 flex items-center gap-2">
+              <Clock className="w-4 h-4 shrink-0" />
+              Analysis is {ageDays} day{ageDays !== 1 ? "s" : ""} old — refresh for the latest competitive intelligence.
+            </div>
+          );
+        })()}
       </div>
 
       {/* Suggested Competitors */}
@@ -700,7 +750,7 @@ export default function CompetitiveIntelligencePage() {
         <>
           {/* Industry Overview */}
           {analysis.industryOverview && (
-            <SectionCard title="Industry Overview" icon={<Globe className="w-5 h-5" />}>
+            <SectionCard title="Industry Overview" icon={<Globe className="w-5 h-5" />} dataBasis={analysis.dataBasis?.industryOverview}>
               <div className="pt-4 space-y-4">
                 <p className="text-sm text-gray-700 leading-relaxed">{analysis.industryOverview.summary}</p>
                 <div className="grid sm:grid-cols-2 gap-3">
@@ -727,7 +777,7 @@ export default function CompetitiveIntelligencePage() {
 
           {/* Content & Posting Analysis */}
           {analysis.contentAnalysis && (
-            <SectionCard title="Content & Posting Analysis" icon={<BarChart2 className="w-5 h-5" />}>
+            <SectionCard title="Content & Posting Analysis" icon={<BarChart2 className="w-5 h-5" />} dataBasis={analysis.dataBasis?.contentAnalysis}>
               <div className="pt-4 space-y-5">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm min-w-[500px]">
@@ -782,7 +832,7 @@ export default function CompetitiveIntelligencePage() {
 
           {/* Engagement Benchmarks */}
           {analysis.engagementBenchmarks && (
-            <SectionCard title="Engagement & Performance Benchmarks" icon={<Zap className="w-5 h-5" />}>
+            <SectionCard title="Engagement & Performance Benchmarks" icon={<Zap className="w-5 h-5" />} dataBasis={analysis.dataBasis?.engagementBenchmarks}>
               <div className="pt-4 overflow-x-auto">
                 <table className="w-full text-sm min-w-[600px]">
                   <thead>
@@ -868,7 +918,7 @@ export default function CompetitiveIntelligencePage() {
 
           {/* Share of Voice */}
           {analysis.shareOfVoice && (
-            <SectionCard title="Share of Voice" icon={<Share2 className="w-5 h-5" />}>
+            <SectionCard title="Share of Voice" icon={<Share2 className="w-5 h-5" />} dataBasis={analysis.dataBasis?.shareOfVoice}>
               <div className="pt-4 space-y-4">
                 <p className="text-sm text-gray-600">{analysis.shareOfVoice.trend}</p>
                 <div className="space-y-2.5">
@@ -895,7 +945,7 @@ export default function CompetitiveIntelligencePage() {
 
           {/* Sentiment Analysis */}
           {analysis.sentimentAnalysis && (
-            <SectionCard title="Sentiment Analysis" icon={<MessageCircle className="w-5 h-5" />}>
+            <SectionCard title="Sentiment Analysis" icon={<MessageCircle className="w-5 h-5" />} dataBasis={analysis.dataBasis?.sentimentAnalysis}>
               <div className="pt-4 space-y-5">
                 {Object.entries(analysis.sentimentAnalysis.scores).map(([comp, scores]) => (
                   <div key={comp}>

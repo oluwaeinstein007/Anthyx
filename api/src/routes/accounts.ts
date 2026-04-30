@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, and, isNull, inArray } from "drizzle-orm";
 import { db } from "../db/client";
-import { socialAccounts, organizations, scheduledPosts, agents, brandProfiles } from "../db/schema";
+import { socialAccounts, organizations, scheduledPosts, agents, brandProfiles, agentSocialAccounts } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { encryptToken } from "../services/oauth-proxy/crypto";
 import { PlanLimitsEnforcer } from "../services/billing/limits";
@@ -900,91 +900,109 @@ router.get("/", auth, async (req, res) => {
     where: eq(socialAccounts.organizationId, req.user.orgId),
   });
 
-  // Enrich each account with agent + brand info
-  const agentIds = [...new Set(list.map((a) => a.agentId).filter(Boolean) as string[])];
-  type BrandInfo = { agentId: string; agentName: string; brandId: string; brandName: string };
-  const agentBrandMap = new Map<string, BrandInfo>();
+  const accountIds = list.map((a) => a.id);
 
-  if (agentIds.length > 0) {
-    const agentRows = await db.query.agents.findMany({
-      where: inArray(agents.id, agentIds),
-    });
-    const brandIds = [...new Set(agentRows.map((a) => a.brandProfileId))];
-    const brandRows = await db.query.brandProfiles.findMany({
-      where: inArray(brandProfiles.id, brandIds),
-    });
-    const brandMap = new Map(brandRows.map((b) => [b.id, b]));
-    for (const agent of agentRows) {
-      const brand = brandMap.get(agent.brandProfileId);
-      if (brand) {
-        agentBrandMap.set(agent.id, {
-          agentId: agent.id,
-          agentName: agent.name,
-          brandId: brand.id,
-          brandName: brand.name,
-        });
-      }
-    }
+  // Batch-fetch agent assignments and brand names
+  const [assignmentRows, brandRows] = await Promise.all([
+    accountIds.length > 0
+      ? db.query.agentSocialAccounts.findMany({
+          where: inArray(agentSocialAccounts.socialAccountId, accountIds),
+        })
+      : Promise.resolve([]),
+    (() => {
+      const brandIds = [...new Set(list.map((a) => a.brandProfileId).filter(Boolean) as string[])];
+      return brandIds.length > 0
+        ? db.query.brandProfiles.findMany({ where: inArray(brandProfiles.id, brandIds) })
+        : Promise.resolve([]);
+    })(),
+  ]);
+
+  const agentIds = [...new Set(assignmentRows.map((r) => r.agentId))];
+  const agentRows = agentIds.length > 0
+    ? await db.query.agents.findMany({ where: inArray(agents.id, agentIds) })
+    : [];
+
+  const agentMap = new Map(agentRows.map((a) => [a.id, { id: a.id, name: a.name }]));
+  const brandMap = new Map(brandRows.map((b) => [b.id, b.name]));
+
+  // Group agents by socialAccountId
+  const agentsByAccount = new Map<string, { id: string; name: string }[]>();
+  for (const row of assignmentRows) {
+    const agent = agentMap.get(row.agentId);
+    if (!agent) continue;
+    const arr = agentsByAccount.get(row.socialAccountId) ?? [];
+    arr.push(agent);
+    agentsByAccount.set(row.socialAccountId, arr);
   }
 
   return res.json(
     list.map(({ accessToken, refreshToken, ...rest }) => ({
       ...rest,
-      brandInfo: rest.agentId ? (agentBrandMap.get(rest.agentId) ?? null) : null,
+      brandName: rest.brandProfileId ? (brandMap.get(rest.brandProfileId) ?? null) : null,
+      agents: agentsByAccount.get(rest.id) ?? [],
     })),
   );
 });
 
-// PUT /accounts/:id/assign — assign/unassign account to a brand or specific agent
-// Body: { agentId } for direct assignment, { brandId } to auto-pick first agent, null either to unassign
+// PUT /accounts/:id/assign — assign account to a brand and a set of agents
+// Body: { brandId: string | null, agentIds: string[] }
+// Pass brandId=null + agentIds=[] to fully unassign.
 router.put("/:id/assign", auth, async (req, res) => {
-  const { brandId, agentId: directAgentId } = req.body as { brandId?: string | null; agentId?: string | null };
+  const { brandId, agentIds = [] } = req.body as { brandId?: string | null; agentIds?: string[] };
 
-  let agentId: string | null = null;
+  if (!brandId && agentIds.length > 0) {
+    return res.status(400).json({ error: "agentIds requires a brandId" });
+  }
 
-  if (directAgentId) {
-    // Direct agent assignment — verify it belongs to this org
-    const agent = await db.query.agents.findFirst({
-      where: and(
-        eq(agents.id, directAgentId),
-        eq(agents.organizationId, req.user.orgId),
-        eq(agents.isActive, true),
-      ),
-    });
-    if (!agent) return res.status(404).json({ error: "Agent not found" });
-    agentId = agent.id;
-  } else if (brandId) {
-    // Brand-level assignment — auto-pick first active agent
+  const account = await db.query.socialAccounts.findFirst({
+    where: and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
+  });
+  if (!account) return res.status(404).json({ error: "Account not found" });
+
+  if (brandId) {
     const brand = await db.query.brandProfiles.findFirst({
-      where: and(
-        eq(brandProfiles.id, brandId),
-        eq(brandProfiles.organizationId, req.user.orgId),
-      ),
+      where: and(eq(brandProfiles.id, brandId), eq(brandProfiles.organizationId, req.user.orgId)),
     });
     if (!brand) return res.status(404).json({ error: "Brand not found" });
+  }
 
-    const agent = await db.query.agents.findFirst({
+  // Validate that all agentIds belong to this org (and to the brand if specified)
+  let resolvedAgentIds: string[] = [];
+  if (agentIds.length > 0) {
+    const agentRows = await db.query.agents.findMany({
       where: and(
-        eq(agents.brandProfileId, brandId),
+        inArray(agents.id, agentIds),
         eq(agents.organizationId, req.user.orgId),
-        eq(agents.isActive, true),
+        ...(brandId ? [eq(agents.brandProfileId, brandId)] : []),
       ),
     });
-    if (!agent) return res.status(422).json({ error: "This brand has no active agent. Create one first." });
-    agentId = agent.id;
+    if (agentRows.length !== agentIds.length) {
+      return res.status(400).json({ error: "One or more agents not found or not in this brand" });
+    }
+    resolvedAgentIds = agentRows.map((a) => a.id);
   }
-  // null brandId + null agentId = unassign
 
-  const [updated] = await db
-    .update(socialAccounts)
-    .set({ agentId, updatedAt: new Date() })
-    .where(and(
-      eq(socialAccounts.id, req.params.id!),
-      eq(socialAccounts.organizationId, req.user.orgId),
-    ))
-    .returning();
+  await db.transaction(async (tx) => {
+    await tx
+      .update(socialAccounts)
+      .set({ brandProfileId: brandId ?? null, updatedAt: new Date() })
+      .where(and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)));
 
-  if (!updated) return res.status(404).json({ error: "Account not found" });
+    await tx
+      .delete(agentSocialAccounts)
+      .where(eq(agentSocialAccounts.socialAccountId, req.params.id!));
+
+    if (resolvedAgentIds.length > 0) {
+      await tx.insert(agentSocialAccounts).values(
+        resolvedAgentIds.map((agentId, i) => ({
+          agentId,
+          socialAccountId: req.params.id!,
+          isDefault: i === 0,
+        })),
+      );
+    }
+  });
+
   return res.json({ ok: true });
 });
 
