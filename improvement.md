@@ -1,37 +1,19 @@
 # Anthyx — Improvement & Roadmap
 
-> Status as of April 2026. Covers what still needs to be built, updated, or fixed.
+> Status as of May 2026. Covers what still needs to be built, updated, or fixed.
 >
-> **Last updated:** 2026-04-30. Items confirmed implemented have been removed.
+> **Last updated:** 2026-05-04. Items confirmed implemented have been removed.
 
 ---
 
 ## 1. Campaigns — Remaining Gaps
 
-### Entity hierarchy (for context)
-
-```
-Organization
-  └── Brand (brand_profiles)   — identity, voice, visual assets, ingested docs
-        └── Agent (agents)     — a persona tied to ONE brand
-Campaign (campaigns)           — an org-level objective container
-              ↑
-Marketing Plan (marketing_plans) — links brand + agent + optional campaign
-  └── Scheduled Posts          — one post per platform slot
-        └── Post Analytics     — engagement data synced back after publishing
-```
-
 ### What's still missing
 
-| Item                                              | What to do                                                                                                                                                                                                                                                      |
-| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Assign plan to campaign at generation time**    | Add `campaignId: z.string().uuid().optional()` to `GeneratePlanSchema` in `packages/config/src/schemas.ts` and pass it through in `routes/plans.ts` `POST /plans/generate` → `db.insert(marketingPlans)`                                                        |
-| **Assign/move an existing plan to a campaign**    | Add `campaignId` to `PUT /plans/:id` (currently only updates `name`, `goals`, `feedbackLoopEnabled`). Also add a dropdown on the plan detail UI to select a campaign.                                                                                           |
-| **Plans list on campaign detail page**            | The API returns `plans[]` in the analytics response but the frontend `[id]/page.tsx` may not render them. Add a section listing plans under the campaign with links to each plan.                                                                              |
-| **Campaign status**                               | Add a `status` field (`active` \| `completed` \| `archived`) to the `campaigns` table. No lifecycle management exists today.                                                                                                                                    |
-| **Campaign date range**                           | Add `startDate` / `endDate` to `campaigns` table so time-bounded campaigns are queryable. Currently only plans have date ranges.                                                                                                                                |
-| **Budget spend tracking**                         | `budgetCapCents` is stored but never decremented or compared against anything. Either remove the field or define what "spend" means and implement tracking.                                                                                                      |
-| **Create campaign and generate plan in one flow** | Today the user must create a campaign, then separately generate a plan, then assign it. Add a "New plan" shortcut button on the campaign detail page that pre-fills `campaignId`.                                                                               |
+| Item                                              | What to do                                                                                                                                             |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Budget spend tracking**                         | `budgetCapCents` is stored but never decremented or compared. Either remove the field or define what "spend" means and implement tracking.              |
+| **Campaign status lifecycle UI**                  | DB enum `active/completed/archived` exists; add a status dropdown on the campaign detail page to transition it.                                        |
 
 ---
 
@@ -39,11 +21,7 @@ Marketing Plan (marketing_plans) — links brand + agent + optional campaign
 
 ### 2.1 AI Image Generation UI — **MEDIUM / Verify**
 
-`POST /posts/:id/regenerate-image` and `POST /posts/:id/upload-media` are built. Verify in the review page (`/dashboard/review`) that:
-- Generated `mediaUrl` is displayed alongside post text
-- "Regenerate image" button is wired to the backend
-- Image thumbnail appears in the posts list page
-- `suggestedMediaPrompt` is an editable field in the post editor
+`POST /posts/:id/regenerate-image` and `POST /posts/:id/upload-media` are built. Verify in the review page (`/dashboard/review`) that the image preview and regenerate button are wired correctly.
 
 ### 2.2 SEO Layer — **MEDIUM / Absent**
 
@@ -87,7 +65,7 @@ Marketing Plan (marketing_plans) — links brand + agent + optional campaign
 | Item                           | Status                                                                                     | What to do                                                                              |
 | ------------------------------ | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | Password reset                 | Frontend pages exist (`forgot-password/`, `reset-password/`), need to verify wiring to API | Test end-to-end                                                                         |
-| Two-factor auth (TOTP)         | Missing                                                                                    | Add `totp_secret` to users table, QR code setup page, verify on login                   |
+| 2FA setup UI                   | Backend TOTP routes built (`/auth/totp/setup`, `/enable`, `/disable`, `/verify`)           | Add frontend settings page for 2FA: show QR code, enter confirmation token              |
 | API key management             | Missing                                                                                    | Users create API keys for CLI / integrations (table: `api_keys`, hashed)                |
 | Session revocation             | Missing                                                                                    | JWT is stateless — add a Redis denylist for logout + password change                    |
 
@@ -96,24 +74,17 @@ Marketing Plan (marketing_plans) — links brand + agent + optional campaign
 | Item                               | Status                                   | What to do                                                                                  |
 | ---------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------- |
 | Overage invoicing                  | Done (`overage.ts`, `overage.worker.ts`) | Verify cron fires correctly                                                                 |
-| Trial-to-paid conversion email     | Missing                                  | Send Resend email 3 days before trial ends                                                  |
-| Dunning (failed payment retry)     | Missing                                  | Handle `invoice.payment_failed` Stripe webhook + email sequence                             |
 | Paused subscription (grace period) | Missing                                  | Add `suspended` grace period before cancelling access                                       |
-| Annual billing discount UI         | Missing                                  | Billing page toggle for monthly/annual — currently API-only                                 |
-| Invoice PDF download               | Missing                                  | Stripe has invoice PDF URL — expose it in `/billing/invoices`                               |
-| Proration preview before upgrade   | Missing                                  | Call Stripe `retrieveUpcomingInvoice` and show user the charge before confirming            |
+| Invoice PDF download               | Frontend only                            | Stripe `/billing/invoices` returns `invoice_pdf` URL — add download button in billing UI   |
 | Enterprise quote flow              | Missing                                  | Enterprise tier = custom pricing — add "Contact sales" CTA with Cal.com embed or email form |
 
 ### 3.3 Posts & Planning
 
 | Item                           | Status                                            | What to do                                                               |
 | ------------------------------ | ------------------------------------------------- | ------------------------------------------------------------------------ |
-| Content calendar view          | Missing                                           | Visual 30-day calendar on plans/[id] (currently list view only)          |
 | Post preview (platform mockup) | Missing                                           | Render how post will look on X, LinkedIn, Instagram before approving     |
-| Drag-and-drop reschedule       | Missing                                           | Calendar drag to reschedule a post (calls `PUT /posts/:id`)              |
+| Drag-and-drop reschedule       | Missing                                           | Calendar drag to reschedule a post; backend `POST /posts/:id/reschedule` exists |
 | Content recycling              | Missing                                           | "Re-publish best posts" — surface top performers by engagement, re-queue |
-| Post versioning                | Missing                                           | When post is edited in HITL, store previous versions (audit trail)       |
-| Post failure alerts            | Missing                                           | When `status = failed`, send email/webhook notification                  |
 
 ### 3.4 Agents
 
@@ -272,36 +243,27 @@ Marketing Plan (marketing_plans) — links brand + agent + optional campaign
 
 ### Immediate (launch blockers)
 
-1. Rate limiting on API (`express-rate-limit`)
-2. Error monitoring (Sentry)
-3. Health check endpoint (`GET /health`)
-4. Verify CORS is scoped to production domain
-5. Request logging (Pino/Winston)
+1. Request logging (Pino/Winston) — Sentry + rate limiting + CORS + health check are done
+2. Verify password reset end-to-end
+3. Verify social-mcp Docker service + Pinterest and mail env vars (§6)
+4. Verify AI image display/regenerate in review page (§2.1)
 
 ### Short-term (1–4 weeks)
 
-6. Annual billing toggle in UI (monthly/annual switch on billing page)
-7. Trial-to-paid conversion email (3 days before trial ends via Resend)
-8. Dunning — handle `invoice.payment_failed` Stripe webhook + email sequence
-9. Post failure alerts (email/webhook when `status = failed`)
-10. Verify password reset end-to-end
-11. Verify social-mcp Docker service + Pinterest and mail env vars (§6)
-12. Verify AI image display/regenerate in review page (§2.1)
-13. Basic onboarding wizard
+5. 2FA setup UI — backend routes done, need QR code frontend settings page (§3.1)
+6. Invoice PDF download button in billing UI (§3.2)
+7. Basic onboarding wizard
+8. Campaign status lifecycle UI (§1)
 
 ### Medium-term (1–3 months)
 
-14. Campaign improvements: campaignId on plan generation, status field, date range (§1)
-15. Content calendar view (§3.3)
-16. SEO readability scoring in post editor (§2.2)
-17. 2FA / TOTP (§3.1)
-18. Hashtag manager (§5)
-19. Ideas board (§5)
-20. Best posting times heatmap (§3.5)
-21. Hashtag analytics (§3.5)
-22. Content pillar configuration (§3.7)
-23. Proration preview before upgrade (§3.2)
-24. Invoice PDF download (§3.2)
+9. SEO readability scoring in post editor (§2.2)
+10. Hashtag manager (§5)
+11. Ideas board (§5)
+12. Best posting times heatmap (§3.5)
+13. Hashtag analytics (§3.5)
+14. Content pillar configuration (§3.7)
+15. Paused subscription grace period (§3.2)
 
 ### Long-term
 

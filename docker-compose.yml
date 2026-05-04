@@ -28,6 +28,7 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
+      network: host
     ports:
       - "4000:4000"
     <<: *ext-dns
@@ -56,6 +57,7 @@ services:
     build:
       context: .
       dockerfile: admin/Dockerfile
+      network: host
     ports:
       - "3001:3001"
     environment:
@@ -70,6 +72,7 @@ services:
     build:
       context: .
       dockerfile: affiliate/Dockerfile
+      network: host
     ports:
       - "3002:3002"
     environment:
@@ -84,6 +87,7 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      network: host
     ports:
       - "3000:3000"
     environment:
@@ -98,6 +102,7 @@ services:
     build:
       context: .
       dockerfile: services/mcp/Dockerfile
+      network: host
     ports:
       - "3100:3100"
     environment:
@@ -112,6 +117,7 @@ services:
     build:
       context: .
       dockerfile: services/ingestor/Dockerfile
+      network: host
     <<: *ext-dns
     environment:
       <<: *app-env

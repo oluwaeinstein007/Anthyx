@@ -1,5 +1,6 @@
 FROM node:22-alpine AS base
 RUN corepack enable
+ENV NODE_OPTIONS=--dns-result-order=ipv4first
 
 # ---- deps ----
 FROM base AS deps
@@ -9,7 +10,7 @@ COPY affiliate/package.json ./affiliate/
 COPY packages/types/package.json ./packages/types/
 COPY packages/config/package.json ./packages/config/
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile
+    pnpm install --frozen-lockfile --fetch-retries=5
 
 # ---- build ----
 FROM deps AS builder

@@ -2,9 +2,10 @@ import { Router } from "express";
 import { eq, and, isNull } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
+import { generateSecret as totpGenerateSecret, verify as totpVerify } from "otplib";
 import { db } from "../db/client";
 import { users, organizations, subscriptions, adminInvites } from "../db/schema";
-import { issueToken } from "../middleware/auth";
+import { issueToken, auth } from "../middleware/auth";
 import { redisConnection } from "../queue/client";
 import { z } from "zod";
 import { productConfig } from "@anthyx/config";
@@ -179,6 +180,13 @@ router.post("/login", async (req, res) => {
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) return res.status(401).json({ error: "Invalid credentials" });
   if (!user.organizationId) return res.status(401).json({ error: "No organization" });
+
+  // If TOTP is enabled, issue a short-lived pending token instead of the full JWT
+  if (user.totpEnabled) {
+    const pendingToken = randomBytes(32).toString("hex");
+    await redisConnection.set(`totp_pending:${pendingToken}`, user.id, "EX", 300); // 5 min
+    return res.json({ requiresTotp: true, pendingToken });
+  }
 
   const token = issueToken({
     id: user.id,
@@ -583,6 +591,75 @@ router.post("/admin/accept-invite", async (req, res) => {
   });
 
   return res.json({ user: { id: newUser.id, email: newUser.email, name: newUser.name, role: newUser.role } });
+});
+
+// ── TOTP 2FA ────────────────────────────────────────────────────────────────────
+
+// POST /auth/totp/setup — generate secret + otpauth URL for QR code (step 1)
+router.post("/totp/setup", auth, async (req, res) => {
+  const secret = totpGenerateSecret();
+  await redisConnection.set(`totp_setup:${req.user.id}`, secret, "EX", 600);
+  const productName = process.env["PRODUCT_NAME"] ?? "Anthyx";
+  const otpauthUrl = `otpauth://totp/${encodeURIComponent(productName)}:${encodeURIComponent(req.user.email)}?secret=${secret}&issuer=${encodeURIComponent(productName)}&algorithm=SHA1&digits=6&period=30`;
+  return res.json({ secret, otpauthUrl });
+});
+
+// POST /auth/totp/enable — verify first token from authenticator app (step 2)
+router.post("/totp/enable", auth, async (req, res) => {
+  const { token } = req.body as { token?: string };
+  if (!token) return res.status(400).json({ error: "token is required" });
+
+  const secret = await redisConnection.get(`totp_setup:${req.user.id}`);
+  if (!secret) return res.status(400).json({ error: "No TOTP setup in progress — call POST /auth/totp/setup first" });
+
+  const result = await totpVerify({ token, secret });
+  if (!result?.valid) return res.status(400).json({ error: "Invalid TOTP token" });
+
+  await db.update(users).set({ totpSecret: secret, totpEnabled: true }).where(eq(users.id, req.user.id));
+  await redisConnection.del(`totp_setup:${req.user.id}`);
+  return res.json({ enabled: true });
+});
+
+// POST /auth/totp/disable — disable TOTP (must supply current valid token)
+router.post("/totp/disable", auth, async (req, res) => {
+  const { token } = req.body as { token?: string };
+  if (!token) return res.status(400).json({ error: "token is required" });
+
+  const user = await db.query.users.findFirst({ where: eq(users.id, req.user.id) });
+  if (!user?.totpEnabled || !user.totpSecret) return res.status(400).json({ error: "2FA is not enabled" });
+
+  const result = await totpVerify({ token, secret: user.totpSecret });
+  if (!result?.valid) return res.status(400).json({ error: "Invalid TOTP token" });
+
+  await db.update(users).set({ totpEnabled: false, totpSecret: null }).where(eq(users.id, req.user.id));
+  return res.json({ disabled: true });
+});
+
+// POST /auth/totp/verify — complete login when TOTP is required
+router.post("/totp/verify", async (req, res) => {
+  const { pendingToken, token } = req.body as { pendingToken?: string; token?: string };
+  if (!pendingToken || !token) return res.status(400).json({ error: "pendingToken and token are required" });
+
+  const userId = await redisConnection.get(`totp_pending:${pendingToken}`);
+  if (!userId) return res.status(401).json({ error: "Invalid or expired pending token" });
+
+  const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
+  if (!user?.totpSecret || !user.organizationId) return res.status(401).json({ error: "Invalid session" });
+
+  const result = await totpVerify({ token, secret: user.totpSecret });
+  if (!result?.valid) return res.status(401).json({ error: "Invalid TOTP token" });
+
+  await redisConnection.del(`totp_pending:${pendingToken}`);
+
+  const jwtToken = issueToken({ id: user.id, email: user.email, orgId: user.organizationId, role: user.role });
+  res.cookie("auth_token", jwtToken, {
+    httpOnly: true,
+    secure: process.env["NODE_ENV"] === "production",
+    sameSite: "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+
+  return res.json({ user: { id: user.id, email: user.email, name: user.name } });
 });
 
 export { router as authRouter };
