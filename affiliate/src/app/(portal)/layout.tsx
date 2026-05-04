@@ -10,7 +10,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    api.get("/auth/me")
+    api.get("/auth/affiliate/me")
       .then(() => setReady(true))
       .catch(() => {
         router.replace("/login");

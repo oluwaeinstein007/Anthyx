@@ -41,8 +41,8 @@ export async function auth(req: Request, res: Response, next: NextFunction) {
       aud?: string;
     };
 
-    // Reject admin-scoped tokens on regular user routes
-    if (payload.aud === "admin") {
+    // Reject admin- or affiliate-scoped tokens on regular user routes
+    if (payload.aud === "admin" || payload.aud === "affiliate") {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
@@ -124,9 +124,56 @@ export function requireRole(...roles: string[]) {
   };
 }
 
+// Affiliate auth — requires aud: 'affiliate' and a valid affiliate_token cookie.
+export async function affiliateAuth(req: Request, res: Response, next: NextFunction) {
+  try {
+    const token =
+      req.cookies?.["affiliate_token"] ||
+      req.headers.authorization?.replace("Bearer ", "");
+
+    if (!token) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const secret = process.env["JWT_SECRET"];
+    if (!secret) throw new Error("JWT_SECRET not configured");
+
+    const payload = jwt.verify(token, secret) as {
+      sub: string;
+      email: string;
+      orgId: string;
+      role: string;
+      aud?: string;
+    };
+
+    if (payload.aud !== "affiliate") {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, payload.sub),
+    });
+
+    if (!user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    req.user = {
+      id: payload.sub,
+      email: payload.email,
+      orgId: payload.orgId,
+      role: payload.role,
+    };
+
+    next();
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+}
+
 export function issueToken(
   user: { id: string; email: string; orgId: string; role: string },
-  aud: "user" | "admin" = "user",
+  aud: "user" | "admin" | "affiliate" = "user",
 ): string {
   const secret = process.env["JWT_SECRET"];
   if (!secret) throw new Error("JWT_SECRET not configured");

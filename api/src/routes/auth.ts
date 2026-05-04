@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
 import { generateSecret as totpGenerateSecret, verify as totpVerify } from "otplib";
 import { db } from "../db/client";
-import { users, organizations, subscriptions, adminInvites } from "../db/schema";
+import { users, organizations, subscriptions, adminInvites, affiliates } from "../db/schema";
 import { issueToken, auth } from "../middleware/auth";
 import { redisConnection } from "../queue/client";
 import { z } from "zod";
@@ -660,6 +660,73 @@ router.post("/totp/verify", async (req, res) => {
   });
 
   return res.json({ user: { id: user.id, email: user.email, name: user.name } });
+});
+
+// ── Affiliate Auth ───────────────────────────────────────────────────────────────
+
+// POST /auth/affiliate/login — validates credentials, checks affiliate record, sets affiliate_token cookie
+router.post("/affiliate/login", async (req, res) => {
+  const parsed = LoginSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Validation failed" });
+
+  const { email, password } = parsed.data;
+
+  const user = await db.query.users.findFirst({ where: eq(users.email, email) });
+  if (!user?.passwordHash) return res.status(401).json({ error: "Invalid credentials" });
+
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) return res.status(401).json({ error: "Invalid credentials" });
+
+  const affiliate = await db.query.affiliates.findFirst({ where: eq(affiliates.userId, user.id) });
+  if (!affiliate) return res.status(403).json({ error: "No affiliate account found" });
+
+  const orgId = user.organizationId ?? "00000000-0000-0000-0000-000000000000";
+  const token = issueToken({ id: user.id, email: user.email, orgId, role: user.role }, "affiliate");
+
+  res.cookie("affiliate_token", token, {
+    httpOnly: true,
+    secure: process.env["NODE_ENV"] === "production",
+    sameSite: "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+
+  return res.json({ user: { id: user.id, email: user.email, name: user.name }, affiliate });
+});
+
+// GET /auth/affiliate/me — return current affiliate user from affiliate_token cookie
+router.get("/affiliate/me", async (req, res) => {
+  const token =
+    req.cookies?.["affiliate_token"] || req.headers.authorization?.replace("Bearer ", "");
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const jwtLib = await import("jsonwebtoken");
+    const payload = jwtLib.default.verify(token, process.env["JWT_SECRET"]!) as {
+      sub: string;
+      email: string;
+      orgId: string;
+      role: string;
+      aud?: string;
+    };
+
+    if (payload.aud !== "affiliate") return res.status(401).json({ error: "Unauthorized" });
+
+    const user = await db.query.users.findFirst({ where: eq(users.id, payload.sub) });
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const affiliate = await db.query.affiliates.findFirst({ where: eq(affiliates.userId, user.id) });
+    if (!affiliate) return res.status(403).json({ error: "No affiliate account found" });
+
+    return res.json({ id: user.id, email: user.email, name: user.name, affiliate });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+// POST /auth/affiliate/logout
+router.post("/affiliate/logout", (req, res) => {
+  res.clearCookie("affiliate_token");
+  return res.json({ ok: true });
 });
 
 export { router as authRouter };

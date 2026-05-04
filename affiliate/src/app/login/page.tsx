@@ -17,9 +17,7 @@ export default function AffiliateLoginPage() {
     setLoading(true);
     setError("");
     try {
-      await api.post("/auth/login", { email, password });
-      // Verify they have an affiliate record
-      await api.get("/affiliates/me");
+      await api.post("/auth/affiliate/login", { email, password });
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");

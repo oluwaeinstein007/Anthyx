@@ -2,10 +2,10 @@ import { Router } from "express";
 import { eq, desc, inArray } from "drizzle-orm";
 import { db } from "../db/client";
 import { affiliates, affiliateLinks, affiliateConversions } from "../db/schema";
-import { auth } from "../middleware/auth";
+import { affiliateAuth } from "../middleware/auth";
 
 const router = Router();
-router.use(auth);
+router.use(affiliateAuth);
 
 // GET /affiliates/me — get current user's affiliate record
 router.get("/me", async (req, res) => {
