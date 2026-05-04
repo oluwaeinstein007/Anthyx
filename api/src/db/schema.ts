@@ -109,6 +109,8 @@ export const users = pgTable("users", {
   emailVerified: boolean("email_verified").default(false),
   mustChangePassword: boolean("must_change_password").default(false),
   createdAt: timestamp("created_at").defaultNow(),
+  totpSecret: text("totp_secret"),
+  totpEnabled: boolean("totp_enabled").default(false),
 });
 
 // ── Brand Profiles ─────────────────────────────────────────────────────────────
@@ -318,6 +320,10 @@ export const scheduledPosts = pgTable("scheduled_posts", {
   segments: jsonb("segments"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmCampaign: text("utm_campaign"),
+  utmContent: text("utm_content"),
 });
 
 // ── Post Comments (team collaboration) ────────────────────────────────────────
@@ -728,4 +734,32 @@ export const adminInvites = pgTable("admin_invites", {
   acceptedAt: timestamp("accepted_at"),
   revokedAt: timestamp("revoked_at"),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Post Versions (edit history) ───────────────────────────────────────────────
+export const postVersions = pgTable("post_versions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  postId: uuid("post_id").references(() => scheduledPosts.id, { onDelete: "cascade" }).notNull(),
+  organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
+  editedBy: uuid("edited_by").references(() => users.id),
+  contentText: text("content_text").notNull(),
+  contentHashtags: text("content_hashtags").array(),
+  scheduledAt: timestamp("scheduled_at"),
+  versionNumber: integer("version_number").notNull().default(1),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Conversion Events (CRM tracking) ─────────────────────────────────────────
+export const conversionEvents = pgTable("conversion_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmCampaign: text("utm_campaign"),
+  utmContent: text("utm_content"),
+  eventType: text("event_type").notNull(),
+  amountCents: integer("amount_cents"),
+  metadata: jsonb("metadata"),
+  source: text("source").default("webhook"),
+  receivedAt: timestamp("received_at").defaultNow(),
 });

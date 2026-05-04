@@ -1,3 +1,5 @@
+import * as Sentry from "@sentry/node";
+Sentry.init({ dsn: process.env["SENTRY_DSN"] ?? "", enabled: !!process.env["SENTRY_DSN"] });
 import "express-async-errors";
 import express from "express";
 import cors from "cors";
@@ -24,6 +26,8 @@ import { feedsRouter } from "./routes/feeds";
 import { affiliatesRouter } from "./routes/affiliates";
 import { competitiveRouter } from "./routes/competitive";
 import { mailingListsRouter } from "./routes/mailing-lists";
+import { seoRouter } from "./routes/seo";
+import { crmRouter } from "./routes/crm";
 import { PlanLimitError } from "./services/billing/limits";
 import { registerMcpRoutes } from "./mcp/server";
 import { db } from "./db/client";
@@ -110,6 +114,8 @@ app.use("/v1/brands", feedsRouter);
 app.use("/v1/affiliates", affiliatesRouter);
 app.use("/v1/brands", competitiveRouter);
 app.use("/v1/mailing-lists", mailingListsRouter);
+app.use("/v1/seo", seoRouter);
+app.use("/v1/crm", crmRouter);
 
 // ── MCP SSE routes ────────────────────────────────────────────────────────────
 registerMcpRoutes(app);
@@ -130,6 +136,7 @@ app.use(
       });
     }
 
+    Sentry.captureException(err);
     console.error("[API] Unhandled error:", err);
     return res.status(500).json({ error: "Internal server error" });
   },

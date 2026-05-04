@@ -153,6 +153,46 @@ router.get("/invoices", auth, async (req, res) => {
   return res.json(invoices.data);
 });
 
+// GET /billing/proration-preview?tier=growth&interval=monthly — Stripe proration preview before upgrading
+router.get("/proration-preview", auth, async (req, res) => {
+  const { tier, interval } = req.query as { tier?: string; interval?: string };
+  if (!tier || !interval) return res.status(400).json({ error: "tier and interval are required" });
+
+  const sub = await db.query.subscriptions.findFirst({
+    where: eq(subscriptions.organizationId, req.user.orgId),
+  });
+
+  if (!sub?.stripeSubscriptionId || !sub.stripeCustomerId) {
+    return res.json({ preview: null, message: "No active Stripe subscription" });
+  }
+
+  const newPriceId = process.env[`STRIPE_PRICE_${tier.toUpperCase()}_${interval.toUpperCase()}`];
+  if (!newPriceId) return res.status(400).json({ error: `No Stripe price configured for ${tier} ${interval}` });
+
+  try {
+    const stripeSub = await stripe.subscriptions.retrieve(sub.stripeSubscriptionId);
+    const currentItemId = stripeSub.items.data[0]?.id;
+    if (!currentItemId) return res.status(400).json({ error: "Cannot retrieve current subscription items" });
+
+    const upcomingInvoice = await stripe.invoices.retrieveUpcoming({
+      customer: sub.stripeCustomerId,
+      subscription: sub.stripeSubscriptionId,
+      subscription_items: [{ id: currentItemId, price: newPriceId }],
+    });
+
+    return res.json({
+      amountDueCents: upcomingInvoice.amount_due,
+      creditsCents: upcomingInvoice.starting_balance,
+      subtotalCents: upcomingInvoice.subtotal,
+      currency: upcomingInvoice.currency,
+      periodEnd: new Date((upcomingInvoice as any).period_end * 1000).toISOString(),
+    });
+  } catch (err) {
+    console.error("[billing/proration-preview]", err);
+    return res.status(500).json({ error: "Failed to retrieve proration preview" });
+  }
+});
+
 // PUT /billing/overage-cap
 router.put("/overage-cap", auth, validate(UpdateOverageCapSchema), async (req, res) => {
   await db

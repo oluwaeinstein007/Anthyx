@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { eq, and, inArray, type SQL } from "drizzle-orm";
+import { eq, and, inArray, sql, type SQL } from "drizzle-orm";
 import multer from "multer";
 import { db } from "../db/client";
-import { scheduledPosts, postAnalytics, abTests, postStatusLogs, brandProfiles } from "../db/schema";
+import { scheduledPosts, postAnalytics, abTests, postStatusLogs, brandProfiles, postVersions } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { requireLimit } from "../middleware/plan-limits";
@@ -213,6 +213,26 @@ router.post("/", auth, async (req, res) => {
 // PUT /posts/:id
 router.put("/:id", auth, validate(UpdatePostSchema), async (req, res) => {
   const { scheduledAt, ...rest } = req.body as { scheduledAt?: string; contentText?: string; contentHashtags?: string[] };
+
+  // Capture current state as a version before overwriting
+  const versionCount = await db.select({ count: sql`count(*)` }).from(postVersions).where(eq(postVersions.postId, req.params.id!));
+  const nextVersion = parseInt(String((versionCount[0] as any)?.count ?? 0)) + 1;
+  // Fetch current post content
+  const currentPost = await db.query.scheduledPosts.findFirst({
+    where: and(eq(scheduledPosts.id, req.params.id!), eq(scheduledPosts.organizationId, req.user.orgId)),
+  });
+  if (currentPost) {
+    await db.insert(postVersions).values({
+      postId: currentPost.id,
+      organizationId: req.user.orgId,
+      editedBy: req.user.id,
+      contentText: currentPost.contentText,
+      contentHashtags: currentPost.contentHashtags ?? null,
+      scheduledAt: currentPost.scheduledAt,
+      versionNumber: nextVersion,
+    });
+  }
+
   const [updated] = await db
     .update(scheduledPosts)
     .set({
@@ -565,6 +585,19 @@ router.post("/:id/upload-media", auth, mediaUpload.single("file"), async (req, r
     const message = err instanceof Error ? err.message : "Upload failed";
     return res.status(500).json({ error: message });
   }
+});
+
+// GET /posts/:id/versions — edit history for a post
+router.get("/:id/versions", auth, async (req, res) => {
+  const post = await db.query.scheduledPosts.findFirst({
+    where: and(eq(scheduledPosts.id, req.params.id!), eq(scheduledPosts.organizationId, req.user.orgId)),
+  });
+  if (!post) return res.status(404).json({ error: "Not found" });
+  const versions = await db.query.postVersions.findMany({
+    where: eq(postVersions.postId, post.id),
+    orderBy: (v, { desc }) => [desc(v.versionNumber)],
+  });
+  return res.json(versions);
 });
 
 export { router as postsRouter };

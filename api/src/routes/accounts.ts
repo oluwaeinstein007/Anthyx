@@ -9,6 +9,13 @@ import type { Platform } from "@anthyx/types";
 import { randomBytes, createHash } from "crypto";
 import { createConnection } from "net";
 import { redisConnection } from "../queue/client";
+import { Agent as UndiciAgent } from "undici";
+import type { buildConnector } from "undici";
+
+// Force IPv4 for Telegram API calls — Docker containers lack IPv6 routing so
+// Node.js Happy Eyeballs tries IPv6 first, gets ENETUNREACH, and the race
+// corrupts the IPv4 attempt too, producing ETIMEDOUT.
+const tgAgent = new UndiciAgent({ connect: { family: 4 } as buildConnector.BuildOptions });
 
 // Basic TCP reachability check for SMTP (no nodemailer needed at connect time)
 function verifySMTPConnectivity(host: string, port: number): Promise<void> {
@@ -29,6 +36,7 @@ const OAUTH_STATE_TTL = 10 * 60; // 10 minutes
 
 // GET /accounts/oauth/:platform — generate OAuth URL
 router.get("/oauth/:platform", auth, async (req, res) => {
+  try {
   const platform = req.params.platform as Platform;
   const state = randomBytes(16).toString("hex");
 
@@ -189,10 +197,15 @@ router.get("/oauth/:platform", auth, async (req, res) => {
   }
 
   return res.json({ authUrl });
+  } catch (err) {
+    console.error("[accounts] oauth url error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // GET /accounts/oauth/callback
 router.get("/oauth/callback", async (req, res) => {
+  try {
   const { code, state, error } = req.query as Record<string, string>;
 
   if (error) return res.redirect(`${process.env["DASHBOARD_URL"]}/accounts?error=${error}`);
@@ -277,6 +290,10 @@ router.get("/oauth/callback", async (req, res) => {
   await backfillPlanPosts(orgId, account!.id, platform);
 
   return res.redirect(`${process.env["DASHBOARD_URL"]}/accounts?connected=${platform}`);
+  } catch (err) {
+    console.error("[accounts] oauth callback error:", err);
+    return res.redirect(`${process.env["DASHBOARD_URL"]}/accounts?error=connection_failed`);
+  }
 });
 
 // POST /accounts/telegram — connect via bot token (no OAuth)
@@ -292,7 +309,7 @@ router.post("/telegram", auth, async (req, res) => {
     const chat = chatId.trim();
 
     const tgFetch = (url: string) =>
-      fetch(url, { signal: AbortSignal.timeout(10_000) });
+      fetch(url, { signal: AbortSignal.timeout(10_000), dispatcher: tgAgent } as RequestInit);
 
     // Validate bot token
     let meRes: Response;
@@ -350,27 +367,46 @@ router.post("/telegram", auth, async (req, res) => {
       botUsername: bot.username,
     };
 
-    // Identify by chatId (the canonical Telegram identifier) rather than title,
-    // so two channels with the same title don't collapse into one account.
-    const existingByChatId = await db.query.socialAccounts.findFirst({
+    // Key = "chatId::botId" — lets same channel host multiple bots with different roles
+    // (e.g. one poster bot + one hype/comment bot) as separate accounts.
+    const botAccountKey = `${resolvedChatId}::${bot.id}`;
+
+    // 1. Exact match: same channel AND same bot (new key format)
+    let existing = await db.query.socialAccounts.findFirst({
       where: and(
         eq(socialAccounts.organizationId, req.user.orgId),
         eq(socialAccounts.platform, "telegram"),
-        eq(socialAccounts.accountId, resolvedChatId),
+        eq(socialAccounts.accountId, botAccountKey),
       ),
     });
 
+    // 2. Legacy match: old accounts stored just the chatId — migrate if same bot
+    if (!existing) {
+      const legacy = await db.query.socialAccounts.findFirst({
+        where: and(
+          eq(socialAccounts.organizationId, req.user.orgId),
+          eq(socialAccounts.platform, "telegram"),
+          eq(socialAccounts.accountId, resolvedChatId),
+        ),
+      });
+      if (legacy && (legacy.platformConfig as Record<string, unknown>)?.["botUsername"] === bot.username) {
+        existing = legacy;
+      }
+    }
+
     let account: typeof socialAccounts.$inferSelect;
 
-    if (existingByChatId) {
+    if (existing) {
+      // Update credentials and migrate accountId to new key format
       const [updated] = await db
         .update(socialAccounts)
-        .set({ accessToken: encryptToken(token), platformConfig, updatedAt: new Date() })
-        .where(eq(socialAccounts.id, existingByChatId.id))
+        .set({ accountId: botAccountKey, accessToken: encryptToken(token), platformConfig, updatedAt: new Date() })
+        .where(eq(socialAccounts.id, existing.id))
         .returning();
       account = updated!;
     } else {
-      // If the display name collides with an existing account, append the chat ID.
+      // New (channel, bot) pair — disambiguate handle if the channel name is already taken
+      // by a different bot so the user can tell them apart in the UI.
       const handleConflict = await db.query.socialAccounts.findFirst({
         where: and(
           eq(socialAccounts.organizationId, req.user.orgId),
@@ -378,7 +414,7 @@ router.post("/telegram", auth, async (req, res) => {
           eq(socialAccounts.accountHandle, handle),
         ),
       });
-      const finalHandle = handleConflict ? `${handle} (${resolvedChatId})` : handle;
+      const finalHandle = handleConflict ? `${handle} (@${bot.username})` : handle;
 
       const [inserted] = await db
         .insert(socialAccounts)
@@ -386,7 +422,7 @@ router.post("/telegram", auth, async (req, res) => {
           organizationId: req.user.orgId,
           platform: "telegram",
           accountHandle: finalHandle,
-          accountId: resolvedChatId,
+          accountId: botAccountKey,
           accessToken: encryptToken(token),
           platformConfig,
           isActive: true,
@@ -400,7 +436,7 @@ router.post("/telegram", auth, async (req, res) => {
     return res.json({
       id: account!.id,
       platform: "telegram",
-      accountHandle: handle,
+      accountHandle: account!.accountHandle,
       isActive: true,
     });
   } catch (err) {
@@ -411,6 +447,7 @@ router.post("/telegram", auth, async (req, res) => {
 
 // POST /accounts/discord — connect via bot token + channel ID
 router.post("/discord", auth, async (req, res) => {
+  try {
   const { botToken, channelId } = req.body as { botToken?: string; channelId?: string };
   if (!botToken?.trim() || !channelId?.trim()) {
     return res.status(400).json({ error: "Bot token and channel ID are required" });
@@ -433,29 +470,74 @@ router.post("/discord", auth, async (req, res) => {
   await PlanLimitsEnforcer.check(req.user.orgId, "account");
 
   const handle = ch.name ?? `channel_${ch.id}`;
-  const [account] = await db
-    .insert(socialAccounts)
-    .values({
-      organizationId: req.user.orgId,
-      platform: "discord",
-      accountHandle: handle,
-      accountId: ch.id,
-      accessToken: encryptToken(botToken.trim()),
-      platformConfig: { channelId: ch.id, channelName: ch.name, botUsername: me.username },
-      isActive: true,
-    })
-    .onConflictDoUpdate({
-      target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.accountHandle] as [typeof socialAccounts.organizationId, typeof socialAccounts.platform, typeof socialAccounts.accountHandle],
-      set: { accessToken: encryptToken(botToken.trim()), updatedAt: new Date() },
-    })
-    .returning();
+  const botChannelKey = `${ch.id}::${me.id}`;
+  const platformConfig = { channelId: ch.id, channelName: ch.name, botUsername: me.username };
 
-  await backfillPlanPosts(req.user.orgId, account!.id, "discord");
-  return res.json({ id: account!.id, platform: "discord", accountHandle: handle, isActive: true });
+  // Same channel + same bot → update; same channel + different bot → new account
+  let discordExisting = await db.query.socialAccounts.findFirst({
+    where: and(
+      eq(socialAccounts.organizationId, req.user.orgId),
+      eq(socialAccounts.platform, "discord"),
+      eq(socialAccounts.accountId, botChannelKey),
+    ),
+  });
+  // Legacy: old accounts stored just channelId — migrate if same bot
+  if (!discordExisting) {
+    const legacy = await db.query.socialAccounts.findFirst({
+      where: and(
+        eq(socialAccounts.organizationId, req.user.orgId),
+        eq(socialAccounts.platform, "discord"),
+        eq(socialAccounts.accountId, ch.id),
+      ),
+    });
+    if (legacy && (legacy.platformConfig as Record<string, unknown>)?.["botUsername"] === me.username) {
+      discordExisting = legacy;
+    }
+  }
+
+  let discordAccount: typeof socialAccounts.$inferSelect;
+  if (discordExisting) {
+    const [updated] = await db
+      .update(socialAccounts)
+      .set({ accountId: botChannelKey, accessToken: encryptToken(botToken.trim()), platformConfig, updatedAt: new Date() })
+      .where(eq(socialAccounts.id, discordExisting.id))
+      .returning();
+    discordAccount = updated!;
+  } else {
+    const handleConflict = await db.query.socialAccounts.findFirst({
+      where: and(
+        eq(socialAccounts.organizationId, req.user.orgId),
+        eq(socialAccounts.platform, "discord"),
+        eq(socialAccounts.accountHandle, handle),
+      ),
+    });
+    const finalHandle = handleConflict ? `${handle} (@${me.username})` : handle;
+    const [inserted] = await db
+      .insert(socialAccounts)
+      .values({
+        organizationId: req.user.orgId,
+        platform: "discord",
+        accountHandle: finalHandle,
+        accountId: botChannelKey,
+        accessToken: encryptToken(botToken.trim()),
+        platformConfig,
+        isActive: true,
+      })
+      .returning();
+    discordAccount = inserted!;
+  }
+
+  await backfillPlanPosts(req.user.orgId, discordAccount!.id, "discord");
+  return res.json({ id: discordAccount!.id, platform: "discord", accountHandle: discordAccount!.accountHandle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] discord connect error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // POST /accounts/slack — connect via bot OAuth token + channel ID
 router.post("/slack", auth, async (req, res) => {
+  try {
   const { botToken, channelId } = req.body as { botToken?: string; channelId?: string };
   if (!botToken?.trim() || !channelId?.trim()) {
     return res.status(400).json({ error: "Bot token and channel ID are required" });
@@ -489,10 +571,15 @@ router.post("/slack", auth, async (req, res) => {
 
   await backfillPlanPosts(req.user.orgId, account!.id, "slack");
   return res.json({ id: account!.id, platform: "slack", accountHandle: handle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] slack connect error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // POST /accounts/whatsapp — connect via WhatsApp Business Cloud API token + phone number ID
 router.post("/whatsapp", auth, async (req, res) => {
+  try {
   const { accessToken, phoneNumberId, displayName } = req.body as { accessToken?: string; phoneNumberId?: string; displayName?: string };
   if (!accessToken?.trim() || !phoneNumberId?.trim()) {
     return res.status(400).json({ error: "Access token and phone number ID are required" });
@@ -500,7 +587,8 @@ router.post("/whatsapp", auth, async (req, res) => {
 
   // Validate by fetching the phone number info
   const validRes = await fetch(
-    `https://graph.facebook.com/v19.0/${phoneNumberId.trim()}?fields=display_phone_number,verified_name&access_token=${accessToken.trim()}`,
+    `https://graph.facebook.com/v19.0/${phoneNumberId.trim()}?fields=display_phone_number,verified_name`,
+    { headers: { Authorization: `Bearer ${accessToken.trim()}` } },
   );
   if (!validRes.ok) return res.status(400).json({ error: "Invalid access token or phone number ID" });
   const info = (await validRes.json()) as { display_phone_number?: string; verified_name?: string; error?: { message: string } };
@@ -528,10 +616,15 @@ router.post("/whatsapp", auth, async (req, res) => {
 
   await backfillPlanPosts(req.user.orgId, account!.id, "whatsapp");
   return res.json({ id: account!.id, platform: "whatsapp", accountHandle: handle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] whatsapp connect error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // POST /accounts/bluesky — connect via AT Protocol identifier + app password
 router.post("/bluesky", auth, async (req, res) => {
+  try {
   const { identifier, appPassword } = req.body as { identifier?: string; appPassword?: string };
   if (!identifier?.trim() || !appPassword?.trim()) {
     return res.status(400).json({ error: "Identifier and app password are required" });
@@ -568,10 +661,15 @@ router.post("/bluesky", auth, async (req, res) => {
 
   await backfillPlanPosts(req.user.orgId, account!.id, "bluesky");
   return res.json({ id: account!.id, platform: "bluesky", accountHandle: session.handle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] bluesky connect error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // POST /accounts/mastodon — connect via instance URL + access token
 router.post("/mastodon", auth, async (req, res) => {
+  try {
   const { instanceUrl, accessToken } = req.body as { instanceUrl?: string; accessToken?: string };
   if (!instanceUrl?.trim() || !accessToken?.trim()) {
     return res.status(400).json({ error: "Instance URL and access token are required" });
@@ -608,10 +706,15 @@ router.post("/mastodon", auth, async (req, res) => {
 
   await backfillPlanPosts(req.user.orgId, account!.id, "mastodon");
   return res.json({ id: account!.id, platform: "mastodon", accountHandle: handle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] mastodon connect error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // POST /accounts/pinterest — connect via access token + board ID
 router.post("/pinterest", auth, async (req, res) => {
+  try {
   const { accessToken, boardId, boardName } = req.body as {
     accessToken?: string;
     boardId?: string;
@@ -670,6 +773,10 @@ router.post("/pinterest", auth, async (req, res) => {
 
   await backfillPlanPosts(req.user.orgId, account!.id, "pinterest");
   return res.json({ id: account!.id, platform: "pinterest", accountHandle: handle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] pinterest connect error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // POST /accounts/email — connect an email account with per-org credentials
@@ -798,7 +905,7 @@ router.put("/email/:id", auth, async (req, res) => {
       where: and(
         eq(socialAccounts.id, req.params.id!),
         eq(socialAccounts.organizationId, req.user.orgId),
-        eq(socialAccounts.platform, "email" as any),
+        eq(socialAccounts.platform, "email" as Platform),
       ),
     });
     if (!existing) return res.status(404).json({ error: "Email account not found" });
@@ -992,6 +1099,7 @@ router.put("/telegram/:id", auth, async (req, res) => {
 
 // PUT /accounts/discord/:id — update an existing Discord account
 router.put("/discord/:id", auth, async (req, res) => {
+  try {
   const { botToken, channelId } = req.body as { botToken?: string; channelId?: string };
   const channel = channelId?.trim();
   if (!channel) return res.status(400).json({ error: "Channel ID is required" });
@@ -1029,10 +1137,15 @@ router.put("/discord/:id", auth, async (req, res) => {
     and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
   );
   return res.json({ id: existing.id, platform: "discord", accountHandle: handle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] discord update error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // PUT /accounts/slack/:id — update an existing Slack account
 router.put("/slack/:id", auth, async (req, res) => {
+  try {
   const { botToken, channelId } = req.body as { botToken?: string; channelId?: string };
   const channel = channelId?.trim();
   if (!channel) return res.status(400).json({ error: "Channel ID is required" });
@@ -1064,10 +1177,15 @@ router.put("/slack/:id", auth, async (req, res) => {
     and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
   );
   return res.json({ id: existing.id, platform: "slack", accountHandle: handle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] slack update error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // PUT /accounts/whatsapp/:id — update an existing WhatsApp account
 router.put("/whatsapp/:id", auth, async (req, res) => {
+  try {
   const { accessToken, phoneNumberId, displayName } = req.body as { accessToken?: string; phoneNumberId?: string; displayName?: string };
   const phoneId = phoneNumberId?.trim();
   if (!phoneId) return res.status(400).json({ error: "Phone number ID is required" });
@@ -1081,7 +1199,8 @@ router.put("/whatsapp/:id", auth, async (req, res) => {
   const token = accessToken?.trim() ?? decryptToken(existing.accessToken!);
 
   const validRes = await fetch(
-    `https://graph.facebook.com/v19.0/${phoneId}?fields=display_phone_number,verified_name&access_token=${token}`,
+    `https://graph.facebook.com/v19.0/${phoneId}?fields=display_phone_number,verified_name`,
+    { headers: { Authorization: `Bearer ${token}` } },
   );
   if (!validRes.ok) return res.status(400).json({ error: "Invalid access token or phone number ID" });
   const info = (await validRes.json()) as { display_phone_number?: string; verified_name?: string; error?: { message: string } };
@@ -1100,10 +1219,15 @@ router.put("/whatsapp/:id", auth, async (req, res) => {
     and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
   );
   return res.json({ id: existing.id, platform: "whatsapp", accountHandle: handle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] whatsapp update error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // PUT /accounts/bluesky/:id — update an existing Bluesky account (always requires new credentials to create a fresh session)
 router.put("/bluesky/:id", auth, async (req, res) => {
+  try {
   const { identifier, appPassword } = req.body as { identifier?: string; appPassword?: string };
   if (!identifier?.trim() || !appPassword?.trim()) {
     return res.status(400).json({ error: "Identifier and app password are required" });
@@ -1133,10 +1257,15 @@ router.put("/bluesky/:id", auth, async (req, res) => {
     and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
   );
   return res.json({ id: existing.id, platform: "bluesky", accountHandle: session.handle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] bluesky update error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // PUT /accounts/mastodon/:id — update an existing Mastodon account
 router.put("/mastodon/:id", auth, async (req, res) => {
+  try {
   const { instanceUrl, accessToken } = req.body as { instanceUrl?: string; accessToken?: string };
   const rawInstance = instanceUrl?.trim();
   if (!rawInstance) return res.status(400).json({ error: "Instance URL is required" });
@@ -1169,10 +1298,15 @@ router.put("/mastodon/:id", auth, async (req, res) => {
     and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
   );
   return res.json({ id: existing.id, platform: "mastodon", accountHandle: handle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] mastodon update error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // PUT /accounts/pinterest/:id — update an existing Pinterest account
 router.put("/pinterest/:id", auth, async (req, res) => {
+  try {
   const { accessToken, boardId, boardName } = req.body as { accessToken?: string; boardId?: string; boardName?: string };
   const board = boardId?.trim();
   if (!board) return res.status(400).json({ error: "Board ID is required" });
@@ -1211,10 +1345,15 @@ router.put("/pinterest/:id", auth, async (req, res) => {
     and(eq(socialAccounts.id, req.params.id!), eq(socialAccounts.organizationId, req.user.orgId)),
   );
   return res.json({ id: existing.id, platform: "pinterest", accountHandle: handle, isActive: true });
+  } catch (err) {
+    console.error("[accounts] pinterest update error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // GET /accounts
 router.get("/", auth, async (req, res) => {
+  try {
   const list = await db.query.socialAccounts.findMany({
     where: eq(socialAccounts.organizationId, req.user.orgId),
   });
@@ -1261,12 +1400,17 @@ router.get("/", auth, async (req, res) => {
       agents: agentsByAccount.get(rest.id) ?? [],
     })),
   );
+  } catch (err) {
+    console.error("[accounts] list error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // PUT /accounts/:id/assign — assign account to a brand and a set of agents
 // Body: { brandId: string | null, agentIds: string[] }
 // Pass brandId=null + agentIds=[] to fully unassign.
 router.put("/:id/assign", auth, async (req, res) => {
+  try {
   const { brandId, agentIds = [] } = req.body as { brandId?: string | null; agentIds?: string[] };
 
   if (!brandId && agentIds.length > 0) {
@@ -1323,10 +1467,15 @@ router.put("/:id/assign", auth, async (req, res) => {
   });
 
   return res.json({ ok: true });
+  } catch (err) {
+    console.error("[accounts] assign error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // DELETE /accounts/:id
 router.delete("/:id", auth, async (req, res) => {
+  try {
   await db
     .delete(socialAccounts)
     .where(
@@ -1336,6 +1485,10 @@ router.delete("/:id", auth, async (req, res) => {
       ),
     );
   return res.json({ ok: true });
+  } catch (err) {
+    console.error("[accounts] delete error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 async function exchangeTwitterCode(code: string, codeVerifier: string) {
@@ -1376,7 +1529,7 @@ async function exchangeFacebookCode(code: string) {
   );
   const data = (await res.json()) as { access_token: string; expires_in?: number };
 
-  const meRes = await fetch(`https://graph.facebook.com/me?fields=name&access_token=${data.access_token}`);
+  const meRes = await fetch("https://graph.facebook.com/me?fields=name", { headers: { Authorization: `Bearer ${data.access_token}` } });
   const me = (await meRes.json()) as { id: string; name?: string };
 
   return { accessToken: data.access_token, expiresIn: data.expires_in, accountId: me.id, handle: me.name ?? "facebook_user" };
@@ -1475,7 +1628,8 @@ async function exchangeThreadsCode(code: string) {
   });
   const data = (await res.json()) as { access_token: string; user_id: string };
   const profileRes = await fetch(
-    `https://graph.threads.net/v1.0/me?fields=id,username&access_token=${data.access_token}`,
+    "https://graph.threads.net/v1.0/me?fields=id,username",
+    { headers: { Authorization: `Bearer ${data.access_token}` } },
   );
   const profile = (await profileRes.json()) as { id: string; username?: string };
   return { accessToken: data.access_token, accountId: data.user_id, handle: profile.username ?? "threads_user" };

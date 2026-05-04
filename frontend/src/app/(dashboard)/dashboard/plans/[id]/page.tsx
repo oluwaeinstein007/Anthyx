@@ -104,6 +104,41 @@ function getDaysInRange(start: string, end: string): Date[] {
   return days;
 }
 
+function getDaysInMonth(year: number, month: number): Date[] {
+  const days: Date[] = [];
+  const date = new Date(year, month, 1);
+  while (date.getMonth() === month) {
+    days.push(new Date(date));
+    date.setDate(date.getDate() + 1);
+  }
+  return days;
+}
+
+const PLATFORM_COLORS: Record<string, string> = {
+  x: "bg-gray-900",
+  instagram: "bg-pink-500",
+  linkedin: "bg-blue-600",
+  facebook: "bg-blue-800",
+  tiktok: "bg-black",
+  threads: "bg-gray-700",
+  pinterest: "bg-red-600",
+  email: "bg-green-600",
+  discord: "bg-indigo-600",
+  slack: "bg-yellow-500",
+  youtube: "bg-red-500",
+};
+
+const POST_STATUS_BADGE: Record<string, string> = {
+  pending_review: "bg-yellow-100 text-yellow-700",
+  approved: "bg-green-100 text-green-700",
+  scheduled: "bg-green-100 text-green-700",
+  published: "bg-blue-100 text-blue-700",
+  vetoed: "bg-red-100 text-red-700",
+  failed: "bg-red-100 text-red-700",
+  draft: "bg-gray-100 text-gray-600",
+  silenced: "bg-red-100 text-red-600",
+};
+
 export default function PlanDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -130,6 +165,10 @@ export default function PlanDetailPage() {
   // List view state
   const [listPage, setListPage] = useState(0);
   const [expandedPostId, setExpandedPostId] = useState<string | null>(null);
+
+  // Month-grid calendar state (initialised after plan loads — updated below when plan is available)
+  const [calMonth, setCalMonth] = useState<{ year: number; month: number } | null>(null);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   const { data: plan, isLoading, isError, error } = useQuery<MarketingPlan>({
     queryKey: ["plan", id],
@@ -289,6 +328,32 @@ export default function PlanDetailPage() {
     if (!postsByDay[dayKey]) postsByDay[dayKey] = [];
     postsByDay[dayKey].push(post);
   }
+
+  // Derive active calendar month — default to plan's start month on first render
+  const startD = new Date(plan.startDate);
+  const activeCalMonth = calMonth ?? { year: startD.getFullYear(), month: startD.getMonth() };
+
+  function prevCalMonth() {
+    const m = activeCalMonth.month === 0 ? 11 : activeCalMonth.month - 1;
+    const y = activeCalMonth.month === 0 ? activeCalMonth.year - 1 : activeCalMonth.year;
+    setCalMonth({ year: y, month: m });
+    setSelectedDay(null);
+  }
+  function nextCalMonth() {
+    const m = activeCalMonth.month === 11 ? 0 : activeCalMonth.month + 1;
+    const y = activeCalMonth.month === 11 ? activeCalMonth.year + 1 : activeCalMonth.year;
+    setCalMonth({ year: y, month: m });
+    setSelectedDay(null);
+  }
+
+  const calDays = getDaysInMonth(activeCalMonth.year, activeCalMonth.month);
+  // Offset: 0=Sun,1=Mon,...,6=Sat
+  const firstDayOffset = calDays[0]!.getDay();
+  const monthLabel = new Date(activeCalMonth.year, activeCalMonth.month, 1).toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
+  const selectedDayPosts = selectedDay ? (postsByDay[selectedDay] ?? []) : [];
 
   const canEdit = !["generating", "completed"].includes(plan.status);
 
@@ -585,99 +650,155 @@ export default function PlanDetailPage() {
         </div>
       </div>
 
-      {/* Calendar view */}
+      {/* Calendar view — month grid */}
       {view === "calendar" && (
-        <div className="space-y-1">
-          {days.map((day) => {
-            const key = day.toISOString().split("T")[0]!;
-            const dayPosts = postsByDay[key] ?? [];
-            const isToday = key === new Date().toISOString().split("T")[0];
+        <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+          {/* Month navigation header */}
+          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+            <button
+              onClick={prevCalMonth}
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+              aria-label="Previous month"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="text-sm font-semibold text-gray-800">{monthLabel}</span>
+            <button
+              onClick={nextCalMonth}
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+              aria-label="Next month"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
 
-            return (
-              <div
-                key={key}
-                className={`flex gap-3 p-3 rounded-xl ${
-                  isToday ? "bg-green-50 border border-green-200" : "bg-white border border-gray-100"
-                }`}
-              >
-                <div className="w-20 shrink-0">
-                  <p
-                    className={`text-xs font-semibold ${
-                      isToday ? "text-green-700" : "text-gray-500"
+          {/* Day-of-week header */}
+          <div className="grid grid-cols-7 border-b border-gray-100">
+            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+              <div key={d} className="py-2 text-center text-xs font-medium text-gray-400">
+                {d}
+              </div>
+            ))}
+          </div>
+
+          {/* Day cells */}
+          <div className="grid grid-cols-7">
+            {/* Leading empty cells for offset */}
+            {Array.from({ length: firstDayOffset }, (_, i) => (
+              <div key={`empty-${i}`} className="min-h-[80px] border-b border-r border-gray-50 bg-gray-50/50" />
+            ))}
+
+            {calDays.map((day) => {
+              const key = day.toISOString().split("T")[0]!;
+              const dayPosts = postsByDay[key] ?? [];
+              const isToday = key === new Date().toISOString().split("T")[0];
+              const isSelected = key === selectedDay;
+              const isInPlan = !!postsByDay[key] || days.some((d) => d.toISOString().split("T")[0] === key);
+
+              return (
+                <button
+                  key={key}
+                  onClick={() => setSelectedDay(isSelected ? null : key)}
+                  className={`min-h-[80px] p-2 border-b border-r border-gray-100 text-left transition-colors ${
+                    isSelected
+                      ? "bg-gray-900 text-white"
+                      : isToday
+                        ? "bg-green-50"
+                        : "hover:bg-gray-50"
+                  } ${!isInPlan ? "opacity-40" : ""}`}
+                >
+                  <span
+                    className={`text-xs font-semibold block mb-1.5 ${
+                      isSelected ? "text-white" : isToday ? "text-green-700" : "text-gray-600"
                     }`}
                   >
-                    {day.toLocaleDateString("en-US", { weekday: "short" })}
-                  </p>
-                  <p
-                    className={`text-sm font-bold ${
-                      isToday ? "text-green-800" : "text-gray-800"
-                    }`}
-                  >
-                    {day.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                  </p>
-                </div>
+                    {day.getDate()}
+                  </span>
+                  {/* Platform colored dots */}
+                  <div className="flex flex-wrap gap-1">
+                    {dayPosts.slice(0, 6).map((post) => (
+                      <span
+                        key={post.id}
+                        title={`${post.platform} · ${STATUS_LABEL[post.status] ?? post.status}`}
+                        className={`w-2 h-2 rounded-full shrink-0 ${
+                          PLATFORM_COLORS[post.platform] ?? "bg-gray-400"
+                        }`}
+                      />
+                    ))}
+                    {dayPosts.length > 6 && (
+                      <span className={`text-xs leading-none ${isSelected ? "text-gray-300" : "text-gray-400"}`}>
+                        +{dayPosts.length - 6}
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
 
-                <div className="flex-1 min-w-0">
-                  {dayPosts.length === 0 ? (
-                    <p className="text-xs text-gray-300 italic">No posts</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {dayPosts.map((post) => (
-                        <div
-                          key={post.id}
-                          className={`flex flex-col bg-white border rounded-lg px-2.5 py-1.5 text-xs shadow-sm ${
-                            post.status === "failed" ? "border-red-200" : "border-gray-200"
+          {/* Selected day detail panel */}
+          {selectedDay && (
+            <div className="border-t border-gray-200 px-5 py-4">
+              <p className="text-xs font-semibold text-gray-500 mb-3">
+                {new Date(selectedDay + "T12:00:00").toLocaleDateString("en-US", {
+                  weekday: "long", month: "long", day: "numeric",
+                })}
+                {" "}
+                <span className="font-normal text-gray-400">
+                  {selectedDayPosts.length === 0
+                    ? "— no posts"
+                    : `— ${selectedDayPosts.length} post${selectedDayPosts.length !== 1 ? "s" : ""}`}
+                </span>
+              </p>
+              {selectedDayPosts.length === 0 ? (
+                <p className="text-sm text-gray-400 italic">No posts scheduled for this day.</p>
+              ) : (
+                <div className="space-y-2">
+                  {selectedDayPosts.map((post) => {
+                    const text = post.contentText ?? post.caption ?? "";
+                    return (
+                      <div
+                        key={post.id}
+                        className="flex items-start gap-3 p-3 rounded-xl border border-gray-100 bg-gray-50"
+                      >
+                        <span
+                          className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1 ${
+                            PLATFORM_COLORS[post.platform] ?? "bg-gray-400"
                           }`}
-                        >
-                          <div className="flex items-center gap-1.5">
-                            <span
-                              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                STATUS_DOT[post.status] ?? "bg-gray-300"
-                              }`}
-                            />
-                            <span className="capitalize font-medium text-gray-700">
-                              {post.platform}
-                            </span>
-                            {!post.socialAccountId && (
-                              <span
-                                className="text-orange-500 text-xs font-medium"
-                                title="Connect this platform in Accounts to enable publishing"
-                              >
-                                ⚠
-                              </span>
-                            )}
-                            <span className="text-gray-400">
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap mb-1">
+                            <span className="capitalize text-xs font-semibold text-gray-700">{post.platform}</span>
+                            <span className="text-xs text-gray-400">
                               {new Date(post.scheduledAt).toLocaleTimeString("en-US", {
                                 hour: "numeric",
                                 minute: "2-digit",
                               })}
                             </span>
-                            <span className="text-gray-300">·</span>
                             <span
-                              className={`${
-                                post.status === "published"
-                                  ? "text-green-600"
-                                  : post.status === "failed"
-                                    ? "text-red-500"
-                                    : "text-gray-500"
+                              className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                                POST_STATUS_BADGE[post.status] ?? "bg-gray-100 text-gray-600"
                               }`}
                             >
                               {STATUS_LABEL[post.status] ?? post.status}
                             </span>
                           </div>
-                          {post.status === "failed" && post.errorMessage && (
-                            <p className="mt-0.5 text-red-400 leading-tight pl-3">
-                              {post.errorMessage}
+                          {text && (
+                            <p className="text-xs text-gray-600 line-clamp-2">
+                              {text.slice(0, 50)}{text.length > 50 ? "…" : ""}
                             </p>
                           )}
+                          {post.status === "failed" && post.errorMessage && (
+                            <p className="text-xs text-red-500 mt-0.5">{post.errorMessage}</p>
+                          )}
                         </div>
-                      ))}
-                    </div>
-                  )}
+                      </div>
+                    );
+                  })}
                 </div>
-              </div>
-            );
-          })}
+              )}
+            </div>
+          )}
         </div>
       )}
 
