@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import {
   ListChecks, CheckCircle2, XCircle, Clock, AlertCircle, Send,
   FileEdit, Filter, BarChart3, X, ZoomIn, Heart, MessageCircle,
-  Repeat2, Eye, Play,
+  Repeat2, Eye, Play, Download,
 } from "lucide-react";
 
 interface Post {
@@ -362,6 +362,18 @@ export default function PostsPage() {
           <h1 className="text-2xl font-bold text-gray-900">Posts</h1>
           <p className="text-sm text-gray-500 mt-1">All scheduled and published posts across your agents</p>
         </div>
+        <button
+          onClick={() => {
+            const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/v1";
+            const params = new URLSearchParams();
+            if (statusFilter) params.set("status", statusFilter);
+            window.location.href = `${apiBase}/posts/export?${params}`;
+          }}
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
+        >
+          <Download className="w-4 h-4" />
+          Export CSV
+        </button>
       </div>
 
       {/* Status filter */}

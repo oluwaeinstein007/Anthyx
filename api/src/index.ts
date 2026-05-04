@@ -28,7 +28,9 @@ import { competitiveRouter } from "./routes/competitive";
 import { mailingListsRouter } from "./routes/mailing-lists";
 import { seoRouter } from "./routes/seo";
 import { crmRouter } from "./routes/crm";
+import { formsRouter } from "./routes/forms";
 import { PlanLimitError } from "./services/billing/limits";
+import { requireActiveSubscription } from "./middleware/subscription-guard";
 import { registerMcpRoutes } from "./mcp/server";
 import { db } from "./db/client";
 import { sql } from "drizzle-orm";
@@ -92,30 +94,40 @@ app.get("/health", async (_, res) => {
   return res.status(status === "ok" ? 200 : 503).json({ status, db: dbOk, redis: redisOk, ts: new Date().toISOString() });
 });
 
+// ── Subscription guard — block writes for suspended orgs ──────────────────────
+// Passes GET/HEAD/OPTIONS through; blocks POST/PUT/PATCH/DELETE with 402.
+const writeGuard: express.RequestHandler = (req, res, next) => {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+    return next();
+  }
+  return requireActiveSubscription(req, res, next);
+};
+
 // ── API routes ────────────────────────────────────────────────────────────────
 app.use("/v1/auth", authRouter);
-app.use("/v1/brands", brandsRouter);
-app.use("/v1/agents", agentsRouter);
-app.use("/v1/accounts", accountsRouter);
-app.use("/v1/plans", plansRouter);
-app.use("/v1/posts", postsRouter);
+app.use("/v1/brands", writeGuard, brandsRouter);
+app.use("/v1/agents", writeGuard, agentsRouter);
+app.use("/v1/accounts", writeGuard, accountsRouter);
+app.use("/v1/plans", writeGuard, plansRouter);
+app.use("/v1/posts", writeGuard, postsRouter);
 app.use("/v1/billing", billingRouter);
 app.use("/v1/guardrails", guardrailsRouter);
 app.use("/v1/analytics", analyticsRouter);
-app.use("/v1/repurpose", repurposeRouter);
-app.use("/v1/campaigns", campaignsRouter);
-app.use("/v1/team", teamRouter);
-app.use("/v1/webhooks", webhooksRouter);
+app.use("/v1/repurpose", writeGuard, repurposeRouter);
+app.use("/v1/campaigns", writeGuard, campaignsRouter);
+app.use("/v1/team", writeGuard, teamRouter);
+app.use("/v1/webhooks", writeGuard, webhooksRouter);
 app.use("/v1/reports", reportsRouter);
 app.use("/v1/admin", adminRouter);
-app.use("/v1/inbox", inboxRouter);
-app.use("/v1/email-campaigns", emailCampaignsRouter);
-app.use("/v1/brands", feedsRouter);
+app.use("/v1/inbox", writeGuard, inboxRouter);
+app.use("/v1/email-campaigns", writeGuard, emailCampaignsRouter);
+app.use("/v1/brands", writeGuard, feedsRouter);
 app.use("/v1/affiliates", affiliatesRouter);
-app.use("/v1/brands", competitiveRouter);
-app.use("/v1/mailing-lists", mailingListsRouter);
+app.use("/v1/brands", writeGuard, competitiveRouter);
+app.use("/v1/mailing-lists", writeGuard, mailingListsRouter);
 app.use("/v1/seo", seoRouter);
 app.use("/v1/crm", crmRouter);
+app.use("/v1/forms", formsRouter);
 
 // ── MCP SSE routes ────────────────────────────────────────────────────────────
 registerMcpRoutes(app);

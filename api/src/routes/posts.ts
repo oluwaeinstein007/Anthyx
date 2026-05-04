@@ -487,6 +487,64 @@ router.post("/ab-tests/:abTestId/promote", auth, async (req, res) => {
   return res.json(result);
 });
 
+// GET /posts/export — CSV download of all posts (with analytics)
+// Query params: status, platform, brandProfileId
+router.get("/export", auth, async (req, res) => {
+  const { status, platform, brandProfileId } = req.query as Record<string, string | undefined>;
+
+  const filters: import("drizzle-orm").SQL[] = [eq(scheduledPosts.organizationId, req.user.orgId)];
+  if (status) filters.push(eq(scheduledPosts.status, status as never));
+  if (platform) filters.push(eq(scheduledPosts.platform, platform as never));
+  if (brandProfileId) filters.push(eq(scheduledPosts.brandProfileId, brandProfileId));
+
+  const posts = await db.query.scheduledPosts.findMany({
+    where: and(...filters),
+    orderBy: (p, { desc: d }) => [d(p.scheduledAt)],
+    limit: 10000,
+  });
+
+  const postIds = posts.map((p) => p.id);
+  const analyticsData =
+    postIds.length > 0
+      ? await db.query.postAnalytics.findMany({
+          where: inArray(postAnalytics.postId, postIds),
+        })
+      : [];
+
+  const analyticsMap = new Map(analyticsData.map((a) => [a.postId, a]));
+  const escape = (s: string) => `"${(s ?? "").replace(/"/g, '""').replace(/\n/g, " ")}"`;
+
+  const header =
+    "id,platform,status,scheduledAt,publishedAt,likes,reposts,comments,impressions,clicks,engagementRate,contentText\n";
+
+  const rows = posts
+    .map((p) => {
+      const a = analyticsMap.get(p.id);
+      return [
+        p.id,
+        p.platform,
+        p.status,
+        p.scheduledAt?.toISOString() ?? "",
+        p.publishedAt?.toISOString() ?? "",
+        a?.likes ?? 0,
+        a?.reposts ?? 0,
+        a?.comments ?? 0,
+        a?.impressions ?? 0,
+        a?.clicks ?? 0,
+        a?.engagementRate ?? "",
+        escape(p.contentText),
+      ].join(",");
+    })
+    .join("\n");
+
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="posts-export-${new Date().toISOString().slice(0, 10)}.csv"`,
+  );
+  return res.send(header + rows);
+});
+
 // GET /posts/:id — get single post
 router.get("/:id", auth, async (req, res) => {
   const post = await db.query.scheduledPosts.findFirst({

@@ -1,9 +1,16 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import { BarChart3, Globe, TrendingUp, Trophy, Heart, MessageSquare, Eye } from "lucide-react";
+import {
+  BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, CartesianGrid, Legend,
+} from "recharts";
+import {
+  BarChart3, Globe, TrendingUp, Trophy, Heart, MessageSquare,
+  Eye, Download, Sparkles, X,
+} from "lucide-react";
 
 interface AnalyticsData {
   totalPublished: number;
@@ -28,6 +35,15 @@ interface BestPostsResponse {
   posts: PostWithAnalytics[];
 }
 
+interface WeeklyPoint {
+  week: string;
+  likes: number;
+  reposts: number;
+  comments: number;
+  impressions: number;
+  posts: number;
+}
+
 const PLATFORM_EMOJI: Record<string, string> = {
   x: "𝕏", instagram: "📸", linkedin: "💼", facebook: "📘",
   tiktok: "🎵", discord: "💬", threads: "🧵", bluesky: "🦋",
@@ -35,6 +51,9 @@ const PLATFORM_EMOJI: Record<string, string> = {
 };
 
 export default function AnalyticsPage() {
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [loadingAi, setLoadingAi] = useState(false);
+
   const { data, isLoading } = useQuery<AnalyticsData>({
     queryKey: ["analytics"],
     queryFn: () => api.get<AnalyticsData>("/analytics"),
@@ -44,6 +63,24 @@ export default function AnalyticsPage() {
     queryKey: ["analytics-best-posts"],
     queryFn: () => api.get<BestPostsResponse>("/analytics/posts?limit=10"),
   });
+
+  const { data: weekly } = useQuery<WeeklyPoint[]>({
+    queryKey: ["analytics-weekly"],
+    queryFn: () => api.get<WeeklyPoint[]>("/analytics/weekly?weeks=12"),
+  });
+
+  async function getAiInterpretation() {
+    setLoadingAi(true);
+    setAiSummary(null);
+    try {
+      const r = await api.post<{ summary: string }>("/analytics/interpret");
+      setAiSummary(r.summary);
+    } catch {
+      setAiSummary("Unable to generate summary. Please try again.");
+    } finally {
+      setLoadingAi(false);
+    }
+  }
 
   if (isLoading) {
     return (
@@ -68,12 +105,47 @@ export default function AnalyticsPage() {
     ? (chartData.reduce((s, d) => s + d.engagement, 0) / chartData.length).toFixed(2)
     : "0";
 
+  function downloadCsv() {
+    const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/v1";
+    window.location.href = `${apiBase}/analytics/export?days=90`;
+  }
+
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
-        <p className="text-sm text-gray-500 mt-1">Engagement performance across all platforms (last 30 days).</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
+          <p className="text-sm text-gray-500 mt-1">Engagement performance across all platforms (last 30 days).</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={getAiInterpretation}
+            disabled={loadingAi}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-xl transition-colors disabled:opacity-50"
+          >
+            <Sparkles className="w-4 h-4" />
+            {loadingAi ? "Analysing…" : "AI Summary"}
+          </button>
+          <button
+            onClick={downloadCsv}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
+          >
+            <Download className="w-4 h-4" />
+            Export CSV
+          </button>
+        </div>
       </div>
+
+      {/* AI summary banner */}
+      {aiSummary && (
+        <div className="flex items-start gap-3 p-5 bg-purple-50 border border-purple-200 rounded-2xl">
+          <Sparkles className="w-5 h-5 text-purple-500 shrink-0 mt-0.5" />
+          <p className="text-sm text-purple-900 leading-relaxed flex-1">{aiSummary}</p>
+          <button onClick={() => setAiSummary(null)} className="text-purple-400 hover:text-purple-700 shrink-0">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -116,6 +188,26 @@ export default function AnalyticsPage() {
         </div>
       ) : (
         <div className="grid gap-6">
+          {/* Engagement over time — line chart */}
+          {(weekly?.length ?? 0) > 0 && (
+            <div className="p-6 bg-white border border-gray-200 rounded-2xl">
+              <h2 className="text-sm font-semibold text-gray-900 mb-5">Engagement over time (last 12 weeks)</h2>
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={weekly} margin={{ top: 4, right: 8, bottom: 0, left: -16 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                  <XAxis dataKey="week" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12 }} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Line type="monotone" dataKey="likes" stroke="#f59e0b" strokeWidth={2} dot={false} name="Likes" />
+                  <Line type="monotone" dataKey="comments" stroke="#6366f1" strokeWidth={2} dot={false} name="Comments" />
+                  <Line type="monotone" dataKey="reposts" stroke="#10b981" strokeWidth={2} dot={false} name="Reposts" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Platform bar charts */}
           <div className="p-6 bg-white border border-gray-200 rounded-2xl">
             <h2 className="text-sm font-semibold text-gray-900 mb-5">Posts published by platform</h2>
             <ResponsiveContainer width="100%" height={240}>

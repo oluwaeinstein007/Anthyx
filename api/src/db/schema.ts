@@ -43,6 +43,7 @@ export const postStatusEnum = pgEnum("post_status", [
   "failed",
   "vetoed",
   "silenced",
+  "paused",
 ]);
 
 export const planStatusEnum = pgEnum("plan_status", [
@@ -433,11 +434,13 @@ export const subscriptions = pgTable("subscriptions", {
   paystackSubscriptionCode: text("paystack_subscription_code"),
   paystackEmailToken: text("paystack_email_token"),
   paystackPlanCode: text("paystack_plan_code"),
-  status: text("status").default("active"),
+  status: text("status").default("active"), // active | trialing | past_due | grace_period | suspended | cancelled
   trialEndsAt: timestamp("trial_ends_at"),
   currentPeriodStart: timestamp("current_period_start"),
   currentPeriodEnd: timestamp("current_period_end"),
   cancelledAt: timestamp("cancelled_at"),
+  gracePeriodEndsAt: timestamp("grace_period_ends_at"),
+  accessUntil: timestamp("access_until"),
   overageCapCents: integer("overage_cap_cents").default(5000),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -747,6 +750,29 @@ export const postVersions = pgTable("post_versions", {
   scheduledAt: timestamp("scheduled_at"),
   versionNumber: integer("version_number").notNull().default(1),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Forms & Responses ─────────────────────────────────────────────────────────
+
+export const forms = pgTable("forms", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
+  brandProfileId: uuid("brand_profile_id").references(() => brandProfiles.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  fields: jsonb("fields").notNull().default(sql`'[]'`), // FormField[]
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const formResponses = pgTable("form_responses", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  formId: uuid("form_id").references(() => forms.id, { onDelete: "cascade" }).notNull(),
+  organizationId: uuid("organization_id").references(() => organizations.id).notNull(),
+  respondentEmail: text("respondent_email"),
+  data: jsonb("data").notNull().default(sql`'{}'`), // { fieldId: value }
+  submittedAt: timestamp("submitted_at").defaultNow(),
 });
 
 // ── Conversion Events (CRM tracking) ─────────────────────────────────────────

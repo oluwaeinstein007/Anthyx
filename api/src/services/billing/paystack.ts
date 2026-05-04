@@ -1,7 +1,7 @@
 import { createHmac } from "crypto";
-import { eq } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../../db/client";
-import { subscriptions } from "../../db/schema";
+import { subscriptions, users, scheduledPosts } from "../../db/schema";
 import type { PlanTier } from "@anthyx/types";
 import { productConfig } from "@anthyx/config";
 
@@ -181,6 +181,10 @@ async function handleChargeSuccess(data: Record<string, unknown>) {
   const orgId = metadata?.organizationId;
   if (!orgId) return;
 
+  const existing = await db.query.subscriptions.findFirst({
+    where: eq(subscriptions.organizationId, orgId),
+  });
+
   const customer = data["customer"] as { customer_code?: string } | null;
   const planCode = (data["plan"] as string | null) ?? "";
   const tier = PLAN_CODE_TO_TIER[planCode] ?? null;
@@ -191,9 +195,23 @@ async function handleChargeSuccess(data: Record<string, unknown>) {
       paystackCustomerCode: customer?.customer_code ?? null,
       ...(tier ? { tier, billingProvider: "paystack", paystackPlanCode: planCode } : {}),
       status: "active",
+      gracePeriodEndsAt: null,
       updatedAt: new Date(),
     })
     .where(eq(subscriptions.organizationId, orgId));
+
+  // Resume paused posts if reactivating from grace period or suspension
+  if (existing?.status === "suspended" || existing?.status === "grace_period") {
+    await db
+      .update(scheduledPosts)
+      .set({ status: "scheduled", updatedAt: new Date() })
+      .where(
+        and(
+          eq(scheduledPosts.organizationId, orgId),
+          eq(scheduledPosts.status, "paused"),
+        ),
+      );
+  }
 }
 
 async function handleSubscriptionDisable(data: Record<string, unknown>) {
@@ -203,17 +221,56 @@ async function handleSubscriptionDisable(data: Record<string, unknown>) {
 
   await db
     .update(subscriptions)
-    .set({ tier: "sandbox", status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() })
+    .set({ tier: "sandbox", status: "suspended", cancelledAt: new Date(), gracePeriodEndsAt: null, updatedAt: new Date() })
     .where(eq(subscriptions.organizationId, orgId));
+
+  await pauseOrgPosts(orgId);
 }
 
 async function handleInvoiceFailed(data: Record<string, unknown>) {
-  const subscription = data["subscription"] as { customer?: { metadata?: { organizationId?: string } } } | null;
-  const orgId = subscription?.customer?.metadata?.organizationId;
+  const sub = data["subscription"] as { customer?: { metadata?: { organizationId?: string } } } | null;
+  const orgId = sub?.customer?.metadata?.organizationId;
   if (!orgId) return;
+
+  const gracePeriodEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
   await db
     .update(subscriptions)
-    .set({ status: "past_due", updatedAt: new Date() })
+    .set({ status: "grace_period", gracePeriodEndsAt, updatedAt: new Date() })
     .where(eq(subscriptions.organizationId, orgId));
+
+  await pauseOrgPosts(orgId);
+
+  // Dunning email
+  const owner = await db.query.users.findFirst({
+    where: and(eq(users.organizationId, orgId), eq(users.role, "owner")),
+  });
+  if (owner?.email) {
+    const apiKey = process.env["RESEND_API_KEY"];
+    const dashUrl = process.env["DASHBOARD_URL"] ?? "https://app.anthyx.com";
+    if (apiKey) {
+      await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          from: process.env["EMAIL_FROM"] ?? "billing@anthyx.com",
+          to: [owner.email],
+          subject: "Action required: payment failed — 7-day grace period started",
+          html: `<p>Hi ${owner.name ?? "there"},</p><p>We couldn't process your Paystack payment. You have a 7-day grace period before posting is paused. Please update your payment method.</p><p><a href="${dashUrl}/dashboard/billing">Update payment method →</a></p>`,
+        }),
+      }).catch((e) => console.error("[Dunning] Email failed:", e));
+    }
+  }
+}
+
+async function pauseOrgPosts(orgId: string) {
+  await db
+    .update(scheduledPosts)
+    .set({ status: "paused", updatedAt: new Date() })
+    .where(
+      and(
+        eq(scheduledPosts.organizationId, orgId),
+        inArray(scheduledPosts.status, ["scheduled", "approved"]),
+      ),
+    );
 }

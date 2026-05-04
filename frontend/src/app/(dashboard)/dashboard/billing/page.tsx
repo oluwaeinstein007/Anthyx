@@ -7,7 +7,7 @@ import { api } from "@/lib/api";
 import Link from "next/link";
 import {
   CreditCard, ArrowRight, AlertTriangle, Clock,
-  TrendingUp, Sparkles, Check,
+  TrendingUp, Sparkles, Check, XCircle, RefreshCw,
 } from "lucide-react";
 
 interface Subscription {
@@ -16,6 +16,8 @@ interface Subscription {
   currentPeriodEnd: string | null;
   trialEndsAt: string | null;
   overageCapCents: number;
+  gracePeriodEndsAt?: string | null;
+  accessUntil?: string | null;
 }
 interface Usage {
   postsPublished: number;
@@ -95,7 +97,6 @@ function BillingPageContent() {
       .then(() => qc.invalidateQueries({ queryKey: ["billing"] }))
       .catch(console.error)
       .finally(() => {
-        // Strip the query params from the URL without re-navigating
         router.replace("/dashboard/billing");
       });
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -193,6 +194,12 @@ function BillingPageContent() {
 
   const { subscription: sub, usage } = data;
   const isTrial = sub.status === "trialing" && sub.trialEndsAt && new Date(sub.trialEndsAt) > new Date();
+  const isGracePeriod = sub.status === "grace_period";
+  const isSuspended = sub.status === "suspended";
+
+  const graceDaysLeft = isGracePeriod && sub.gracePeriodEndsAt
+    ? Math.max(0, Math.ceil((new Date(sub.gracePeriodEndsAt).getTime() - Date.now()) / 86_400_000))
+    : null;
 
   return (
     <div className="space-y-8 max-w-2xl">
@@ -200,6 +207,46 @@ function BillingPageContent() {
         <h1 className="text-2xl font-bold text-gray-900">Billing</h1>
         <p className="text-sm text-gray-500 mt-1">Manage your plan and usage.</p>
       </div>
+
+      {/* Suspended state — full-width alert */}
+      {isSuspended && (
+        <div className="bg-red-50 border border-red-200 rounded-2xl p-6 flex flex-col gap-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center shrink-0">
+              <XCircle className="w-5 h-5 text-red-600" />
+            </div>
+            <div>
+              <p className="text-base font-bold text-red-900">Subscription suspended</p>
+              <p className="text-sm text-red-700 mt-1">
+                All scheduled posts are paused. Your data is safe — reactivate to resume posting immediately.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => subscribe.mutate({ tier: sub.tier === "sandbox" ? "starter" : sub.tier, interval: "monthly" })}
+            disabled={subscribe.isPending}
+            className="self-start inline-flex items-center gap-2 px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className="w-4 h-4" />
+            {subscribe.isPending ? "Redirecting…" : "Reactivate subscription"}
+          </button>
+        </div>
+      )}
+
+      {/* Grace period alert */}
+      {isGracePeriod && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 flex items-start gap-3">
+          <Clock className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-bold text-amber-900">
+              Grace period — {graceDaysLeft !== null ? `${graceDaysLeft} day${graceDaysLeft !== 1 ? "s" : ""} remaining` : "active"}
+            </p>
+            <p className="text-sm text-amber-700 mt-0.5">
+              Payment failed. New posts are paused. Update your payment method before the grace period ends to avoid suspension.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Current plan card */}
       <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
@@ -220,9 +267,11 @@ function BillingPageContent() {
             <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${
               sub.status === "active" || sub.status === "trialing"
                 ? "bg-green-100 text-green-700"
+                : sub.status === "grace_period"
+                ? "bg-amber-100 text-amber-700"
                 : "bg-red-100 text-red-700"
             }`}>
-              {sub.status}
+              {sub.status === "grace_period" ? "Grace period" : sub.status}
             </span>
           </div>
         </div>
@@ -238,18 +287,21 @@ function BillingPageContent() {
             </div>
           )}
 
-          {sub.currentPeriodEnd && (
+          {sub.currentPeriodEnd && !isSuspended && (
             <p className="text-xs text-gray-400">
-              Next renewal: {new Date(sub.currentPeriodEnd).toLocaleDateString()}
+              {sub.status === "cancelled" ? "Access until" : "Next renewal"}:{" "}
+              {new Date(sub.currentPeriodEnd).toLocaleDateString()}
             </p>
           )}
 
-          <Link
-            href="/dashboard/billing/upgrade"
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-xl transition-colors"
-          >
-            <Sparkles className="w-4 h-4" /> Upgrade plan <ArrowRight className="w-4 h-4" />
-          </Link>
+          {!isSuspended && (
+            <Link
+              href="/dashboard/billing/upgrade"
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-xl transition-colors"
+            >
+              <Sparkles className="w-4 h-4" /> Upgrade plan <ArrowRight className="w-4 h-4" />
+            </Link>
+          )}
         </div>
       </div>
 
@@ -279,7 +331,7 @@ function BillingPageContent() {
       )}
 
       {/* Danger zone */}
-      {sub.tier !== "sandbox" && (
+      {sub.tier !== "sandbox" && !isSuspended && (
         <div className="bg-white border border-red-200 rounded-2xl p-6">
           <h2 className="text-sm font-semibold text-red-700 mb-2">Cancel subscription</h2>
           <p className="text-sm text-gray-500 mb-4">

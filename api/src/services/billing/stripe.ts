@@ -1,7 +1,7 @@
 import Stripe from "stripe";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../../db/client";
-import { subscriptions, organizations, users } from "../../db/schema";
+import { subscriptions, organizations, users, scheduledPosts } from "../../db/schema";
 import type { PlanTier } from "@anthyx/types";
 import { productConfig } from "@anthyx/config";
 
@@ -72,10 +72,13 @@ export async function handleStripeWebhook(rawBody: Buffer, signature: string): P
       await handleSubscriptionUpdated(event.data.object as Stripe.Subscription);
       break;
     case "customer.subscription.deleted":
-      await handleSubscriptionCancelled(event.data.object as Stripe.Subscription);
+      await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
       break;
     case "invoice.payment_failed":
       await handlePaymentFailed(event.data.object as Stripe.Invoice);
+      break;
+    case "invoice.payment_succeeded":
+      await handlePaymentSucceeded(event.data.object as Stripe.Invoice);
       break;
   }
 }
@@ -101,6 +104,7 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
         : null,
       currentPeriodStart: new Date(subscription.current_period_start * 1000),
       currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+      gracePeriodEndsAt: null,
       updatedAt: new Date(),
     })
     .where(eq(subscriptions.organizationId, orgId));
@@ -111,8 +115,16 @@ async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
   const orgId = (customer as Stripe.Customer).metadata?.organizationId;
   if (!orgId) return;
 
+  const existing = await db.query.subscriptions.findFirst({
+    where: eq(subscriptions.organizationId, orgId),
+  });
+
   const priceId = subscription.items.data[0]?.price.id ?? "";
   const tier = PRICE_ID_TO_TIER[priceId];
+
+  const wasRestricted =
+    existing?.status === "suspended" || existing?.status === "grace_period";
+  const isNowActive = subscription.status === "active";
 
   await db
     .update(subscriptions)
@@ -124,25 +136,43 @@ async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
       cancelledAt: subscription.canceled_at
         ? new Date(subscription.canceled_at * 1000)
         : null,
+      gracePeriodEndsAt: isNowActive ? null : existing?.gracePeriodEndsAt,
       updatedAt: new Date(),
     })
     .where(eq(subscriptions.organizationId, orgId));
+
+  // Resume paused posts when transitioning back to active
+  if (wasRestricted && isNowActive) {
+    await db
+      .update(scheduledPosts)
+      .set({ status: "scheduled", updatedAt: new Date() })
+      .where(
+        and(
+          eq(scheduledPosts.organizationId, orgId),
+          eq(scheduledPosts.status, "paused"),
+        ),
+      );
+  }
 }
 
-async function handleSubscriptionCancelled(subscription: Stripe.Subscription) {
+async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   const customer = await stripe.customers.retrieve(subscription.customer as string);
   const orgId = (customer as Stripe.Customer).metadata?.organizationId;
   if (!orgId) return;
 
+  // Immediately suspend — trial expired or hard-deleted subscription
   await db
     .update(subscriptions)
     .set({
       tier: "sandbox",
-      status: "cancelled",
+      status: "suspended",
       cancelledAt: new Date(),
+      gracePeriodEndsAt: null,
       updatedAt: new Date(),
     })
     .where(eq(subscriptions.organizationId, orgId));
+
+  await pauseOrgPosts(orgId);
 }
 
 async function handlePaymentFailed(invoice: Stripe.Invoice) {
@@ -150,12 +180,17 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
   const orgId = (customer as Stripe.Customer).metadata?.organizationId;
   if (!orgId) return;
 
+  const gracePeriodEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
   await db
     .update(subscriptions)
-    .set({ status: "past_due", updatedAt: new Date() })
+    .set({ status: "grace_period", gracePeriodEndsAt, updatedAt: new Date() })
     .where(eq(subscriptions.organizationId, orgId));
 
-  // Send dunning email
+  // Pause all outbound posts during grace period
+  await pauseOrgPosts(orgId);
+
+  // Dunning email
   const owner = await db.query.users.findFirst({
     where: and(eq(users.organizationId, orgId), eq(users.role, "owner")),
   });
@@ -169,10 +204,50 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
         body: JSON.stringify({
           from: process.env["EMAIL_FROM"] ?? "billing@anthyx.com",
           to: [owner.email],
-          subject: "Action required: payment failed",
-          html: `<p>Hi ${owner.name ?? "there"},</p><p>We couldn't process your payment. Please update your payment method to avoid service interruption.</p><p><a href="${dashUrl}/billing">Update payment method →</a></p><p>If you need help, reply to this email.</p>`,
+          subject: "Action required: payment failed — 7-day grace period started",
+          html: `<p>Hi ${owner.name ?? "there"},</p><p>We couldn't process your payment. You have a 7-day grace period before posting is paused. Please update your payment method to avoid interruption.</p><p><a href="${dashUrl}/dashboard/billing">Update payment method →</a></p>`,
         }),
       }).catch((e) => console.error("[Dunning] Email failed:", e));
     }
   }
+}
+
+async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
+  const customer = await stripe.customers.retrieve(invoice.customer as string);
+  const orgId = (customer as Stripe.Customer).metadata?.organizationId;
+  if (!orgId) return;
+
+  const existing = await db.query.subscriptions.findFirst({
+    where: eq(subscriptions.organizationId, orgId),
+  });
+
+  // Only reactivate if previously restricted
+  if (existing?.status === "suspended" || existing?.status === "grace_period") {
+    await db
+      .update(subscriptions)
+      .set({ status: "active", gracePeriodEndsAt: null, updatedAt: new Date() })
+      .where(eq(subscriptions.organizationId, orgId));
+
+    await db
+      .update(scheduledPosts)
+      .set({ status: "scheduled", updatedAt: new Date() })
+      .where(
+        and(
+          eq(scheduledPosts.organizationId, orgId),
+          eq(scheduledPosts.status, "paused"),
+        ),
+      );
+  }
+}
+
+async function pauseOrgPosts(orgId: string) {
+  await db
+    .update(scheduledPosts)
+    .set({ status: "paused", updatedAt: new Date() })
+    .where(
+      and(
+        eq(scheduledPosts.organizationId, orgId),
+        inArray(scheduledPosts.status, ["scheduled", "approved"]),
+      ),
+    );
 }

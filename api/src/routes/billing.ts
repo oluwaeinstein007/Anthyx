@@ -1,7 +1,7 @@
 import { Router } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, count } from "drizzle-orm";
 import { db } from "../db/client";
-import { subscriptions, promoCodes } from "../db/schema";
+import { subscriptions, promoCodes, planTiers, brandProfiles, users, socialAccounts, campaigns, agents } from "../db/schema";
 import { auth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { SubscribeSchema, UpdateOverageCapSchema, ValidatePromoSchema } from "@anthyx/config";
@@ -10,6 +10,7 @@ import { createPaystackSubscription, handlePaystackWebhook, cancelPaystackSubscr
 import { getCurrentUsage } from "../services/billing/usage-tracker";
 import { PLAN_TIER_CONFIGS } from "@anthyx/types";
 import { productConfig } from "@anthyx/config";
+import type { PlanTier } from "@anthyx/types";
 
 const router = Router();
 
@@ -95,6 +96,56 @@ router.post("/upgrade", auth, validate(SubscribeSchema), async (req, res) => {
 // POST /billing/downgrade
 router.post("/downgrade", auth, validate(SubscribeSchema), async (req, res) => {
   const { tier, interval, provider = "paystack" } = req.body as { tier: string; interval: string; provider?: string };
+
+  // Pre-flight: check if current resources exceed the new tier's limits
+  const newTier = await db.query.planTiers.findFirst({
+    where: eq(planTiers.tier, tier as PlanTier),
+  });
+
+  if (newTier) {
+    const blockers: string[] = [];
+
+    // Brands
+    if (newTier.maxBrands !== -1) {
+      const brandRows = await db.select({ value: count() }).from(brandProfiles).where(eq(brandProfiles.organizationId, req.user.orgId));
+      const brandCount = brandRows[0]?.value ?? 0;
+      if (brandCount > newTier.maxBrands) {
+        blockers.push(`You have ${brandCount} brand${brandCount !== 1 ? "s" : ""}. The ${tier} plan allows ${newTier.maxBrands}. Archive or delete ${brandCount - newTier.maxBrands} before downgrading.`);
+      }
+    }
+
+    // Team members / seats
+    const maxMembers = newTier.maxTeamMembers ?? -1;
+    if (maxMembers !== -1) {
+      const memberRows = await db.select({ value: count() }).from(users).where(eq(users.organizationId, req.user.orgId));
+      const memberCount = memberRows[0]?.value ?? 0;
+      if (memberCount > maxMembers) {
+        blockers.push(`You have ${memberCount} active member${memberCount !== 1 ? "s" : ""}. The ${tier} plan allows ${maxMembers}. Remove ${memberCount - maxMembers} before downgrading.`);
+      }
+    }
+
+    // Social accounts
+    if (newTier.maxSocialAccounts !== -1) {
+      const accountRows = await db.select({ value: count() }).from(socialAccounts).where(and(eq(socialAccounts.organizationId, req.user.orgId), eq(socialAccounts.isActive, true)));
+      const accountCount = accountRows[0]?.value ?? 0;
+      if (accountCount > newTier.maxSocialAccounts) {
+        blockers.push(`You have ${accountCount} connected account${accountCount !== 1 ? "s" : ""}. The ${tier} plan allows ${newTier.maxSocialAccounts}. Disconnect ${accountCount - newTier.maxSocialAccounts} before downgrading.`);
+      }
+    }
+
+    // Agents
+    if (newTier.maxAgents !== -1) {
+      const agentRows = await db.select({ value: count() }).from(agents).where(eq(agents.organizationId, req.user.orgId));
+      const agentCount = agentRows[0]?.value ?? 0;
+      if (agentCount > newTier.maxAgents) {
+        blockers.push(`You have ${agentCount} agent${agentCount !== 1 ? "s" : ""}. The ${tier} plan allows ${newTier.maxAgents}. Delete ${agentCount - newTier.maxAgents} before downgrading.`);
+      }
+    }
+
+    if (blockers.length > 0) {
+      return res.status(409).json({ error: "Downgrade blocked — resource limits exceeded", blockers });
+    }
+  }
 
   const sub = await db.query.subscriptions.findFirst({
     where: eq(subscriptions.organizationId, req.user.orgId),

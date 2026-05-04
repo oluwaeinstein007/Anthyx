@@ -1,11 +1,11 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PLAN_TIER_CONFIGS } from "@anthyx/types";
 import { useSearchParams } from "next/navigation";
-import { Check, Zap, Tag, CheckCircle2, XCircle } from "lucide-react";
+import { Check, Zap, Tag, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
 
 interface PromoValidation {
   valid: boolean;
@@ -92,23 +92,42 @@ function PromoCodeInput({ tier, onApplied }: { tier: string | null; onApplied: (
 }
 
 const UPGRADEABLE_TIERS = ["starter", "growth", "agency", "scale"] as const;
+const TIER_ORDER = { sandbox: 0, starter: 1, growth: 2, agency: 3, scale: 4, enterprise: 5 };
 
 function UpgradePageInner() {
   const [billingInterval, setBillingInterval] = useState<"monthly" | "annual">("monthly");
   const [appliedPromo, setAppliedPromo] = useState<PromoValidation | null>(null);
   const [selectedTier, setSelectedTier] = useState<string | null>(null);
+  const [downgradeBlockers, setDowngradeBlockers] = useState<string[]>([]);
   const searchParams = useSearchParams();
   const cancelled = searchParams.get("cancelled");
 
+  const { data: billingData } = useQuery<{ subscription: { tier: string } }>({
+    queryKey: ["billing"],
+    queryFn: () => api.get("/billing/subscription"),
+    retry: false,
+  });
+  const currentTier = billingData?.subscription?.tier ?? "sandbox";
+
   const subscribe = useMutation({
-    mutationFn: ({ tier, interval }: { tier: string; interval: string }) =>
-      api.post<{ checkoutUrl: string }>("/billing/subscribe", {
+    mutationFn: ({ tier, interval }: { tier: string; interval: string }) => {
+      const currentRank = TIER_ORDER[currentTier as keyof typeof TIER_ORDER] ?? 0;
+      const newRank = TIER_ORDER[tier as keyof typeof TIER_ORDER] ?? 0;
+      const endpoint = newRank < currentRank ? "/billing/downgrade" : "/billing/subscribe";
+      return api.post<{ checkoutUrl?: string; downgraded?: boolean }>(endpoint, {
         tier,
         interval,
         provider: "paystack",
-        promoCode: appliedPromo ? undefined : undefined,
-      }),
-    onSuccess: (data) => { window.location.href = data.checkoutUrl; },
+      });
+    },
+    onSuccess: (data) => {
+      if (data.checkoutUrl) window.location.href = data.checkoutUrl;
+      if (data.downgraded) window.location.href = "/dashboard/billing";
+    },
+    onError: (err: Error & { response?: { data?: { blockers?: string[] } } }) => {
+      const blockers = err?.response?.data?.blockers;
+      if (blockers?.length) setDowngradeBlockers(blockers);
+    },
   });
 
   return (
@@ -120,6 +139,29 @@ function UpgradePageInner() {
         )}
         <p className="text-sm text-gray-500 mt-1">Scale your marketing with the right plan for your team.</p>
       </div>
+
+      {/* Downgrade blockers */}
+      {downgradeBlockers.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5">
+          <div className="flex items-start gap-3 mb-3">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-sm font-semibold text-amber-900">
+              Downgrade blocked — resolve the following before proceeding:
+            </p>
+          </div>
+          <ul className="space-y-2 pl-8">
+            {downgradeBlockers.map((b, i) => (
+              <li key={i} className="text-sm text-amber-800 list-disc">{b}</li>
+            ))}
+          </ul>
+          <button
+            onClick={() => setDowngradeBlockers([])}
+            className="mt-3 text-xs text-amber-600 underline underline-offset-2"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Billing toggle */}
       <div className="inline-flex items-center gap-1 p-1 bg-gray-100 rounded-xl">
@@ -201,17 +243,38 @@ function UpgradePageInner() {
                 ))}
               </ul>
 
-              <button
-                onClick={() => { setSelectedTier(tier); subscribe.mutate({ tier, interval: billingInterval }); }}
-                disabled={subscribe.isPending}
-                className={`w-full py-2.5 text-sm font-semibold rounded-xl transition-colors disabled:opacity-50 ${
-                  isPopular
-                    ? "bg-green-600 hover:bg-green-700 text-white"
-                    : "bg-gray-900 hover:bg-gray-800 text-white"
-                }`}
-              >
-                {subscribe.isPending && selectedTier === tier ? "Redirecting…" : `Get ${config.displayName}`}
-              </button>
+              {(() => {
+                const currentRank = TIER_ORDER[currentTier as keyof typeof TIER_ORDER] ?? 0;
+                const tierRank = TIER_ORDER[tier as keyof typeof TIER_ORDER] ?? 0;
+                const isCurrentPlan = tier === currentTier;
+                const isDowngrade = tierRank < currentRank;
+                const label = isCurrentPlan
+                  ? "Current plan"
+                  : isDowngrade
+                  ? `Downgrade to ${config.displayName}`
+                  : `Upgrade to ${config.displayName}`;
+
+                return (
+                  <button
+                    onClick={() => {
+                      if (isCurrentPlan) return;
+                      setSelectedTier(tier);
+                      setDowngradeBlockers([]);
+                      subscribe.mutate({ tier, interval: billingInterval });
+                    }}
+                    disabled={subscribe.isPending || isCurrentPlan}
+                    className={`w-full py-2.5 text-sm font-semibold rounded-xl transition-colors disabled:opacity-50 ${
+                      isCurrentPlan
+                        ? "bg-gray-100 text-gray-400 cursor-default"
+                        : isPopular
+                        ? "bg-green-600 hover:bg-green-700 text-white"
+                        : "bg-gray-900 hover:bg-gray-800 text-white"
+                    }`}
+                  >
+                    {subscribe.isPending && selectedTier === tier ? "Processing…" : label}
+                  </button>
+                );
+              })()}
             </div>
           );
         })}
